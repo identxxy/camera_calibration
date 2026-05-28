@@ -734,7 +734,7 @@ bool CreateCalibrationReportForCamera(
   ComputeAllReprojectionErrors(
       camera_index, dataset, calibration,
       &reprojection_error_count, &reprojection_error_sum, &reprojection_error_max, &reprojection_errors, &features);
-  
+
   // Visualize the distribution of reprojection errors
   constexpr int kHistResolution = 50;  // resolution of the visualization image
   constexpr double kHistExtent = 0.2f;  // visualized reprojection error extent in pixels

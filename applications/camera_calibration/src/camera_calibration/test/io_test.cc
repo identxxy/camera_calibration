@@ -61,6 +61,14 @@ void CompareDatasets(const Dataset& original, const Dataset& other) {
     for (const auto& item : kg0.feature_id_to_position) {
       EXPECT_EQ(item.second, kg1.feature_id_to_position.at(item.first));
     }
+
+    ASSERT_EQ(kg0.feature_id_to_position3d.size(), kg1.feature_id_to_position3d.size());
+    for (const auto& item : kg0.feature_id_to_position3d) {
+      const Vec3f& loaded_position = kg1.feature_id_to_position3d.at(item.first);
+      EXPECT_FLOAT_EQ(item.second.x(), loaded_position.x());
+      EXPECT_FLOAT_EQ(item.second.y(), loaded_position.y());
+      EXPECT_FLOAT_EQ(item.second.z(), loaded_position.z());
+    }
   }
   
   ASSERT_EQ(original.ImagesetCount(), other.ImagesetCount());
@@ -201,6 +209,9 @@ TEST(IO, DatasetSaveAndLoad) {
   kg1.feature_id_to_position[3] = Vec2i(44, 33);
   kg1.feature_id_to_position[5] = Vec2i(1, 2);
   kg1.feature_id_to_position[6] = Vec2i(3, 4);
+  kg1.feature_id_to_position3d[12] = Vec3f(0.1f, 0.2f, 0.3f);
+  kg1.feature_id_to_position3d[13] = Vec3f(0.4f, -0.5f, 0.6f);
+  kg1.feature_id_to_position3d[14] = Vec3f(-0.7f, 0.8f, 0.9f);
   
   shared_ptr<Imageset> is0 = dataset.NewImageset();
   is0->SetFilename("imageset0.png");

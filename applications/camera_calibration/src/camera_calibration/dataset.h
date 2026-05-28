@@ -39,7 +39,7 @@
 namespace vis {
 
 class CameraModel;
-class FeatureDetectorTaggedPattern;
+class FeatureDetector;
 
 /// Chunk of known geometry that is used for calibration.
 /// For example, if printing three patterns on three sheets of paper, each
@@ -50,8 +50,39 @@ struct KnownGeometry {
   /// Maps feature IDs to their known 2D integer position in the calibration target's checkerboard.
   unordered_map<int, Vec2i> feature_id_to_position;
   
+  /// Maps feature IDs to their known 3D position in the calibration target's metric frame.
+  unordered_map<int, Vec3f> feature_id_to_position3d;
+
   /// Side length of one checkerboard cell of the calibration target in meters.
   float cell_length_in_meters;
+
+  inline bool Has3DPoints() const {
+    return !feature_id_to_position3d.empty();
+  }
+
+  inline bool HasFeature(int feature_id) const {
+    return feature_id_to_position.find(feature_id) != feature_id_to_position.end() ||
+           feature_id_to_position3d.find(feature_id) != feature_id_to_position3d.end();
+  }
+
+  inline bool GetFeaturePoint3D(int feature_id, Vec3f* point) const {
+    auto it3d = feature_id_to_position3d.find(feature_id);
+    if (it3d != feature_id_to_position3d.end()) {
+      *point = it3d->second;
+      return true;
+    }
+
+    auto it2d = feature_id_to_position.find(feature_id);
+    if (it2d != feature_id_to_position.end()) {
+      *point = Vec3f(
+          cell_length_in_meters * it2d->second.x(),
+          cell_length_in_meters * it2d->second.y(),
+          0);
+      return true;
+    }
+
+    return false;
+  }
 };
 
 struct PointFeature {
@@ -180,7 +211,7 @@ class Dataset {
   
   /// Extracts the known calibration pattern geometries from the feature detector
   /// and puts them as known geometries into the dataset.
-  void ExtractKnownGeometries(const FeatureDetectorTaggedPattern& detector);
+  void ExtractKnownGeometries(const FeatureDetector& detector);
   
   inline int SourceDatasetsCount() const {
     return first_imageset_indices_for_datasets.size();

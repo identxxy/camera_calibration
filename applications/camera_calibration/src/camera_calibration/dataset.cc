@@ -30,7 +30,7 @@
 
 #include <libvis/logging.h>
 
-#include "camera_calibration/feature_detection/feature_detector_tagged_pattern.h"
+#include "camera_calibration/feature_detection/feature_detector.h"
 
 namespace vis {
 
@@ -93,8 +93,17 @@ bool Dataset::Merge(const Dataset& other) {
     for (const auto& feature_id_to_pos : m_known_geometries[k].feature_id_to_position) {
       max_feature_id = std::max(max_feature_id, feature_id_to_pos.first);
     }
+    for (const auto& feature_id_to_pos : m_known_geometries[k].feature_id_to_position3d) {
+      max_feature_id = std::max(max_feature_id, feature_id_to_pos.first);
+    }
   }
   int new_feature_id_offset = max_feature_id + 1;
+  for (int k = 0; k < other.m_known_geometries.size(); ++ k) {
+    if (!other.m_known_geometries[k].feature_id_to_position3d.empty()) {
+      new_feature_id_offset = 4 * ((new_feature_id_offset + 3) / 4);
+      break;
+    }
+  }
   
   // Copy over known geometries while adding new_feature_id_offset.
   for (int k = 0; k < other.m_known_geometries.size(); ++ k) {
@@ -105,6 +114,9 @@ bool Dataset::Merge(const Dataset& other) {
     new_kg.cell_length_in_meters = other_kg.cell_length_in_meters;
     for (const auto& feature_id_to_pos : other_kg.feature_id_to_position) {
       new_kg.feature_id_to_position[feature_id_to_pos.first + new_feature_id_offset] = feature_id_to_pos.second;
+    }
+    for (const auto& feature_id_to_pos : other_kg.feature_id_to_position3d) {
+      new_kg.feature_id_to_position3d[feature_id_to_pos.first + new_feature_id_offset] = feature_id_to_pos.second;
     }
   }
   
@@ -138,13 +150,8 @@ void Dataset::DeleteLastImageset() {
   m_imagesets.pop_back();
 }
 
-void Dataset::ExtractKnownGeometries(const FeatureDetectorTaggedPattern& detector) {
-  SetKnownGeometriesCount(detector.GetPatternCount());
-  for (int p = 0; p < detector.GetPatternCount(); ++ p) {
-    KnownGeometry& pattern = GetKnownGeometry(p);
-    pattern.cell_length_in_meters = detector.GetCellLengthInMeters();
-    detector.GetCorners(p, &pattern.feature_id_to_position);
-  }
+void Dataset::ExtractKnownGeometries(const FeatureDetector& detector) {
+  detector.GetKnownGeometries(&m_known_geometries);
 }
 
 }

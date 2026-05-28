@@ -1,0 +1,13 @@
+type: apriltag_tower
+tag_family: tag36h11
+faces: 8
+tag_columns: 2
+tag_rows: 16
+tag_size_m: 0.08
+tag_spacing_m: 0.02
+first_tag_id: 0
+face_id_stride: 32
+face0_angle_degrees: 0
+tag_rotation_degrees: 180
+max_hamming: 2
+detector_threads: 4

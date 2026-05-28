@@ -28,7 +28,10 @@
 
 #include "camera_calibration/calibration.h"
 
+#include <algorithm>
+#include <cmath>
 #include <thread>
+#include <unordered_set>
 
 #include <boost/filesystem.hpp>
 #include <libvis/logging.h>
@@ -58,6 +61,59 @@ namespace vis {
 
 // TODO: Make the number of spline parameters configurable?
 constexpr int kNumSplineParametersForRadialModel = 250;
+
+bool IsFinitePose(const SE3d& pose) {
+  const Vec3d& t = pose.translation();
+  const Quaterniond& q = pose.unit_quaternion();
+  return t.allFinite() &&
+         std::isfinite(q.x()) &&
+         std::isfinite(q.y()) &&
+         std::isfinite(q.z()) &&
+         std::isfinite(q.w());
+}
+
+void RecomputeRigPosesFromDenseLocalization(
+    const DenseInitialization& dense,
+    BAState* state) {
+  vector<SE3d> rig_tr_camera(state->camera_tr_rig.size());
+  vector<bool> camera_pose_valid(state->camera_tr_rig.size(), false);
+  for (usize camera_index = 0; camera_index < state->camera_tr_rig.size(); ++ camera_index) {
+    if (IsFinitePose(state->camera_tr_rig[camera_index])) {
+      rig_tr_camera[camera_index] = state->camera_tr_rig[camera_index].inverse();
+      camera_pose_valid[camera_index] = true;
+    } else {
+      LOG(WARNING) << "Camera " << camera_index << " has a non-finite camera_tr_rig and will not vote for rig_tr_global.";
+    }
+  }
+
+  state->image_used.assign(dense.num_imagesets(), false);
+  state->rig_tr_global.resize(dense.num_imagesets());
+  vector<SE3d> rig_tr_global_votes;
+  for (int imageset_index = 0; imageset_index < dense.num_imagesets(); ++ imageset_index) {
+    rig_tr_global_votes.clear();
+
+    for (usize camera_index = 0; camera_index < state->camera_tr_rig.size(); ++ camera_index) {
+      if (!camera_pose_valid[camera_index] ||
+          !dense.image_used[camera_index][imageset_index] ||
+          !IsFinitePose(dense.image_tr_global[camera_index][imageset_index])) {
+        continue;
+      }
+
+      rig_tr_global_votes.push_back(
+          rig_tr_camera[camera_index] *
+          dense.image_tr_global[camera_index][imageset_index]);
+    }
+
+    if (rig_tr_global_votes.empty()) {
+      state->rig_tr_global[imageset_index] = SE3d();
+      continue;
+    }
+
+    state->image_used[imageset_index] = true;
+    state->rig_tr_global[imageset_index] =
+        AverageSE3(rig_tr_global_votes.size(), rig_tr_global_votes.data());
+  }
+}
 
 void DeleteOutlierFeatures(
     int camera_index,
@@ -317,9 +373,42 @@ void ScaleToMetric(
   for (usize k = 0; k < dataset->KnownGeometriesCount(); ++ k) {
     const KnownGeometry& geometry = dataset->GetKnownGeometry(k);
     
+    if (geometry.Has3DPoints()) {
+      vector<pair<Vec3f, int>> localized_points;
+      localized_points.reserve(geometry.feature_id_to_position3d.size());
+      for (const auto& item : geometry.feature_id_to_position3d) {
+        auto it = state->feature_id_to_points_index.find(item.first);
+        if (it != state->feature_id_to_points_index.end()) {
+          localized_points.emplace_back(item.second, it->second);
+        }
+      }
+
+      constexpr double kMaxNeighborDistance = 0.13;
+      for (usize i = 0; i < localized_points.size(); ++ i) {
+        for (usize j = i + 1; j < localized_points.size(); ++ j) {
+          double ideal_distance = (localized_points[i].first - localized_points[j].first).norm();
+          if (ideal_distance <= 1e-6 ||
+              ideal_distance > kMaxNeighborDistance) {
+            continue;
+          }
+
+          double actual_distance =
+              (state->points[localized_points[i].second] -
+               state->points[localized_points[j].second]).norm();
+          if (actual_distance <= 1e-12) {
+            continue;
+          }
+
+          scaling_log_sum += std::log(ideal_distance / actual_distance);
+          ++ scaling_count;
+        }
+      }
+      continue;
+    }
+
     // Build a map from corner positions to indices in state->points
     unordered_map<Vec2i, int> corner_position_to_index;
-    for (const pair<int, Vec2i>& item : geometry.feature_id_to_position) {
+    for (const auto& item : geometry.feature_id_to_position) {
       int feature_id = item.first;
       const Vec2i& position = item.second;
       
@@ -333,7 +422,7 @@ void ScaleToMetric(
     }
     
     // Loop over all corners
-    for (const pair<int, Vec2i>& item : geometry.feature_id_to_position) {
+    for (const auto& item : geometry.feature_id_to_position) {
       const Vec2i& position = item.second;
       auto it = corner_position_to_index.find(position);
       if (it == corner_position_to_index.end()) {
@@ -363,6 +452,11 @@ void ScaleToMetric(
         ++ scaling_count;
       }
     }
+  }
+
+  if (scaling_count == 0) {
+    LOG(WARNING) << "Could not determine metric scale from known geometry.";
+    return;
   }
   
   double scaling_factor = std::exp(scaling_log_sum / scaling_count);
@@ -853,13 +947,24 @@ bool InitializeBAStateFromDenseInitialization(
     }
     
     const auto& known_geometry = dataset->GetKnownGeometry(k);
-    const auto& feature_id_to_position = known_geometry.feature_id_to_position;
-    for (auto it = feature_id_to_position.cbegin(); it != feature_id_to_position.cend(); ++ it) {
-      Vec3f pattern_point = Vec3f(known_geometry.cell_length_in_meters * it->second.x(), known_geometry.cell_length_in_meters * it->second.y(), 0);
+    vector<int> feature_ids;
+    feature_ids.reserve(known_geometry.feature_id_to_position.size() + known_geometry.feature_id_to_position3d.size());
+    for (const auto& item : known_geometry.feature_id_to_position3d) {
+      feature_ids.push_back(item.first);
+    }
+    for (const auto& item : known_geometry.feature_id_to_position) {
+      if (known_geometry.feature_id_to_position3d.find(item.first) == known_geometry.feature_id_to_position3d.end()) {
+        feature_ids.push_back(item.first);
+      }
+    }
+
+    for (int feature_id : feature_ids) {
+      Vec3f pattern_point;
+      CHECK(known_geometry.GetFeaturePoint3D(feature_id, &pattern_point));
       Vec3f global_point = dense.global_r_known_geometry[k] * pattern_point + dense.global_t_known_geometry[k];
       state->points.emplace_back(global_point.cast<double>());
       
-      state->feature_id_to_points_index[it->first] = state->points.size() - 1;
+      state->feature_id_to_points_index[feature_id] = state->points.size() - 1;
     }
   }
   
@@ -882,7 +987,13 @@ bool InitializeBAStateFromDenseInitialization(
   state->camera_tr_rig.resize(dataset->num_cameras());
   for (int camera_index = 0; camera_index < dataset->num_cameras(); ++ camera_index) {
     vector<SE3d>& this_camera_tr_rig = camera_tr_rig[camera_index];
-    state->camera_tr_rig[camera_index] = AverageSE3(this_camera_tr_rig.size(), this_camera_tr_rig.data());
+    if (this_camera_tr_rig.empty()) {
+      LOG(WARNING) << "Camera " << camera_index
+                   << " has no localized frame in common with the rig reference camera; using identity camera_tr_rig.";
+      state->camera_tr_rig[camera_index] = SE3d();
+    } else {
+      state->camera_tr_rig[camera_index] = AverageSE3(this_camera_tr_rig.size(), this_camera_tr_rig.data());
+    }
   }
   
   // Initialize state->rig_tr_global by using the previously estimated
@@ -900,7 +1011,9 @@ bool InitializeBAStateFromDenseInitialization(
     rig_tr_global.clear();
     
     for (int camera_index = 0; camera_index < dataset->num_cameras(); ++ camera_index) {
-      if (dense.image_used[camera_index][imageset_index]) {
+      if (dense.image_used[camera_index][imageset_index] &&
+          IsFinitePose(rig_tr_camera[camera_index]) &&
+          IsFinitePose(dense.image_tr_global[camera_index][imageset_index])) {
         rig_tr_global.push_back(
             rig_tr_camera[camera_index] *
             dense.image_tr_global[camera_index][imageset_index]
@@ -908,7 +1021,12 @@ bool InitializeBAStateFromDenseInitialization(
       }
     }
     
-    state->rig_tr_global[imageset_index] = AverageSE3(rig_tr_global.size(), rig_tr_global.data());
+    if (rig_tr_global.empty()) {
+      state->image_used[imageset_index] = false;
+      state->rig_tr_global[imageset_index] = SE3d();
+    } else {
+      state->rig_tr_global[imageset_index] = AverageSE3(rig_tr_global.size(), rig_tr_global.data());
+    }
   }
   
   return true;
@@ -928,6 +1046,8 @@ bool Calibrate(
     double regularization_weight,
     float outlier_removal_factor,
     bool localize_only,
+    bool skip_bundle_adjustment,
+    int max_ba_iterations,
     CalibrationWindow* calibration_window,
     BAState* state,
     const char* dataset_output_path,
@@ -1015,10 +1135,15 @@ bool Calibrate(
       }
       
       vector<shared_ptr<CameraModel>> original_intrinsics = state->intrinsics;
+      vector<SE3d> original_camera_tr_rig = state->camera_tr_rig;
       InitializeBAStateFromDenseInitialization(
           dataset, dense, model_type, approx_pixels_per_cell, num_pyramid_levels, /*initialize_intrinsics*/ false,
           calibration_window, step_by_step, state);
       state->intrinsics = original_intrinsics;
+      if (original_camera_tr_rig.size() == state->camera_tr_rig.size()) {
+        state->camera_tr_rig = original_camera_tr_rig;
+        RecomputeRigPosesFromDenseLocalization(dense, state);
+      }
     }
   } else {
     InitializeBAStateFromDenseInitialization(
@@ -1032,6 +1157,14 @@ bool Calibrate(
   // Preparation for bundle adjustment: For each feature, store the index of the
   // observed point in the points vector for fast lookup.
   state->ComputeFeatureIdToPointsIndex(dataset);
+
+  if (skip_bundle_adjustment) {
+    LOG(INFO) << "Skipping bundle adjustment after initialization.";
+    if (!localize_only) {
+      ScaleToMetric(dataset, state);
+    }
+    return true;
+  }
   
   // Compute and store the grid resolutions on the final pyramid level.
   vector<pair<int, int>> full_grid_resolutions(state->num_cameras());
@@ -1070,11 +1203,13 @@ bool Calibrate(
     // problem to an extreme precision as long as we are not on the final
     // pyramid level yet.
     RunBundleAdjustment(
-        use_cuda, schur_mode, /*max_iteration_count*/ 10, /*cost_reduction_threshold*/ 0.0001, dataset, state, regularization_weight,
+        use_cuda, schur_mode, std::min(10, max_ba_iterations), /*cost_reduction_threshold*/ 0.0001, dataset, state, regularization_weight,
         localize_only, calibration_window, step_by_step, state_output_path);
-    RunBundleAdjustment(
-        use_cuda, schur_mode, /*max_iteration_count*/ 50, /*cost_reduction_threshold*/ 1, dataset, state, regularization_weight,
-        localize_only, calibration_window, step_by_step, state_output_path);
+    if (max_ba_iterations > 10) {
+      RunBundleAdjustment(
+          use_cuda, schur_mode, std::min(50, max_ba_iterations - 10), /*cost_reduction_threshold*/ 1, dataset, state, regularization_weight,
+          localize_only, calibration_window, step_by_step, state_output_path);
+    }
     
     // Upsample the camera models to the next level
     for (int camera_index = 0; camera_index < dataset->num_cameras(); ++ camera_index) {
@@ -1106,9 +1241,12 @@ bool Calibrate(
   // Run some BA iterations and delete outliers?
   if (outlier_removal_factor > 0) {
     // Do a few initial BA iterations before doing outlier rejection.
-    RunBundleAdjustment(
-        use_cuda, schur_mode, /*max_iteration_count*/ (num_pyramid_levels == 1) ? 100 : 10, /*cost_reduction_threshold*/ 0.0001, dataset, state, regularization_weight,
-        localize_only, calibration_window, step_by_step, state_output_path);
+    int warmup_iterations = std::min((num_pyramid_levels == 1) ? 100 : 10, max_ba_iterations);
+    if (warmup_iterations > 0) {
+      RunBundleAdjustment(
+          use_cuda, schur_mode, warmup_iterations, /*cost_reduction_threshold*/ 0.0001, dataset, state, regularization_weight,
+          localize_only, calibration_window, step_by_step, state_output_path);
+    }
     
     for (int camera_index = 0; camera_index < dataset->num_cameras(); ++ camera_index) {
       DeleteOutlierFeatures(camera_index, dataset, state, outlier_removal_factor, calibration_window, step_by_step, outlier_visualization_path);
@@ -1120,15 +1258,17 @@ bool Calibrate(
   }
   
   // Run main BA iterations.
-  RunBundleAdjustment(
-      use_cuda, schur_mode, /*max_iteration_count*/ 100, /*cost_reduction_threshold*/ 0.0001, dataset, state, regularization_weight,
-      localize_only, calibration_window, step_by_step, state_output_path);
+  if (max_ba_iterations > 0) {
+    RunBundleAdjustment(
+        use_cuda, schur_mode, max_ba_iterations, /*cost_reduction_threshold*/ 0.0001, dataset, state, regularization_weight,
+        localize_only, calibration_window, step_by_step, state_output_path);
+  }
   
   // If we used CUDA, which has a PCG-based BA implementation that is less accurate
   // than the CPU implementation, finish up with some CPU iterations.
   if (use_cuda) {
     RunBundleAdjustment(
-        /*use_cuda*/ false, schur_mode, /*max_iteration_count*/ 10, /*cost_reduction_threshold*/ 0.0001, dataset, state, regularization_weight,
+        /*use_cuda*/ false, schur_mode, std::min(10, max_ba_iterations), /*cost_reduction_threshold*/ 0.0001, dataset, state, regularization_weight,
         localize_only, calibration_window, step_by_step, state_output_path);
   }
   
@@ -1145,7 +1285,7 @@ bool Calibrate(
 
 void ExtractFeatures(
     const vector<string>& image_directories,
-    FeatureDetectorTaggedPattern& detector,
+    FeatureDetector& detector,
     Dataset* dataset,
     CalibrationWindow* calibration_window) {
   // Find all images in the first folder and ensure that they are also in the other folders.
@@ -1246,13 +1386,15 @@ void CalibrateBatch(
     const string& state_output_directory,
     const string& pruned_dataset_output_path,
     const string& report_base_path,
-    FeatureDetectorTaggedPattern* detector,
+    FeatureDetector* detector,
     int num_pyramid_levels,
     CameraModel::Type model_type,
     int cell_length_in_pixels,
     double regularization_weight,
     float outlier_removal_factor,
     bool localize_only,
+    bool skip_bundle_adjustment,
+    int max_ba_iterations,
     SchurMode schur_mode,
     CalibrationWindow* calibration_window) {
   Dataset dataset(image_directories.size());
@@ -1312,6 +1454,8 @@ void CalibrateBatch(
                  regularization_weight,
                  outlier_removal_factor,
                  localize_only,
+                 skip_bundle_adjustment,
+                 max_ba_iterations,
                  calibration_window,
                  &calibration,
                  pruned_dataset_output_path.empty() ? nullptr : pruned_dataset_output_path.c_str(),
@@ -1353,13 +1497,15 @@ int BatchCalibrationWithGUI(
     const string& state_output_directory,
     const string& pruned_dataset_output_path,
     const string& report_base_path,
-    FeatureDetectorTaggedPattern* detector,
+    FeatureDetector* detector,
     int num_pyramid_levels,
     CameraModel::Type model_type,
     int cell_length_in_pixels,
     double regularization_weight,
     float outlier_removal_factor,
     bool localize_only,
+    bool skip_bundle_adjustment,
+    int max_ba_iterations,
     SchurMode schur_mode,
     bool show_visualizations) {
   QApplication qapp(argc, argv);
@@ -1390,6 +1536,8 @@ int BatchCalibrationWithGUI(
         regularization_weight,
         outlier_removal_factor,
         localize_only,
+        skip_bundle_adjustment,
+        max_ba_iterations,
         schur_mode,
         show_visualizations ? &calibration_window : nullptr);
     

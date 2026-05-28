@@ -38,6 +38,7 @@
 #include <opengv/sac/SampleConsensus.hpp>
 #include <opengv/sac_problems/point_cloud/PointCloudSacProblem.hpp>
 #include <opengv/sac_problems/absolute_pose/AbsolutePoseSacProblem.hpp>
+#include <unordered_set>
 
 #include "camera_calibration/relative_pose_initialization/algorithms.h"
 #include "camera_calibration/dataset.h"
@@ -70,18 +71,37 @@ struct Square {
     }
     return inside;
   }
-  
+
   Vec2f InterpolatePatternCoordinatesAt(const Vec2f& point) const {
     return (Vec3f(image_to_pattern_homography * point.homogeneous()).hnormalized());
   }
-  
+
+  Vec3d Interpolate3DAt(
+      const Vec2f& point,
+      const Mat3f& global_r_kg,
+      const Vec3f& global_t_kg) const {
+    Vec2f pattern_point = InterpolatePatternCoordinatesAt(point);
+    if (!uses_global_coordinates) {
+      return (global_r_kg * Vec3f(pattern_point.x(), pattern_point.y(), 0) + global_t_kg).cast<double>();
+    }
+
+    const float s = pattern_point.x();
+    const float t = pattern_point.y();
+    Vec3f point3d =
+        (1 - s) * (1 - t) * global_coordinates[0] +
+        s * (1 - t) * global_coordinates[1] +
+        s * t * global_coordinates[2] +
+        (1 - s) * t * global_coordinates[3];
+    return point3d.cast<double>();
+  }
+
   void Initialize() {
     total_max_y = -numeric_limits<double>::infinity();
     total_min_y = numeric_limits<double>::infinity();
     
     for (int i = 0; i < 4; ++ i) {
       int next_i = (i+1)%4;
-      
+
       min_y[i] = std::min(image_coordinates[i].y(), image_coordinates[next_i].y());
       total_min_y = std::min(total_min_y, min_y[i]);
       max_y[i] = std::max(image_coordinates[i].y(), image_coordinates[next_i].y());
@@ -98,14 +118,17 @@ struct Square {
     
     image_to_pattern_homography = NormalizedDLT(image_coordinates, pattern_coordinates, 4);
   }
-  
+
   /// Using pixel-corner origin convention.
   Vec2f image_coordinates[4];
   /// Coordinate of the point in pattern coordinates.
   Vec2f pattern_coordinates[4];
-  
+  /// Global 3D coordinates for non-planar calibration targets, if used.
+  Vec3f global_coordinates[4];
+  bool uses_global_coordinates = false;
+
   Mat3f image_to_pattern_homography;
-  
+
   Vec2f normal_vectors[4];
   double d[4];
   double max_y[4];
@@ -128,7 +151,7 @@ int DensifyMatches(
   int match_count = 0;
   int square_overlaps = 0;
   int num_near_parallel = 0;
-  
+
   dense_matches->SetSize(buffer_width, buffer_height);
   dense_matches->SetTo(Vec3d::Constant(numeric_limits<double>::quiet_NaN()));
   
@@ -143,43 +166,90 @@ int DensifyMatches(
     const Mat3f& global_r_kg = global_r_known_geometry[known_geometry_index];
     const Vec3f& global_t_kg = global_t_known_geometry[known_geometry_index];
     
-    // Index matches by integer coordinate in the calibration target
-    unordered_map<Vec2i, usize> coord_to_match_index;  // indexed by kg.feature_id_to_position[match.id], returns index in vector<PointFeature>& matches.
-    for (usize m = 0; m < matches.size(); ++ m) {
-      const PointFeature& match = matches[m];
-      
-      auto it = kg.feature_id_to_position.find(match.id);
-      if (it != kg.feature_id_to_position.end()) {
-        coord_to_match_index.insert(make_pair(it->second, m));
+    if (kg.Has3DPoints()) {
+      unordered_map<int, usize> feature_id_to_match_index;
+      unordered_set<int> tag_ids;
+      for (usize m = 0; m < matches.size(); ++ m) {
+        const PointFeature& match = matches[m];
+        if (kg.feature_id_to_position3d.find(match.id) != kg.feature_id_to_position3d.end()) {
+          feature_id_to_match_index.insert(make_pair(match.id, m));
+          tag_ids.insert(match.id / 4);
+        }
       }
-    }
-    
-    // Find squares among the detected features of the chosen known geometry.
-    for (const pair<Vec2i, usize>& item : coord_to_match_index) {
-      auto it_right = coord_to_match_index.find(item.first + Vec2i(1, 0));
-      if (it_right == coord_to_match_index.end()) {
-        continue;
+
+      // Each AprilTag provides one local planar quad in the otherwise 3D tower.
+      for (int tag_id : tag_ids) {
+        usize match_indices[4];
+        Vec3f local_corners[4];
+        bool complete_tag = true;
+        for (int corner = 0; corner < 4; ++ corner) {
+          const int feature_id = 4 * tag_id + corner;
+          auto match_it = feature_id_to_match_index.find(feature_id);
+          auto point_it = kg.feature_id_to_position3d.find(feature_id);
+          if (match_it == feature_id_to_match_index.end() ||
+              point_it == kg.feature_id_to_position3d.end()) {
+            complete_tag = false;
+            break;
+          }
+          match_indices[corner] = match_it->second;
+          local_corners[corner] = point_it->second;
+        }
+        if (!complete_tag) {
+          continue;
+        }
+
+        squares.emplace_back();
+        Square& new_square = squares.back();
+        for (int corner = 0; corner < 4; ++ corner) {
+          new_square.image_coordinates[corner] = matches[match_indices[corner]].xy;
+          new_square.global_coordinates[corner] = global_r_kg * local_corners[corner] + global_t_kg;
+        }
+        new_square.pattern_coordinates[0] = Vec2f(0, 0);
+        new_square.pattern_coordinates[1] = Vec2f(1, 0);
+        new_square.pattern_coordinates[2] = Vec2f(1, 1);
+        new_square.pattern_coordinates[3] = Vec2f(0, 1);
+        new_square.uses_global_coordinates = true;
+        new_square.Initialize();
       }
-      auto it_bottom_right = coord_to_match_index.find(item.first + Vec2i(1, 1));
-      if (it_bottom_right == coord_to_match_index.end()) {
-        continue;
+    } else {
+      // Index matches by integer coordinate in the calibration target
+      unordered_map<Vec2i, usize> coord_to_match_index;  // indexed by kg.feature_id_to_position[match.id], returns index in vector<PointFeature>& matches.
+      for (usize m = 0; m < matches.size(); ++ m) {
+        const PointFeature& match = matches[m];
+
+        auto it = kg.feature_id_to_position.find(match.id);
+        if (it != kg.feature_id_to_position.end()) {
+          coord_to_match_index.insert(make_pair(it->second, m));
+        }
       }
-      auto it_bottom = coord_to_match_index.find(item.first + Vec2i(0, 1));
-      if (it_bottom == coord_to_match_index.end()) {
-        continue;
+
+      // Find squares among the detected features of the chosen known geometry.
+      for (const auto& item : coord_to_match_index) {
+        auto it_right = coord_to_match_index.find(item.first + Vec2i(1, 0));
+        if (it_right == coord_to_match_index.end()) {
+          continue;
+        }
+        auto it_bottom_right = coord_to_match_index.find(item.first + Vec2i(1, 1));
+        if (it_bottom_right == coord_to_match_index.end()) {
+          continue;
+        }
+        auto it_bottom = coord_to_match_index.find(item.first + Vec2i(0, 1));
+        if (it_bottom == coord_to_match_index.end()) {
+          continue;
+        }
+
+        squares.emplace_back();
+        Square& new_square = squares.back();
+        new_square.image_coordinates[0] = matches[item.second].xy;
+        new_square.pattern_coordinates[0] = item.first.cast<float>() * kg.cell_length_in_meters;
+        new_square.image_coordinates[1] = matches[it_right->second].xy;
+        new_square.pattern_coordinates[1] = it_right->first.cast<float>() * kg.cell_length_in_meters;
+        new_square.image_coordinates[2] = matches[it_bottom_right->second].xy;
+        new_square.pattern_coordinates[2] = it_bottom_right->first.cast<float>() * kg.cell_length_in_meters;
+        new_square.image_coordinates[3] = matches[it_bottom->second].xy;
+        new_square.pattern_coordinates[3] = it_bottom->first.cast<float>() * kg.cell_length_in_meters;
+        new_square.Initialize();
       }
-      
-      squares.emplace_back();
-      Square& new_square = squares.back();
-      new_square.image_coordinates[0] = matches[item.second].xy;
-      new_square.pattern_coordinates[0] = item.first.cast<float>() * kg.cell_length_in_meters;
-      new_square.image_coordinates[1] = matches[it_right->second].xy;
-      new_square.pattern_coordinates[1] = it_right->first.cast<float>() * kg.cell_length_in_meters;
-      new_square.image_coordinates[2] = matches[it_bottom_right->second].xy;
-      new_square.pattern_coordinates[2] = it_bottom_right->first.cast<float>() * kg.cell_length_in_meters;
-      new_square.image_coordinates[3] = matches[it_bottom->second].xy;
-      new_square.pattern_coordinates[3] = it_bottom->first.cast<float>() * kg.cell_length_in_meters;
-      new_square.Initialize();
     }
     
     // Iterate over all squares. For each square, iterate over all pixels
@@ -255,8 +325,7 @@ int DensifyMatches(
             } else {
               ++ square_overlaps;
             }
-            Vec2f pattern_point = square.InterpolatePatternCoordinatesAt(point);
-            dense_matches->at(x, y) = (global_r_kg * Vec3f(pattern_point.x(), pattern_point.y(), 0) + global_t_kg).cast<double>();
+            dense_matches->at(x, y) = square.Interpolate3DAt(point, global_r_kg, global_t_kg);
           }
         } else {
           ++ num_near_parallel;
@@ -271,8 +340,7 @@ int DensifyMatches(
                 ++ square_overlaps;
               }
               
-              Vec2f pattern_point = square.InterpolatePatternCoordinatesAt(point);
-              dense_matches->at(x, y) = (global_r_kg * Vec3f(pattern_point.x(), pattern_point.y(), 0) + global_t_kg).cast<double>();
+              dense_matches->at(x, y) = square.Interpolate3DAt(point, global_r_kg, global_t_kg);
             }
           }
         }
@@ -428,10 +496,9 @@ void DenseInitialization::LocalizeAdditionalPatterns(
     for (usize m = 0; m < matches.size(); ++ m) {
       const PointFeature& match = matches[m];
       
-      auto it = kg.feature_id_to_position.find(match.id);
-      if (it != kg.feature_id_to_position.end()) {
-        Vec3d pattern_point = Vec3d(kg.cell_length_in_meters * it->second.x(), kg.cell_length_in_meters * it->second.y(), 0);
-        pattern.push_back(pattern_point);
+      Vec3f pattern_point;
+      if (kg.GetFeaturePoint3D(match.id, &pattern_point)) {
+        pattern.push_back(pattern_point.cast<double>());
         features.push_back(Vec2f(scale_x, scale_y).cwiseProduct(match.xy).cast<double>());
       }
     }
@@ -806,8 +873,7 @@ bool DenseInitialization::AttemptRelativePoseInitialization(
         }
         
         const KnownGeometry& kg = p.dataset->GetKnownGeometry(k);
-        auto it = kg.feature_id_to_position.find(match.id);
-        if (it != kg.feature_id_to_position.end()) {
+        if (kg.HasFeature(match.id)) {
           ++ match_count_for_geometry[k];
         }
       }
@@ -826,8 +892,10 @@ bool DenseInitialization::AttemptRelativePoseInitialization(
     }
   }
   
-  if (min_match_count_for_geometry[*init_known_geometry_index] < 20) {  // TODO: Threshold is somewhat arbitrary
-    // LOG(INFO) << "Calibration failed: min_match_count_for_geometry[init_known_geometry_index] == " << min_match_count_for_geometry[*init_known_geometry_index] << " < 20";
+  const int min_required_match_count =
+      p.dataset->GetKnownGeometry(*init_known_geometry_index).Has3DPoints() ? 4 : 20;
+  if (min_match_count_for_geometry[*init_known_geometry_index] < min_required_match_count) {  // TODO: Threshold is somewhat arbitrary
+    // LOG(INFO) << "Calibration failed: min_match_count_for_geometry[init_known_geometry_index] == " << min_match_count_for_geometry[*init_known_geometry_index] << " < " << min_required_match_count;
     return false;
   }
   
@@ -919,9 +987,47 @@ bool DenseInitialization::AttemptRelativePoseInitialization(
     }
   }
   
-  if (!CentralCameraPlanarCalibrationObjectRelativePose(initialization_clouds, cloud2_tr_cloud, optical_center)) {
-    // LOG(INFO) << "Calibration failed: Relative pose initializer returned false.";
-    return false;
+  if (p.dataset->GetKnownGeometry(*init_known_geometry_index).Has3DPoints()) {
+    Vec3d optical_center_0;
+    Vec3d optical_center_1;
+    auto fill_pair_clouds = [](const Point3fCloud& source0,
+                               const Point3fCloud& source1,
+                               Point3fCloud pair_clouds[2]) {
+      CHECK_EQ(source0.size(), source1.size());
+      pair_clouds[0].Resize(source0.size());
+      pair_clouds[1].Resize(source1.size());
+      for (usize i = 0; i < source0.size(); ++ i) {
+        pair_clouds[0].at(i).position() = source0.at(i).position();
+        pair_clouds[1].at(i).position() = source1.at(i).position();
+      }
+    };
+
+    {
+      Point3fCloud pair_clouds[2];
+      fill_pair_clouds(initialization_clouds[0], initialization_clouds[2], pair_clouds);
+      if (!CentralCamera3DCalibrationObjectRelativePose(pair_clouds, &cloud2_tr_cloud[0], &optical_center_0)) {
+        // LOG(INFO) << "Calibration failed: 3D relative pose initializer returned false for image 0.";
+        return false;
+      }
+    }
+
+    {
+      Point3fCloud pair_clouds[2];
+      fill_pair_clouds(initialization_clouds[1], initialization_clouds[2], pair_clouds);
+      if (!CentralCamera3DCalibrationObjectRelativePose(pair_clouds, &cloud2_tr_cloud[1], &optical_center_1)) {
+        // LOG(INFO) << "Calibration failed: 3D relative pose initializer returned false for image 1.";
+        return false;
+      }
+    }
+
+    if (optical_center) {
+      *optical_center = 0.5 * (optical_center_0 + optical_center_1);
+    }
+  } else {
+    if (!CentralCameraPlanarCalibrationObjectRelativePose(initialization_clouds, cloud2_tr_cloud, optical_center)) {
+      // LOG(INFO) << "Calibration failed: Relative pose initializer returned false.";
+      return false;
+    }
   }
   
   // TODO: In principle, would have to check for degenerate conditions for the
@@ -1091,9 +1197,8 @@ bool DenseInitialization::AttemptToLocalizeImage(
         continue;
       }
       const KnownGeometry& kg = p.dataset->GetKnownGeometry(k);
-      auto it = kg.feature_id_to_position.find(match.id);
-      if (it != kg.feature_id_to_position.end()) {
-        Vec3f pattern_point = Vec3f(kg.cell_length_in_meters * it->second.x(), kg.cell_length_in_meters * it->second.y(), 0);
+      Vec3f pattern_point;
+      if (kg.GetFeaturePoint3D(match.id, &pattern_point)) {
         Vec3f global_point = global_r_known_geometry[k] * pattern_point + global_t_known_geometry[k];
         pattern.push_back(global_point.cast<double>());
         features.push_back(Vec2f(scale_x, scale_y).cwiseProduct(match.xy).cast<double>());
@@ -1207,27 +1312,48 @@ bool DenseInitialization::MakeNewSubmodelForKnownGeometry(
 
 void ChooseRandomInitIndices(
     Dataset* dataset,
+    int camera_index,
     int init_indices[3]) {
   // The image indices should be chosen such that there are many matches to a
   // single common KnownGeometry in all images, with large overlap. However, the
   // image poses must not be exactly the same.
   // TODO: Can we do better choices than fully random?
-  init_indices[0] = rand() % dataset->ImagesetCount();
+  vector<int> candidate_indices;
+  candidate_indices.reserve(dataset->ImagesetCount());
+  for (int imageset_index = 0; imageset_index < dataset->ImagesetCount(); ++ imageset_index) {
+    if (dataset->GetImageset(imageset_index)->CameraHasFeatures(camera_index)) {
+      candidate_indices.push_back(imageset_index);
+    }
+  }
+  if (candidate_indices.size() < 3) {
+    candidate_indices.clear();
+    candidate_indices.reserve(dataset->ImagesetCount());
+    for (int imageset_index = 0; imageset_index < dataset->ImagesetCount(); ++ imageset_index) {
+      candidate_indices.push_back(imageset_index);
+    }
+  }
   
-  init_indices[1] = rand() % (dataset->ImagesetCount() - 1);
-  if (init_indices[1] >= init_indices[0]) {
-    ++ init_indices[1];
+  const int candidate_count = candidate_indices.size();
+  int candidate_positions[3];
+  candidate_positions[0] = rand() % candidate_count;
+
+  candidate_positions[1] = rand() % (candidate_count - 1);
+  if (candidate_positions[1] >= candidate_positions[0]) {
+    ++ candidate_positions[1];
   }
-  CHECK_LT(init_indices[1], dataset->ImagesetCount());
   
-  init_indices[2] = rand() % (dataset->ImagesetCount() - 2);
-  if (init_indices[2] >= std::min(init_indices[0], init_indices[1])) {
-    ++ init_indices[2];
+  candidate_positions[2] = rand() % (candidate_count - 2);
+  if (candidate_positions[2] >= std::min(candidate_positions[0], candidate_positions[1])) {
+    ++ candidate_positions[2];
   }
-  if (init_indices[2] >= std::max(init_indices[0], init_indices[1])) {
-    ++ init_indices[2];
+  if (candidate_positions[2] >= std::max(candidate_positions[0], candidate_positions[1])) {
+    ++ candidate_positions[2];
   }
-  CHECK_LT(init_indices[2], dataset->ImagesetCount());
+
+  for (int i = 0; i < 3; ++ i) {
+    init_indices[i] = candidate_indices[candidate_positions[i]];
+    CHECK_LT(init_indices[i], dataset->ImagesetCount());
+  }
   
   // for (int i = 0; i < 3; ++ i) {
   //   LOG(INFO) << "init_indices[" << i << "]: " << init_indices[i];
@@ -1264,7 +1390,7 @@ bool DenseInitialization::InitializeCamera(
   for (int attempt = 0; attempt < kMaxNumAttempts; ++ attempt) {
     // Choose three images for initialization.
     int cur_init_indices[3];
-    ChooseRandomInitIndices(dataset, cur_init_indices);
+    ChooseRandomInitIndices(dataset, camera_index, cur_init_indices);
     
     // Attempt relative pose initialization with the chosen image triple.
     Image<Vec3d> cur_dense_matches[3];

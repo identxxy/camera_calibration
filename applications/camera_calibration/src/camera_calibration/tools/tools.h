@@ -41,6 +41,25 @@ namespace vis {
 
 int BundleAdjustment(const string& state_directory, const string& model_input_directory, const string& model_output_directory);
 
+int CalibrateTowerIntrinsics(
+    const string& dataset_path,
+    const string& camera_manifest_path,
+    const string& output_directory,
+    int min_points_per_view,
+    int min_views,
+    int corner_id_offset);
+
+int EstimateFixedIntrinsicRig(
+    const string& dataset_path,
+    const string& intrinsics_directory,
+    const string& camera_manifest_path,
+    const string& output_directory,
+    int min_points_per_view,
+    int min_shared_views,
+    int reference_camera,
+    double pnp_reprojection_threshold,
+    int corner_id_offset);
+
 int CompareCalibrations(const string& calibration_a, const string& calibration_b, const string& report_base_path);
 
 int ComparePointClouds(const string& stereo_directory_target, const string& stereo_directory_source, const string& output_directory);
@@ -48,6 +67,18 @@ int ComparePointClouds(const string& stereo_directory_target, const string& ster
 int CompareReconstructions(const string& reconstruction_path_1, const string& reconstruction_path_2);
   
 int ConvertDataset(const string& dataset_files, const string& output_path);
+
+int MergeSingleCameraDatasets(
+    const vector<string>& dataset_files,
+    const string& output_path);
+
+int SubsampleDataset(
+    const string& dataset_path,
+    const string& output_path,
+    int frame_stride,
+    int pattern_grid_stride,
+    int id_stride,
+    int min_features_per_camera_view);
 
 int CreateLegends();
 

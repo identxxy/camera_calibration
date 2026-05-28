@@ -1,0 +1,52 @@
+{
+  "clients": [
+    {
+      "name": "w1",
+      "host": "w1",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "python scripts/calib/client_detect_apriltag_tower_opencv.py --client-id w1 --image-directories-file D:/output/calib/whole/latest_image_directories.txt --output-dir D:/output/calib_reports/whole/w1 --stride 1 --resize-factor 1.0",
+      "collect": {
+        "method": "scp",
+        "source": "w1:/D:/output/calib_reports/whole/w1",
+        "local_dir": "/home/ubuntu/calib_data/distributed_reports/whole/w1"
+      }
+    },
+    {
+      "name": "w2",
+      "host": "w2",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "python scripts/calib/client_detect_apriltag_tower_opencv.py --client-id w2 --image-directories-file D:/output/calib/whole/latest_image_directories.txt --output-dir D:/output/calib_reports/whole/w2 --stride 1 --resize-factor 1.0",
+      "collect": {
+        "method": "scp",
+        "source": "w2:/D:/output/calib_reports/whole/w2",
+        "local_dir": "/home/ubuntu/calib_data/distributed_reports/whole/w2"
+      }
+    },
+    {
+      "name": "w3",
+      "host": "w3",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "python scripts/calib/client_detect_apriltag_tower_opencv.py --client-id w3 --image-directories-file D:/output/calib/whole/latest_image_directories.txt --output-dir D:/output/calib_reports/whole/w3 --stride 1 --resize-factor 1.0",
+      "collect": {
+        "method": "scp",
+        "source": "w3:/D:/output/calib_reports/whole/w3",
+        "local_dir": "/home/ubuntu/calib_data/distributed_reports/whole/w3"
+      }
+    },
+    {
+      "name": "w4",
+      "host": "w4",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "python scripts/calib/client_detect_apriltag_tower_opencv.py --client-id w4 --image-directories-file D:/output/calib/whole/latest_image_directories.txt --output-dir D:/output/calib_reports/whole/w4 --stride 1 --resize-factor 1.0",
+      "collect": {
+        "method": "scp",
+        "source": "w4:/D:/output/calib_reports/whole/w4",
+        "local_dir": "/home/ubuntu/calib_data/distributed_reports/whole/w4"
+      }
+    }
+  ]
+}

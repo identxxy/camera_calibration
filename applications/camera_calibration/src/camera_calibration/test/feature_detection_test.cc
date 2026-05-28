@@ -35,15 +35,134 @@
 #include <libvis/libvis.h>
 #include <libvis/logging.h>
 #include <libvis/sophus.h>
+#include <unordered_set>
 #include <gtest/gtest.h>
 #include <QApplication>
+#include <QTemporaryFile>
+#include <QTextStream>
 #include <yaml-cpp/yaml.h>
 
+#include "camera_calibration/feature_detection/apriltag_tower.h"
 #include "camera_calibration/feature_detection/feature_detector_tagged_pattern.h"
 #include "camera_calibration/feature_detection/feature_refinement.h"
 #include "camera_calibration/test/main.h"
 
 using namespace vis;
+
+namespace {
+
+void WriteTestTowerConfig(QTemporaryFile* temp_file, int tag_rotation_degrees = 0) {
+  ASSERT_TRUE(temp_file->open());
+  QTextStream out(temp_file);
+  out
+      << "type: apriltag_tower\n"
+      << "tag_family: tag36h11\n"
+      << "faces: 8\n"
+      << "tag_columns: 2\n"
+      << "tag_rows: 16\n"
+      << "tag_size_m: 0.08\n"
+      << "tag_spacing_m: 0.02\n"
+      << "first_tag_id: 0\n"
+      << "face_id_stride: 32\n"
+      << "face_width_m: 0.18\n"
+      << "face0_angle_degrees: 0\n"
+      << "tag_rotation_degrees: " << tag_rotation_degrees << "\n";
+  out.flush();
+  temp_file->flush();
+}
+
+}
+
+TEST(FeatureDetection, AprilTagTowerGeometryUsesBottomToTopRows) {
+  QTemporaryFile config_file;
+  WriteTestTowerConfig(&config_file);
+
+  AprilTagTowerDetector detector({config_file.fileName().toStdString()}, /*window_half_extent*/ 0);
+  ASSERT_TRUE(detector.valid());
+
+  vector<KnownGeometry> known_geometries;
+  detector.GetKnownGeometries(&known_geometries);
+  ASSERT_EQ(known_geometries.size(), 1);
+
+  const KnownGeometry& tower = known_geometries[0];
+  ASSERT_EQ(tower.feature_id_to_position3d.size(), 8 * 32 * 4);
+
+  const double apothem = 0.18 / (2.0 * tan(M_PI / 8.0));
+
+  // Corner ids are lower-left, lower-right, upper-right, upper-left as seen from outside.
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 0).x(), apothem, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 0).y(), -0.09, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 0).z(), -0.79, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 1).y(), -0.01, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(1 * 4 + 0).y(), 0.01, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(1 * 4 + 0).z(), -0.79, 1e-6);
+
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(30 * 4 + 0).z(), 0.71, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(30 * 4 + 3).z(), 0.79, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(31 * 4 + 2).z(), 0.79, 1e-6);
+
+  EXPECT_LT(tower.feature_id_to_position3d.at(0 * 4 + 0).z(),
+            tower.feature_id_to_position3d.at(30 * 4 + 0).z());
+}
+
+TEST(FeatureDetection, AprilTagTowerGeometryKeepsPhysicalCornersForRotatedTags) {
+  QTemporaryFile config_file;
+  WriteTestTowerConfig(&config_file, /*tag_rotation_degrees*/ 180);
+
+  AprilTagTowerDetector detector({config_file.fileName().toStdString()}, /*window_half_extent*/ 0);
+  ASSERT_TRUE(detector.valid());
+
+  vector<KnownGeometry> known_geometries;
+  detector.GetKnownGeometries(&known_geometries);
+  ASSERT_EQ(known_geometries.size(), 1);
+
+  const KnownGeometry& tower = known_geometries[0];
+  const double apothem = 0.18 / (2.0 * tan(M_PI / 8.0));
+
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 0).x(), apothem, 1e-6);
+  // tag_rotation_degrees records printed bitmap orientation. It must not rotate
+  // the physical 3D corner ids returned by the AprilTag quad detector.
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 0).y(), -0.09, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 0).z(), -0.79, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 1).y(), -0.01, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 1).z(), -0.79, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 2).y(), -0.01, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 2).z(), -0.71, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 3).y(), -0.09, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 3).z(), -0.71, 1e-6);
+}
+
+TEST(FeatureDetection, AprilTagTowerDetectorDetectsRenderedPatternTagCorners) {
+  QTemporaryFile config_file;
+  WriteTestTowerConfig(&config_file);
+
+  AprilTagTowerDetector detector({config_file.fileName().toStdString()}, /*window_half_extent*/ 0);
+  ASSERT_TRUE(detector.valid());
+
+  string test_data_path = (boost::filesystem::path(g_binary_path).parent_path() / "test_data").string();
+  string pattern_image_path = (boost::filesystem::path(test_data_path) / "pattern_resolution_17x24_segments_16_apriltag_0.png").string();
+  Image<u8> gray_image(pattern_image_path);
+  ASSERT_FALSE(gray_image.empty()) << "Cannot load the pattern image from: " << pattern_image_path;
+
+  Image<Vec3u8> image(gray_image.size());
+  for (u32 y = 0; y < gray_image.height(); ++ y) {
+    for (u32 x = 0; x < gray_image.width(); ++ x) {
+      image(x, y) = Vec3u8(gray_image(x, y), gray_image(x, y), gray_image(x, y));
+    }
+  }
+
+  vector<PointFeature> features;
+  detector.DetectFeatures(image, &features, /*detection_visualization*/ nullptr);
+
+  ASSERT_EQ(features.size(), 4);
+  unordered_set<int> ids;
+  for (const PointFeature& feature : features) {
+    ids.insert(feature.id);
+  }
+  for (int corner = 0; corner < 4; ++ corner) {
+    EXPECT_EQ(ids.count(corner), 1);
+  }
+}
 
 TEST(FeatureDetection, BiasEvaluation) {
   srand(0);

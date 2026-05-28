@@ -4,3 +4,9 @@ CMakeLists.txt.user
 build*/
 .ipynb_checkpoints
 *.pyc
+
+# Internal collaboration layer (notes, plans, discussions). Not part of upstream.
+studio/
+
+# Local generated reports from calibration experiments.
+reports/

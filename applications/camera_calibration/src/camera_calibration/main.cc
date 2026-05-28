@@ -48,6 +48,7 @@
 #include "camera_calibration/bundle_adjustment/joint_optimization.h"
 #include "camera_calibration/calibration.h"
 #include "camera_calibration/calibration_report.h"
+#include "camera_calibration/feature_detection/apriltag_tower.h"
 #include "camera_calibration/feature_detection/feature_detector_tagged_pattern.h"
 #include "camera_calibration/fitting_report.h"
 #include "camera_calibration/io/calibration_io.h"
@@ -86,6 +87,11 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
   cmd_parser.NamedPathParameter(
       "--pattern_files", &pattern_files, ',', /*required*/ false,
       "Comma-separated list of paths to YAML files describing the calibration patterns used.");
+
+  string apriltag_tower_config = "";
+  cmd_parser.NamedPathParameter(
+      "--apriltag_tower_config", &apriltag_tower_config, /*required*/ false,
+      "Path to an AprilTag tower YAML file. This selects the pure AprilTag 3D tower detector instead of the tagged star-pattern detector.");
   
   string dataset_output_path = "";
   cmd_parser.NamedPathParameter(
@@ -143,6 +149,12 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
   cmd_parser.NamedPathParameter(
       "--report_base_path", &report_base_path, /*required*/ false,
       "Base filename for storing the calibration error report files.");
+  bool skip_calibration_report = cmd_parser.Flag(
+      "--skip_calibration_report",
+      "Do not create the built-in calibration report even if --output_directory sets a default report path.");
+  if (skip_calibration_report) {
+    report_base_path.clear();
+  }
   
   // Settings
   string model_string = "";
@@ -172,6 +184,16 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
   
   bool localize_only = cmd_parser.Flag(
       "--localize_only", "Load an existing intrinsics calibration (from --state_directory), keep it fixed, and optimize for camera poses and pattern geometry only.");
+  bool skip_bundle_adjustment = cmd_parser.Flag(
+      "--skip_bundle_adjustment", "Stop after dense initialization / localization and write the initialized state without running joint bundle adjustment.");
+  int max_ba_iterations = 100;
+  cmd_parser.NamedParameter(
+      "--max_ba_iterations", &max_ba_iterations, /*required*/ false,
+      "Maximum number of bundle adjustment iterations per full-resolution calibration stage. Use a small value for smoke tests.");
+  if (max_ba_iterations < 0) {
+    LOG(ERROR) << "--max_ba_iterations must be non-negative.";
+    return EXIT_FAILURE;
+  }
   
   bool show_visualizations = cmd_parser.Flag(
       "--show_visualizations", "Show some visualizations during calibration");
@@ -208,6 +230,84 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
   // ### File conversion ###
   bool convert_dataset = cmd_parser.Flag(
       "--convert_dataset", "Run the tool to convert a dataset file");
+  bool merge_single_camera_datasets = cmd_parser.Flag(
+      "--merge_single_camera_datasets", "Merge per-camera feature-extraction dataset shards into one synchronized multi-camera dataset.");
+  bool subsample_dataset = cmd_parser.Flag(
+      "--subsample_dataset", "Create a smaller dataset by keeping synchronized frames and a spatially regular subset of pattern features.");
+  int subsample_frame_stride = 1;
+  cmd_parser.NamedParameter(
+      "--subsample_frame_stride", &subsample_frame_stride, /*required*/ false,
+      "For --subsample_dataset, keep only every Nth imageset.");
+  int subsample_pattern_grid_stride = 1;
+  cmd_parser.NamedParameter(
+      "--subsample_pattern_grid_stride", &subsample_pattern_grid_stride, /*required*/ false,
+      "For --subsample_dataset, keep pattern features whose known grid x and y coordinates are multiples of N.");
+  int subsample_id_stride = 1;
+  cmd_parser.NamedParameter(
+      "--subsample_id_stride", &subsample_id_stride, /*required*/ false,
+      "For --subsample_dataset, fallback ID modulo stride for features without known 2D grid coordinates.");
+  int subsample_min_features_per_camera_view = 0;
+  cmd_parser.NamedParameter(
+      "--subsample_min_features_per_camera_view", &subsample_min_features_per_camera_view, /*required*/ false,
+      "For --subsample_dataset, keep the original features for a camera view if subsampling would leave fewer than this many features.");
+
+  // ### Sparse AprilTag tower intrinsic calibration ###
+  bool calibrate_tower_intrinsics = cmd_parser.Flag(
+      "--calibrate_tower_intrinsics", "Run per-camera intrinsic calibration from sparse AprilTag tower observations in a dataset file.");
+
+  string camera_manifest_path = "";
+  cmd_parser.NamedPathParameter(
+      "--camera_manifest", &camera_manifest_path, /*required*/ false,
+      "Optional TSV manifest mapping camera indices to staged camera names and user IDs for --calibrate_tower_intrinsics.");
+
+  int tower_intrinsics_min_points_per_view = 4;
+  cmd_parser.NamedParameter(
+      "--tower_intrinsics_min_points_per_view", &tower_intrinsics_min_points_per_view, /*required*/ false,
+      "Minimum detected feature corners in one frame to use that frame for --calibrate_tower_intrinsics.");
+
+  int tower_intrinsics_min_views = 10;
+  cmd_parser.NamedParameter(
+      "--tower_intrinsics_min_views", &tower_intrinsics_min_views, /*required*/ false,
+      "Minimum usable frames required for one camera in --calibrate_tower_intrinsics.");
+  int tower_intrinsics_corner_id_offset = 0;
+  cmd_parser.NamedParameter(
+      "--tower_intrinsics_corner_id_offset", &tower_intrinsics_corner_id_offset, /*required*/ false,
+      "Diagnostic corner-id offset applied before reading tower 3D points for --calibrate_tower_intrinsics.");
+
+  // ### Fixed-intrinsic rig initialization ###
+  bool estimate_fixed_intrinsic_rig = cmd_parser.Flag(
+      "--estimate_fixed_intrinsic_rig",
+      "Estimate a camera rig from a dataset while keeping precomputed CentralOpenCV intrinsics fixed.");
+
+  string fixed_intrinsics_directory = "";
+  cmd_parser.NamedPathParameter(
+      "--fixed_intrinsics_directory", &fixed_intrinsics_directory, /*required*/ false,
+      "Directory containing intrinsicsN.yaml or intrinsicsN_<user_id>.yaml files for --estimate_fixed_intrinsic_rig.");
+
+  int fixed_rig_min_points_per_view = 12;
+  cmd_parser.NamedParameter(
+      "--fixed_rig_min_points_per_view", &fixed_rig_min_points_per_view, /*required*/ false,
+      "Minimum 2D-3D feature correspondences required for a camera-frame PnP solve in --estimate_fixed_intrinsic_rig.");
+
+  int fixed_rig_min_shared_views = 3;
+  cmd_parser.NamedParameter(
+      "--fixed_rig_min_shared_views", &fixed_rig_min_shared_views, /*required*/ false,
+      "Minimum synchronized frames shared by a camera pair before using the pairwise rig edge in --estimate_fixed_intrinsic_rig.");
+
+  int fixed_rig_reference_camera = 0;
+  cmd_parser.NamedParameter(
+      "--fixed_rig_reference_camera", &fixed_rig_reference_camera, /*required*/ false,
+      "Camera index used as the rig coordinate frame for --estimate_fixed_intrinsic_rig.");
+
+  float fixed_rig_pnp_reprojection_threshold = 3.0f;
+  cmd_parser.NamedParameter(
+      "--fixed_rig_pnp_reprojection_threshold", &fixed_rig_pnp_reprojection_threshold, /*required*/ false,
+      "RANSAC reprojection threshold in pixels for camera-frame PnP in --estimate_fixed_intrinsic_rig.");
+
+  int fixed_rig_corner_id_offset = 0;
+  cmd_parser.NamedParameter(
+      "--fixed_rig_corner_id_offset", &fixed_rig_corner_id_offset, /*required*/ false,
+      "Diagnostic corner-id offset applied before reading known 3D points for --estimate_fixed_intrinsic_rig.");
   
   
   // ### Calibration comparison ###
@@ -378,6 +478,38 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
   } else if (convert_dataset) {
     CHECK_EQ(dataset_files.size(), 1);
     return ConvertDataset(dataset_files[0], state_output_directory);
+  } else if (merge_single_camera_datasets) {
+    return MergeSingleCameraDatasets(dataset_files, dataset_output_path);
+  } else if (subsample_dataset) {
+    CHECK_EQ(dataset_files.size(), 1);
+    return SubsampleDataset(
+        dataset_files[0],
+        dataset_output_path,
+        subsample_frame_stride,
+        subsample_pattern_grid_stride,
+        subsample_id_stride,
+        subsample_min_features_per_camera_view);
+  } else if (calibrate_tower_intrinsics) {
+    CHECK_EQ(dataset_files.size(), 1);
+    return CalibrateTowerIntrinsics(
+        dataset_files[0],
+        camera_manifest_path,
+        output_directory.empty() ? state_output_directory : output_directory,
+        tower_intrinsics_min_points_per_view,
+        tower_intrinsics_min_views,
+        tower_intrinsics_corner_id_offset);
+  } else if (estimate_fixed_intrinsic_rig) {
+    CHECK_EQ(dataset_files.size(), 1);
+    return EstimateFixedIntrinsicRig(
+        dataset_files[0],
+        fixed_intrinsics_directory,
+        camera_manifest_path,
+        output_directory.empty() ? state_output_directory : output_directory,
+        fixed_rig_min_points_per_view,
+        fixed_rig_min_shared_views,
+        fixed_rig_reference_camera,
+        fixed_rig_pnp_reprojection_threshold,
+        fixed_rig_corner_id_offset);
   } else if (create_calibration_report) {
     return WrapQtEventLoopAround([&](int /*argc*/, char** /*argv*/) {
       CHECK_EQ(dataset_files.size(), 1);
@@ -430,8 +562,16 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
   bool feature_extraction_requested = !image_directories.empty();
   bool calibration_requested = !localize_only && (!state_output_directory.empty() || !pruned_dataset_output_path.empty() || !report_base_path.empty());
   
-  if (feature_extraction_requested && pattern_files.empty()) {
-    LOG(ERROR) << "The pattern YAML file must be given with --pattern_files for feature extraction.";
+  if (feature_extraction_requested && pattern_files.empty() && apriltag_tower_config.empty()) {
+    LOG(ERROR) << "Either --pattern_files or --apriltag_tower_config must be given for feature extraction.";
+    return EXIT_FAILURE;
+  }
+  if (!apriltag_tower_config.empty() && !pattern_files.empty()) {
+    LOG(ERROR) << "--apriltag_tower_config and --pattern_files are mutually exclusive for feature extraction.";
+    return EXIT_FAILURE;
+  }
+  if (!apriltag_tower_config.empty() && image_directories.empty() && dataset_files.empty()) {
+    LOG(ERROR) << "--apriltag_tower_config is currently supported for batch image-folder feature extraction only.";
     return EXIT_FAILURE;
   }
   
@@ -456,10 +596,16 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
     }
   }
   
-  shared_ptr<FeatureDetectorTaggedPattern> detector;
+  shared_ptr<FeatureDetector> detector;
+  shared_ptr<FeatureDetectorTaggedPattern> tagged_pattern_detector;
   if (!image_directories.empty() ||
       (image_directories.empty() && dataset_files.empty())) {
-    detector.reset(new FeatureDetectorTaggedPattern(pattern_files, refinement_window_half_extent, refinement_type, cuda_feature_detection));
+    if (!apriltag_tower_config.empty()) {
+      detector.reset(new AprilTagTowerDetector({apriltag_tower_config}, refinement_window_half_extent));
+    } else {
+      tagged_pattern_detector.reset(new FeatureDetectorTaggedPattern(pattern_files, refinement_window_half_extent, refinement_type, cuda_feature_detection));
+      detector = tagged_pattern_detector;
+    }
   }
   
   if (!image_directories.empty() || !dataset_files.empty()) {
@@ -482,6 +628,8 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
         regularization_weight,
         outlier_removal_factor,
         localize_only,
+        skip_bundle_adjustment,
+        max_ba_iterations,
         schur_mode,
         show_visualizations);
   } else {
@@ -516,7 +664,7 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
     MainWindow* main_window = nullptr;
     PatternDisplay* pattern_display = nullptr;
     if (settings_window.show_pattern_clicked()) {
-      pattern_display = new PatternDisplay(inputs, detector, apriltags_directory.c_str(), /*TODO*/ true);
+      pattern_display = new PatternDisplay(inputs, tagged_pattern_detector, apriltags_directory.c_str(), /*TODO*/ true);
       pattern_display->showFullScreen();
       pattern_display->raise();
     } else {
@@ -563,7 +711,7 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
     // Create the handler ("consumer") for new incoming images.
     LiveImageConsumer forwarder(
         settings_window.LiveDetection(),
-        detector.get(),
+        tagged_pattern_detector.get(),
         &dataset,
         &dataset_mutex,
         main_window ? main_window : pattern_display->main_window(),

@@ -71,6 +71,17 @@ class FeatureDetector {
       int pattern_index,
       unordered_map<int, Vec2i>* feature_id_to_coord) const = 0;
   
+  /// Returns all known geometries represented by this detector. The default
+  /// implementation exposes a planar grid target through GetCorners().
+  virtual void GetKnownGeometries(vector<KnownGeometry>* known_geometries) const {
+    known_geometries->resize(GetPatternCount());
+    for (int p = 0; p < GetPatternCount(); ++ p) {
+      KnownGeometry& pattern = known_geometries->at(p);
+      pattern.cell_length_in_meters = GetCellLengthInMeters();
+      GetCorners(p, &pattern.feature_id_to_position);
+    }
+  }
+
   inline int GetFeatureWindowHalfExtent() const {
     return window_half_extent;
   }

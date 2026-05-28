@@ -7,6 +7,7 @@
   * [Obtaining a calibration pattern](#obtaining-a-calibration-pattern)
   * [Calibrating a camera with live input](#calibrating-a-camera-with-live-input)
   * [Calibrating a camera from images in a folder](#calibrating-a-camera-from-images-in-a-folder)
+  * [Calibrating an outer camera ring with an AprilTag tower](#calibrating-an-outer-camera-ring-with-an-apriltag-tower)
   * [Calibrating a stereo camera and computing depth images](#calibrating-a-stereo-camera-and-computing-depth-images)
   * [Which camera model to choose?](#which-camera-model-to-choose)
   * [How to obtain and verify good calibration results](#how-to-obtain-and-verify-good-calibration-results)
@@ -260,6 +261,57 @@ same file name are assumed to be recorded at the same time. `--dataset_output_pa
 path to a file that will be created to store the extracted features. If you use
 `--show_visualizations`, the visualization window will remain open once the process has finished and
 needs to be closed manually.
+
+#### AprilTag tower feature extraction ####
+
+For a fixed multi-camera ring, the image-folder feature extraction path can also
+use a metric 3D AprilTag tower instead of a planar pattern. The default tower
+configuration describes an 8-face tower with 2 columns and 16 rows per face,
+8 cm tag size, 2 cm gap, and consecutive face id ranges `0-31`, `32-63`, ...
+`224-255`.
+
+From outside a face, tag ids increase from bottom to top and left to right:
+
+```text
+30  31
+28  29
+...
+ 2   3
+ 0   1
+```
+
+Feature ids are `tag_id * 4 + corner_id`, where corner ids follow the
+counter-clockwise physical tag-border order reported by the AprilTag detector.
+The detector stores the corresponding 3D tower corner positions in the dataset,
+so initialization and bundle adjustment can use a non-planar calibration object.
+The bundled 8-face tower YAML sets `tag_rotation_degrees: 180`, matching the
+purchased tower whose printed tag patterns are rotated 180 degrees in place
+while keeping the same bottom-to-top ID layout. This printed bitmap rotation
+does not rotate the physical 3D corner ids.
+
+Example for extracting features from a synchronized outer ring:
+
+```bash
+export CALIBRATION_PATH=/path/to/camera_calibration_root_folder
+export DATASET=/path/to/outer_ring_dataset_folder
+export HALF_WINDOW_SIZE=15
+${CALIBRATION_PATH}/build/applications/camera_calibration/camera_calibration \
+    --apriltag_tower_config ${CALIBRATION_PATH}/applications/camera_calibration/patterns/apriltag_tower_8faces_2x16_8cm.yaml \
+    --image_directories ${DATASET}/cam00,${DATASET}/cam01,${DATASET}/cam02 \
+    --dataset_output_path ${DATASET}/tower_features_${HALF_WINDOW_SIZE}px.bin \
+    --refinement_window_half_extent ${HALF_WINDOW_SIZE}
+```
+
+Pass all synchronized camera folders in `--image_directories`; images with the
+same file name are treated as the same capture time. `--apriltag_tower_config`
+and `--pattern_files` are mutually exclusive for feature extraction. The tower
+path is currently implemented for batch image folders, not the live GUI.
+
+The default `face_width_m` is `0.18`, i.e. the occupied width of two 8 cm tags
+with one 2 cm gap. If the manufactured tower has side margins or a different
+outer face width, edit `face_width_m` in the YAML before extracting features.
+
+After extraction, run calibration with `--dataset_files` as in the next section.
 
 #### Camera calibration ####
 

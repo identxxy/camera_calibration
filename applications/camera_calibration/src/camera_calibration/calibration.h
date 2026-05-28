@@ -36,7 +36,7 @@
 
 #include "camera_calibration/bundle_adjustment/joint_optimization.h"
 #include "camera_calibration/dataset.h"
-#include "camera_calibration/feature_detection/feature_detector_tagged_pattern.h"
+#include "camera_calibration/feature_detection/feature_detector.h"
 #include "camera_calibration/models/camera_model.h"
 #include "camera_calibration/models/central_opencv.h"
 #include "camera_calibration/models/central_radial.h"
@@ -47,7 +47,7 @@ namespace vis {
 
 struct BAState;
 class CalibrationWindow;
-class FeatureDetectorTaggedPattern;
+class FeatureDetector;
 
 /// Main function for calibrating a camera rig.
 /// Returns true if a valid calibration was obtained.
@@ -65,6 +65,8 @@ bool Calibrate(
     double regularization_weight,
     float outlier_removal_factor,
     bool localize_only,
+    bool skip_bundle_adjustment,
+    int max_ba_iterations,
     CalibrationWindow* calibration_window,
     BAState* state,
     const char* dataset_output_path = nullptr,
@@ -81,13 +83,15 @@ void CalibrateBatch(
     const string& state_output_directory,
     const string& pruned_dataset_output_path,
     const string& report_base_path,
-    FeatureDetectorTaggedPattern* detector,
+    FeatureDetector* detector,
     int num_pyramid_levels,
     CameraModel::Type model_type,
     int cell_length_in_pixels,
     double regularization_weight,
     float outlier_removal_factor,
     bool localize_only,
+    bool skip_bundle_adjustment,
+    int max_ba_iterations,
     SchurMode schur_mode,
     CalibrationWindow* calibration_window);
 
@@ -104,13 +108,15 @@ int BatchCalibrationWithGUI(
     const string& state_output_directory,
     const string& pruned_dataset_output_path,
     const string& report_base_path,
-    FeatureDetectorTaggedPattern* detector,
+    FeatureDetector* detector,
     int num_pyramid_levels,
     CameraModel::Type model_type,
     int cell_length_in_pixels,
     double regularization_weight,
     float outlier_removal_factor,
     bool localize_only,
+    bool skip_bundle_adjustment,
+    int max_ba_iterations,
     SchurMode schur_mode,
     bool show_visualizations);
 

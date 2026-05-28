@@ -71,7 +71,7 @@ bool SaveDataset(const char* path, const Dataset& dataset) {
   fwrite(header, 1, 10, file);
   
   // File format version
-  const u32 version = 0;
+  const u32 version = 1;
   write_one(&version, file);
   
   // Cameras
@@ -120,13 +120,23 @@ bool SaveDataset(const char* path, const Dataset& dataset) {
     
     u32 feature_id_to_position_size = geometry.feature_id_to_position.size();
     write_one(&feature_id_to_position_size, file);
-    for (const std::pair<int, Vec2i>& item : geometry.feature_id_to_position) {
+    for (const auto& item : geometry.feature_id_to_position) {
       i32 id_32bit = item.first;
       write_one(&id_32bit, file);
       i32 x_32bit = item.second.x();
       write_one(&x_32bit, file);
       i32 y_32bit = item.second.y();
       write_one(&y_32bit, file);
+    }
+
+    u32 feature_id_to_position3d_size = geometry.feature_id_to_position3d.size();
+    write_one(&feature_id_to_position3d_size, file);
+    for (const auto& item : geometry.feature_id_to_position3d) {
+      i32 id_32bit = item.first;
+      write_one(&id_32bit, file);
+      write_one(&item.second.x(), file);
+      write_one(&item.second.y(), file);
+      write_one(&item.second.z(), file);
     }
   }
   
@@ -163,7 +173,7 @@ bool LoadDataset(const char* path, Dataset* dataset) {
   // File format version
   u32 version;
   read_one(&version, file);
-  if (version != 0) {
+  if (version != 0 && version != 1) {
     LOG(ERROR) << "Cannot parse file: " << path;
     LOG(ERROR) << "Unsupported file format version.";
     fclose(file);
@@ -237,6 +247,23 @@ bool LoadDataset(const char* path, Dataset* dataset) {
       read_one(&y_32bit, file);
       
       geometry.feature_id_to_position[id_32bit] = Vec2i(x_32bit, y_32bit);
+    }
+
+    if (version >= 1) {
+      u32 feature_id_to_position3d_size;
+      read_one(&feature_id_to_position3d_size, file);
+      for (u32 i = 0; i < feature_id_to_position3d_size; ++ i) {
+        i32 id_32bit;
+        read_one(&id_32bit, file);
+        float x;
+        read_one(&x, file);
+        float y;
+        read_one(&y, file);
+        float z;
+        read_one(&z, file);
+
+        geometry.feature_id_to_position3d[id_32bit] = Vec3f(x, y, z);
+      }
     }
   }
   

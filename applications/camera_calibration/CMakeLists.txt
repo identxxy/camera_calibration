@@ -68,6 +68,8 @@ if (CMAKE_CUDA_COMPILER)
     src/camera_calibration/feature_detection/cuda_refinement_by_symmetry.h
     src/camera_calibration/feature_detection/cuda_util.cu
     src/camera_calibration/feature_detection/cuda_util.cuh
+    src/camera_calibration/feature_detection/apriltag_tower.cc
+    src/camera_calibration/feature_detection/apriltag_tower.h
     src/camera_calibration/feature_detection/feature_detector.h
     src/camera_calibration/feature_detection/feature_detector_tagged_pattern.cc
     src/camera_calibration/feature_detection/feature_detector_tagged_pattern.h
@@ -109,14 +111,18 @@ if (CMAKE_CUDA_COMPILER)
     src/camera_calibration/relative_pose_initialization/noncentral_camera_planar_target.cc
     
     src/camera_calibration/tools/bundle_adjustment.cc
+    src/camera_calibration/tools/calibrate_tower_intrinsics.cc
     src/camera_calibration/tools/compare_calibrations.cc
     src/camera_calibration/tools/compare_point_clouds.cc
     src/camera_calibration/tools/convert_dataset.cc
     src/camera_calibration/tools/create_legends.cc
+    src/camera_calibration/tools/estimate_fixed_intrinsic_rig.cc
     src/camera_calibration/tools/intersect_datasets.cc
     src/camera_calibration/tools/localization_accuracy_test.cc
+    src/camera_calibration/tools/merge_single_camera_datasets.cc
     src/camera_calibration/tools/render_synthetic_dataset.cc
     src/camera_calibration/tools/stereo_depth_estimation.cc
+    src/camera_calibration/tools/subsample_dataset.cc
     src/camera_calibration/tools/tools.h
     src/camera_calibration/tools/visualize_calibration.cc
     
@@ -258,6 +264,7 @@ if (CMAKE_CUDA_COMPILER)
     src
     ${gtest_SOURCE_DIR}/include
     ${gtest_SOURCE_DIR}
+    third_party/apriltag
     third_party/yaml-cpp-0.6.0/include
   )
   add_test(camera_calibration_test
