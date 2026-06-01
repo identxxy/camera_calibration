@@ -32,6 +32,7 @@ CURRENT_OUTER_RUN_REL = (
     "studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50/"
     "outer_tower/frame_face_refine_fullres_raw_ransac1000_wide50_gate6_v1"
 )
+CURRENT_OUTER_REPORT_REL = CURRENT_OUTER_RUN_REL
 CURRENT_STUDIO32_YAML_REL = (
     "studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50/"
     "calibration_artifacts/"
@@ -67,7 +68,7 @@ LINKS = {
     ),
     "whole_final": (
         "Whole / Outer 最终标定报告",
-        f"{CURRENT_OUTER_RUN_REL}/index.html",
+        f"{CURRENT_OUTER_REPORT_REL}/index.html",
     ),
     "outer_summary": (
         "Outer solve summary.json",
@@ -343,7 +344,15 @@ def parse_args():
     parser.add_argument(
         "--current-outer-run-rel",
         default=CURRENT_OUTER_RUN_REL,
-        help="Report-root-relative path to the promoted outer frame-face run.",
+        help="Report-root-relative path to the promoted outer frame-face solve run.",
+    )
+    parser.add_argument(
+        "--current-outer-report-rel",
+        default=None,
+        help=(
+            "Report-root-relative path to the promoted outer HTML report directory. "
+            "Defaults to --current-outer-run-rel for backward compatibility."
+        ),
     )
     parser.add_argument(
         "--whole-data-report-rel",
@@ -371,6 +380,7 @@ def parse_args():
 def configure_current_run_paths(
     bridge_run_rel: str,
     outer_run_rel: str,
+    outer_report_rel: str | None = None,
     whole_data_report_rel: str | None = None,
     whole_distributed_qc_rel: str | None = None,
     studio32_yaml_rel: str | None = None,
@@ -379,11 +389,13 @@ def configure_current_run_paths(
     global BRIDGE_SUMMARY_REL
     global CURRENT_BRIDGE_RUN_REL
     global CURRENT_OUTER_RUN_REL
+    global CURRENT_OUTER_REPORT_REL
     global CURRENT_STUDIO32_YAML_REL
     global LINKS
 
     CURRENT_BRIDGE_RUN_REL = str(bridge_run_rel).strip("/")
     CURRENT_OUTER_RUN_REL = str(outer_run_rel).strip("/")
+    CURRENT_OUTER_REPORT_REL = str(outer_report_rel or outer_run_rel).strip("/")
     whole_data_report_rel = str(whole_data_report_rel or LINKS["whole_data_collection"][1]).strip("/")
     whole_distributed_qc_rel = str(whole_distributed_qc_rel or LINKS["whole_distributed_qc"][1]).strip("/")
     if studio32_yaml_rel:
@@ -415,7 +427,7 @@ def configure_current_run_paths(
         ),
         "whole_final": (
             "Whole / Outer 最终标定报告",
-            f"{CURRENT_OUTER_RUN_REL}/index.html",
+            f"{CURRENT_OUTER_REPORT_REL}/index.html",
         ),
         "outer_summary": (
             "Outer solve summary.json",
@@ -1099,11 +1111,12 @@ def render_entry_page(audit, base_url, panel_url, output_rel):
 def main() -> int:
     args = parse_args()
     configure_current_run_paths(
-        args.current_bridge_run_rel,
-        args.current_outer_run_rel,
-        args.whole_data_report_rel,
-        args.whole_distributed_qc_rel,
-        args.studio32_yaml_rel,
+        bridge_run_rel=args.current_bridge_run_rel,
+        outer_run_rel=args.current_outer_run_rel,
+        outer_report_rel=args.current_outer_report_rel,
+        whole_data_report_rel=args.whole_data_report_rel,
+        whole_distributed_qc_rel=args.whole_distributed_qc_rel,
+        studio32_yaml_rel=args.studio32_yaml_rel,
     )
     root = Path(args.root).resolve()
     output_dir = Path(args.output_dir).resolve()

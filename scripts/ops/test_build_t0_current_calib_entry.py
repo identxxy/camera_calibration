@@ -20,6 +20,7 @@ class BuildT0CurrentCalibEntryTest(unittest.TestCase):
             output_dir = root / "current_calibration"
             bridge_rel = "runs/studio_latest/inner_bridge"
             outer_rel = "runs/studio_latest/outer_tower/frame_face"
+            outer_report_rel = "runs/studio_latest/outer_tower_wrapper"
             studio32_yaml_rel = "runs/studio_latest/calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml"
             whole_data_rel = "runs/studio_latest/whole_filtered/index.html"
             whole_qc_rel = "runs/studio_latest/distributed_qc/index.html"
@@ -33,6 +34,7 @@ class BuildT0CurrentCalibEntryTest(unittest.TestCase):
                     "--output-dir", str(output_dir),
                     "--current-bridge-run-rel", bridge_rel,
                     "--current-outer-run-rel", outer_rel,
+                    "--current-outer-report-rel", outer_report_rel,
                     "--whole-data-report-rel", whole_data_rel,
                     "--whole-distributed-qc-rel", whole_qc_rel,
                     "--studio32-yaml-rel", studio32_yaml_rel,
@@ -67,7 +69,11 @@ class BuildT0CurrentCalibEntryTest(unittest.TestCase):
             )
             self.assertEqual(
                 categories["outer_solve_diagnostics_result"]["items"][0]["url"],
-                f"http://t0.example/{outer_rel}/index.html",
+                f"http://t0.example/{outer_report_rel}/index.html",
+            )
+            self.assertEqual(
+                categories["outer_solve_diagnostics_result"]["items"][1]["url"],
+                f"http://t0.example/{outer_rel}/summary.json",
             )
             self.assertEqual(
                 categories["outer_capture_qc"]["items"][0]["url"],

@@ -199,6 +199,7 @@ def publish_command(args, paths):
         "--output-dir", paths["current_output_dir"],
         "--current-bridge-run-rel", rel_for_report(paths["bridge_root"], http_root),
         "--current-outer-run-rel", rel_for_report(paths["outer_frame_face_dir"], http_root),
+        "--current-outer-report-rel", rel_for_report(paths["outer_wrapper_root"], http_root),
         "--whole-data-report-rel", rel_for_report(paths["whole_data_report"], http_root),
         "--studio32-yaml-rel", rel_for_report(paths["unified_camera_yaml"], http_root),
         "--write-root-index",

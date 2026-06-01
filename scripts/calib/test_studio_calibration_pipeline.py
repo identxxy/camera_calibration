@@ -96,6 +96,8 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             publish_command = stages["publish_current"]["commands"][0]
             self.assertIn("--current-bridge-run-rel", publish_command)
             self.assertIn("--current-outer-run-rel", publish_command)
+            self.assertIn("--current-outer-report-rel", publish_command)
+            self.assertIn("outer_tower_wrapper", publish_command)
             self.assertIn("frame_face_refine_wide50_then_gate6", publish_command)
             self.assertIn("--whole-data-report-rel", publish_command)
             self.assertEqual(summary["run_tag"], "test_run")
