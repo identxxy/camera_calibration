@@ -5,9 +5,15 @@ tag_columns: 2
 tag_rows: 16
 tag_size_m: 0.08
 tag_spacing_m: 0.02
+face_width_m: 0.24
 first_tag_id: 0
 face_id_stride: 32
 face0_angle_degrees: 0
 tag_rotation_degrees: 180
 max_hamming: 2
 detector_threads: 4
+corner_subpixel_refinement: true
+corner_subpixel_window_half_extent: 5
+corner_subpixel_max_iterations: 30
+corner_subpixel_epsilon: 0.01
+corner_subpixel_max_shift_px: 2.0

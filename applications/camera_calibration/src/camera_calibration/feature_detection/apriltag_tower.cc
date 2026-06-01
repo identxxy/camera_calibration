@@ -30,10 +30,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <thread>
 
 #include <apriltag.h>
 #include <libvis/logging.h>
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 #include <tag36h11.h>
 #include <yaml-cpp/yaml.h>
 
@@ -53,6 +56,11 @@ struct AprilTagTowerConfig {
   int tag_rotation_degrees = 0;
   int max_hamming = 2;
   int detector_threads = 4;
+  bool corner_subpixel_refinement = true;
+  int corner_subpixel_window_half_extent = 5;
+  int corner_subpixel_max_iterations = 30;
+  float corner_subpixel_epsilon = 0.01f;
+  float corner_subpixel_max_shift_px = 2.0f;
 };
 
 struct AprilTagTowerDetectorPrivate {
@@ -135,6 +143,26 @@ bool LoadTowerConfig(const string& path, AprilTagTowerConfig* config) {
         node,
         "detector_threads",
         static_cast<int>(std::max(1u, std::thread::hardware_concurrency() / 2)));
+    config->corner_subpixel_refinement = ReadOptional<bool>(
+        node,
+        "corner_subpixel_refinement",
+        config->corner_subpixel_refinement);
+    config->corner_subpixel_window_half_extent = ReadOptional<int>(
+        node,
+        "corner_subpixel_window_half_extent",
+        config->corner_subpixel_window_half_extent);
+    config->corner_subpixel_max_iterations = ReadOptional<int>(
+        node,
+        "corner_subpixel_max_iterations",
+        config->corner_subpixel_max_iterations);
+    config->corner_subpixel_epsilon = ReadOptional<float>(
+        node,
+        "corner_subpixel_epsilon",
+        config->corner_subpixel_epsilon);
+    config->corner_subpixel_max_shift_px = ReadOptional<float>(
+        node,
+        "corner_subpixel_max_shift_px",
+        config->corner_subpixel_max_shift_px);
   } catch (const YAML::Exception& ex) {
     LOG(ERROR) << "Cannot parse AprilTag tower config: " << path << " (" << ex.what() << ")";
     return false;
@@ -154,12 +182,23 @@ bool LoadTowerConfig(const string& path, AprilTagTowerConfig* config) {
       (config->tag_rotation_degrees != 0 && config->tag_rotation_degrees != 180) ||
       config->max_hamming < 0 ||
       config->max_hamming > 2 ||
-      config->detector_threads <= 0) {
+      config->detector_threads <= 0 ||
+      config->corner_subpixel_window_half_extent <= 0 ||
+      config->corner_subpixel_max_iterations <= 0 ||
+      config->corner_subpixel_epsilon <= 0 ||
+      config->corner_subpixel_max_shift_px < 0) {
     LOG(ERROR) << "Invalid AprilTag tower dimensions in: " << path;
     return false;
   }
 
   return true;
+}
+
+int PhysicalCornerForTagRotation(int corner, int tag_rotation_degrees) {
+  if (tag_rotation_degrees == 180) {
+    return (corner + 2) % 4;
+  }
+  return corner;
 }
 
 KnownGeometry BuildTowerGeometry(const AprilTagTowerConfig& config) {
@@ -191,8 +230,11 @@ KnownGeometry BuildTowerGeometry(const AprilTagTowerConfig& config) {
             center + u_axis * half_tag + z_axis * half_tag,
             center - u_axis * half_tag + z_axis * half_tag};
         for (int corner = 0; corner < 4; ++ corner) {
+          const int physical_corner = PhysicalCornerForTagRotation(
+              corner,
+              config.tag_rotation_degrees);
           geometry.feature_id_to_position3d[tag_id * 4 + corner] =
-              physical_corners[corner];
+              physical_corners[physical_corner];
         }
       }
     }
@@ -203,6 +245,84 @@ KnownGeometry BuildTowerGeometry(const AprilTagTowerConfig& config) {
 
 int ClampToImage(int value, int max_value) {
   return std::max(0, std::min(value, max_value));
+}
+
+bool IsFinitePoint(const cv::Point2f& point) {
+  return std::isfinite(point.x) && std::isfinite(point.y);
+}
+
+bool CanRefineCorner(const cv::Point2f& point, const Image<u8>& gray_image, int window_half_extent) {
+  return point.x >= window_half_extent + 1 &&
+         point.y >= window_half_extent + 1 &&
+         point.x < static_cast<float>(gray_image.width() - window_half_extent - 1) &&
+         point.y < static_cast<float>(gray_image.height() - window_half_extent - 1);
+}
+
+void RefineTagCornersSubpixel(
+    const Image<u8>& gray_image,
+    const AprilTagTowerConfig& config,
+    const apriltag_detection_t& tag_detection,
+    Vec2f refined_corners[4]) {
+  for (int corner = 0; corner < 4; ++ corner) {
+    refined_corners[corner] = Vec2f(
+        tag_detection.p[corner][0],
+        tag_detection.p[corner][1]);
+  }
+
+  if (!config.corner_subpixel_refinement) {
+    return;
+  }
+
+  const int window_half_extent = config.corner_subpixel_window_half_extent;
+  vector<int> corner_indices;
+  vector<cv::Point2f> points;
+  corner_indices.reserve(4);
+  points.reserve(4);
+  for (int corner = 0; corner < 4; ++ corner) {
+    const cv::Point2f point(
+        tag_detection.p[corner][0],
+        tag_detection.p[corner][1]);
+    if (CanRefineCorner(point, gray_image, window_half_extent)) {
+      corner_indices.push_back(corner);
+      points.push_back(point);
+    }
+  }
+
+  if (points.empty()) {
+    return;
+  }
+
+  cv::Mat gray_mat(
+      static_cast<int>(gray_image.height()),
+      static_cast<int>(gray_image.width()),
+      CV_8UC1,
+      const_cast<u8*>(gray_image.data()),
+      static_cast<size_t>(gray_image.stride()));
+  cv::cornerSubPix(
+      gray_mat,
+      points,
+      cv::Size(window_half_extent, window_half_extent),
+      cv::Size(-1, -1),
+      cv::TermCriteria(
+          cv::TermCriteria::EPS + cv::TermCriteria::MAX_ITER,
+          config.corner_subpixel_max_iterations,
+          config.corner_subpixel_epsilon));
+
+  const float max_shift_sq =
+      config.corner_subpixel_max_shift_px * config.corner_subpixel_max_shift_px;
+  for (size_t i = 0; i < points.size(); ++ i) {
+    const int corner = corner_indices[i];
+    const cv::Point2f original(
+        tag_detection.p[corner][0],
+        tag_detection.p[corner][1]);
+    const cv::Point2f refined = points[i];
+    const float dx = refined.x - original.x;
+    const float dy = refined.y - original.y;
+    if (IsFinitePoint(refined) &&
+        (max_shift_sq == 0 || dx * dx + dy * dy <= max_shift_sq)) {
+      refined_corners[corner] = Vec2f(refined.x, refined.y);
+    }
+  }
 }
 
 }  // namespace
@@ -290,19 +410,22 @@ void AprilTagTowerDetector::DetectFeatures(
       continue;
     }
 
+    Vec2f refined_corners[4];
+    RefineTagCornersSubpixel(gray_image, d->config, *tag_detection, refined_corners);
+
     for (int corner = 0; corner < 4; ++ corner) {
       features->emplace_back(
-          Vec2f(tag_detection->p[corner][0], tag_detection->p[corner][1]),
+          refined_corners[corner],
           first_feature_id + corner);
     }
 
     if (detection_visualization) {
       for (int corner = 0; corner < 4; ++ corner) {
         int next_corner = (corner + 1) % 4;
-        int x0 = ClampToImage(static_cast<int>(tag_detection->p[corner][0] + 0.5), image.width() - 1);
-        int y0 = ClampToImage(static_cast<int>(tag_detection->p[corner][1] + 0.5), image.height() - 1);
-        int x1 = ClampToImage(static_cast<int>(tag_detection->p[next_corner][0] + 0.5), image.width() - 1);
-        int y1 = ClampToImage(static_cast<int>(tag_detection->p[next_corner][1] + 0.5), image.height() - 1);
+        int x0 = ClampToImage(static_cast<int>(refined_corners[corner].x() + 0.5), image.width() - 1);
+        int y0 = ClampToImage(static_cast<int>(refined_corners[corner].y() + 0.5), image.height() - 1);
+        int x1 = ClampToImage(static_cast<int>(refined_corners[next_corner].x() + 0.5), image.width() - 1);
+        int y1 = ClampToImage(static_cast<int>(refined_corners[next_corner].y() + 0.5), image.height() - 1);
         detection_visualization->DrawLine(x0, y0, x1, y1, Vec3u8(0, 255, 0));
       }
     }

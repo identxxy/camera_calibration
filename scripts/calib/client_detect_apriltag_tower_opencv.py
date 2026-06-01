@@ -71,6 +71,23 @@ def create_detector(cv2, args):
         parameters.detectInvertedMarker = args.detect_inverted
     if hasattr(parameters, "errorCorrectionRate"):
         parameters.errorCorrectionRate = args.error_correction_rate
+    if hasattr(parameters, "cornerRefinementMethod"):
+        methods = {
+            "none": "CORNER_REFINE_NONE",
+            "subpix": "CORNER_REFINE_SUBPIX",
+            "contour": "CORNER_REFINE_CONTOUR",
+            "apriltag": "CORNER_REFINE_APRILTAG",
+        }
+        parameters.cornerRefinementMethod = getattr(
+            cv2.aruco,
+            methods[args.corner_refinement],
+            getattr(cv2.aruco, "CORNER_REFINE_NONE", 0))
+    if hasattr(parameters, "cornerRefinementWinSize"):
+        parameters.cornerRefinementWinSize = args.corner_refinement_window_size
+    if hasattr(parameters, "cornerRefinementMaxIterations"):
+        parameters.cornerRefinementMaxIterations = args.corner_refinement_max_iterations
+    if hasattr(parameters, "cornerRefinementMinAccuracy"):
+        parameters.cornerRefinementMinAccuracy = args.corner_refinement_min_accuracy
     if hasattr(cv2.aruco, "ArucoDetector"):
         return cv2.aruco.ArucoDetector(dictionary, parameters)
     return dictionary, parameters
@@ -126,12 +143,61 @@ def scale_detections(detections, scale):
     return scaled
 
 
+def refine_detections_subpixel(cv2, image, detections, args):
+    if not detections or not args.subpixel_refine_original:
+        return detections
+    try:
+        import numpy as np
+    except ImportError as exc:
+        raise SystemExit("numpy is required for subpixel corner refinement.") from exc
+    corners = []
+    lengths = []
+    for detection in detections:
+        pts = detection.get("corners", [])
+        lengths.append(len(pts))
+        for x, y in pts:
+            corners.append([float(x), float(y)])
+    if not corners:
+        return detections
+    corner_array = np.asarray(corners, dtype=np.float32).reshape(-1, 1, 2)
+    criteria = (
+        cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
+        args.subpixel_max_iterations,
+        args.subpixel_epsilon,
+    )
+    refined = cv2.cornerSubPix(
+        image,
+        corner_array,
+        (args.subpixel_window_size, args.subpixel_window_size),
+        (-1, -1),
+        criteria).reshape(-1, 2)
+    output = []
+    cursor = 0
+    for detection, length in zip(detections, lengths):
+        item = dict(detection)
+        item["corners"] = [
+            [float(x), float(y)]
+            for x, y in refined[cursor:cursor + length]
+        ]
+        item["subpixel_refined"] = True
+        output.append(item)
+        cursor += length
+    return output
+
+
 def write_tsv(path, rows, fieldnames):
     with Path(path).open("w", newline="") as stream:
         writer = csv.DictWriter(stream, delimiter="\t", fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
+
+
+def source_time_from_image_dir(image_dir):
+    parent = image_dir.parent.name
+    if re.match(r"^\d{4}_\d{2}_\d{2}-\d{2}_\d{2}_\d{2}$", parent):
+        return parent
+    return ""
 
 
 def main():
@@ -145,9 +211,22 @@ def main():
     parser.add_argument("--no-detect-inverted", dest="detect_inverted",
                         action="store_false")
     parser.add_argument("--error-correction-rate", type=float, default=0.6)
+    parser.add_argument(
+        "--corner-refinement",
+        choices=["none", "subpix", "contour", "apriltag"],
+        default="subpix")
+    parser.add_argument("--corner-refinement-window-size", type=int, default=5)
+    parser.add_argument("--corner-refinement-max-iterations", type=int, default=30)
+    parser.add_argument("--corner-refinement-min-accuracy", type=float, default=0.01)
+    parser.add_argument("--subpixel-refine-original", action="store_true", default=True)
+    parser.add_argument("--no-subpixel-refine-original", dest="subpixel_refine_original", action="store_false")
+    parser.add_argument("--subpixel-window-size", type=int, default=5)
+    parser.add_argument("--subpixel-max-iterations", type=int, default=30)
+    parser.add_argument("--subpixel-epsilon", type=float, default=0.01)
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument("--resize-factor", type=float, default=1.0)
+    parser.add_argument("--good-min-tags", type=int, default=4)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     if args.stride < 1:
@@ -186,6 +265,7 @@ def main():
 
     coverage_rows = []
     failed_rows = []
+    good_rows = []
     detections_path = args.output_dir / "detections.jsonl"
     start_time = time.time()
     total_frames = 0
@@ -219,20 +299,42 @@ def main():
                     args.resize_factor)
                 detections, rejected_count = detect(cv2, detector, detection_image)
                 detections = scale_detections(detections, corner_scale)
+                detections = refine_detections_subpixel(cv2, image, detections, args)
+                tag_count = len(detections)
                 if detections:
                     positive_frames += 1
                     if first_positive == "":
                         first_positive = frame_index
                     last_positive = frame_index
-                max_tags = max(max_tags, len(detections))
-                camera_detections += len(detections)
-                total_detections += len(detections)
+                if tag_count >= args.good_min_tags:
+                    good_rows.append({
+                        "client_id": args.client_id,
+                        "camera_index": camera_index,
+                        "camera_name": image_dir.name,
+                        "source_time": source_time_from_image_dir(image_dir),
+                        "image_dir": str(image_dir),
+                        "filename": image_path.name,
+                        "image_path": str(image_path),
+                        "frame_index": frame_index,
+                        "tag_count": tag_count,
+                        "corner_count": tag_count * 4,
+                        "rejected_count": rejected_count,
+                    })
+                max_tags = max(max_tags, tag_count)
+                camera_detections += tag_count
+                total_detections += tag_count
                 total_frames += 1
                 out.write(json.dumps({
                     "client_id": args.client_id,
                     "camera_index": camera_index,
                     "camera_name": image_dir.name,
+                    "source_time": source_time_from_image_dir(image_dir),
+                    "image_dir": str(image_dir),
                     "filename": image_path.name,
+                    "image_path": str(image_path),
+                    "frame_index": frame_index,
+                    "tag_count": tag_count,
+                    "corner_count": tag_count * 4,
                     "width": width,
                     "height": height,
                     "detections": detections,
@@ -268,6 +370,14 @@ def main():
         args.output_dir / "failed_images.tsv",
         failed_rows,
         ["camera_index", "camera_name", "filename", "reason"])
+    write_tsv(
+        args.output_dir / "good_images.tsv",
+        good_rows,
+        [
+            "client_id", "camera_index", "camera_name", "source_time",
+            "image_dir", "filename", "image_path", "frame_index",
+            "tag_count", "corner_count", "rejected_count",
+        ])
 
     summary = {
         "client_id": args.client_id,
@@ -280,6 +390,8 @@ def main():
         "stride": args.stride,
         "resize_factor": args.resize_factor,
         "detect_inverted": args.detect_inverted,
+        "good_min_tags": args.good_min_tags,
+        "good_image_count": len(good_rows),
         "elapsed_sec": time.time() - start_time,
         "output_dir": str(args.output_dir),
     }

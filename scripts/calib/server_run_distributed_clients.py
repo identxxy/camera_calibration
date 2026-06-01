@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
@@ -130,12 +131,27 @@ def write_tsv(path, rows, fieldnames):
 
 def find_report_dir(local_dir):
     local_dir = Path(local_dir)
-    if (local_dir / "client_summary.json").is_file():
+    if (local_dir / "client_summary.json").is_file() or (local_dir / "worker_summary.json").is_file():
         return local_dir
     candidates = sorted(local_dir.glob("*/client_summary.json"))
     if candidates:
         return candidates[0].parent
+    candidates = sorted(local_dir.glob("*/worker_summary.json"))
+    if candidates:
+        return candidates[0].parent
     return local_dir
+
+
+def first_existing_report(path, patterns):
+    path = Path(path)
+    for pattern in patterns:
+        direct = path / pattern
+        if direct.is_file():
+            return direct
+        matches = sorted(path.glob(pattern))
+        if matches:
+            return matches[0]
+    return path / patterns[0]
 
 
 def aggregate(config, output_dir, run_results, collect_results):
@@ -146,6 +162,7 @@ def aggregate(config, output_dir, run_results, collect_results):
 
     status_rows = []
     merged_coverage = []
+    merged_good_images = []
     summaries = []
 
     for name, client in client_by_name.items():
@@ -157,8 +174,9 @@ def aggregate(config, output_dir, run_results, collect_results):
             or client.get("collect", {}).get("local_dir")
             or "")
         report_dir = find_report_dir(local_dir) if local_dir else Path("")
-        summary_path = report_dir / "client_summary.json"
-        coverage_path = report_dir / "coverage.tsv"
+        summary_path = first_existing_report(report_dir, ["client_summary.json", "worker_summary.json"])
+        coverage_path = first_existing_report(report_dir, ["coverage.tsv", "per_camera_stats.tsv"])
+        good_images_path = first_existing_report(report_dir, ["good_images.tsv", "images_min*.tsv"])
         summary = {}
         if summary_path.is_file():
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -168,6 +186,11 @@ def aggregate(config, output_dir, run_results, collect_results):
                 merged = {"client_name": name, "host": client["host"]}
                 merged.update(row)
                 merged_coverage.append(merged)
+        if good_images_path.is_file():
+            for row in read_tsv(good_images_path):
+                merged = {"client_name": name, "host": client["host"]}
+                merged.update(row)
+                merged_good_images.append(merged)
 
         status_rows.append({
             "client_name": name,
@@ -177,6 +200,7 @@ def aggregate(config, output_dir, run_results, collect_results):
             "camera_count": summary.get("camera_count", ""),
             "total_frames": summary.get("total_frames", summary.get("image_count", "")),
             "total_detections": summary.get("total_detections", ""),
+            "good_image_count": summary.get("good_image_count", summary.get("passing_images", "")),
             "elapsed_sec": summary.get("elapsed_sec", ""),
             "local_report_dir": str(report_dir) if local_dir else "",
         })
@@ -187,11 +211,14 @@ def aggregate(config, output_dir, run_results, collect_results):
         [
             "client_name", "host", "run_returncode", "collect_returncode",
             "camera_count", "total_frames", "total_detections", "elapsed_sec",
-            "local_report_dir",
+            "good_image_count", "local_report_dir",
         ])
     if merged_coverage:
         fieldnames = sorted({key for row in merged_coverage for key in row.keys()})
         write_tsv(output_dir / "merged_coverage.tsv", merged_coverage, fieldnames)
+    if merged_good_images:
+        fieldnames = sorted({key for row in merged_good_images for key in row.keys()})
+        write_tsv(output_dir / "merged_good_images.tsv", merged_good_images, fieldnames)
 
     distributed_summary = {
         "generated_at_unix": time.time(),
@@ -203,10 +230,10 @@ def aggregate(config, output_dir, run_results, collect_results):
     (output_dir / "distributed_summary.json").write_text(
         json.dumps(distributed_summary, indent=2) + "\n",
         encoding="utf-8")
-    write_html(output_dir / "index.html", status_rows, merged_coverage)
+    write_html(output_dir / "index.html", status_rows, merged_coverage, merged_good_images)
 
 
-def write_html(path, status_rows, coverage_rows):
+def write_html(path, status_rows, coverage_rows, good_image_rows):
     def table(rows):
         if not rows:
             return "<p>No rows.</p>"
@@ -221,6 +248,7 @@ def write_html(path, status_rows, coverage_rows):
         return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
 
     coverage_preview = coverage_rows[:200]
+    good_preview = good_image_rows[:200]
     path.write_text(f"""<!doctype html>
 <html>
 <head>
@@ -241,6 +269,9 @@ def write_html(path, status_rows, coverage_rows):
   {table(status_rows)}
   <h2>Merged Coverage Preview</h2>
   {table(coverage_preview)}
+  <h2>Good Images Preview</h2>
+  <p class="muted">Rows here have at least the client-side --good-min-tags threshold.</p>
+  {table(good_preview)}
 </body>
 </html>
 """, encoding="utf-8")
@@ -308,6 +339,17 @@ def main():
 
     aggregate(config, args.output_dir, run_results, collect_results)
     print(f"Wrote distributed report to {args.output_dir}")
+    failures = [
+        item for item in [*run_results, *collect_results]
+        if item.get("returncode") not in ("", None, 0)
+    ]
+    if failures:
+        print(
+            "Distributed clients failed: "
+            + ", ".join(f"{item.get('name')}={item.get('returncode')}" for item in failures),
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

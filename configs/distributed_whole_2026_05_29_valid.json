@@ -1,0 +1,52 @@
+{
+  "clients": [
+    {
+      "name": "w1",
+      "host": "Administrator@192.168.2.1",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/client_detect_apriltag_tower_opencv.py --client-id w1 --image-directories-file D:/output/calib/whole/whole_2026_05_29_valid_image_directories.txt --output-dir D:/output/calib_reports/whole_2026_05_29/w1 --stride 1 --resize-factor 0.5 --good-min-tags 4",
+      "collect": {
+        "method": "scp",
+        "source": "Administrator@192.168.2.1:/D:/output/calib_reports/whole_2026_05_29/w1",
+        "local_dir": "/home/ubuntu/calib_data/calib_2026_05_29_whole_v1/distributed_qc/raw/w1"
+      }
+    },
+    {
+      "name": "w2",
+      "host": "Administrator@192.168.2.2",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/client_detect_apriltag_tower_opencv.py --client-id w2 --image-directories-file D:/output/calib/whole/whole_2026_05_29_valid_image_directories.txt --output-dir D:/output/calib_reports/whole_2026_05_29/w2 --stride 1 --resize-factor 0.5 --good-min-tags 4",
+      "collect": {
+        "method": "scp",
+        "source": "Administrator@192.168.2.2:/D:/output/calib_reports/whole_2026_05_29/w2",
+        "local_dir": "/home/ubuntu/calib_data/calib_2026_05_29_whole_v1/distributed_qc/raw/w2"
+      }
+    },
+    {
+      "name": "w3",
+      "host": "admin@192.168.2.3",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/client_detect_apriltag_tower_opencv.py --client-id w3 --image-directories-file D:/output/calib/whole/whole_2026_05_29_valid_image_directories.txt --output-dir D:/output/calib_reports/whole_2026_05_29/w3 --stride 1 --resize-factor 0.5 --good-min-tags 4",
+      "collect": {
+        "method": "scp",
+        "source": "admin@192.168.2.3:/D:/output/calib_reports/whole_2026_05_29/w3",
+        "local_dir": "/home/ubuntu/calib_data/calib_2026_05_29_whole_v1/distributed_qc/raw/w3"
+      }
+    },
+    {
+      "name": "w4",
+      "host": "admin@192.168.2.4",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/client_detect_apriltag_tower_opencv.py --client-id w4 --image-directories-file D:/output/calib/whole/whole_2026_05_29_valid_image_directories.txt --output-dir D:/output/calib_reports/whole_2026_05_29/w4 --stride 1 --resize-factor 0.5 --good-min-tags 4",
+      "collect": {
+        "method": "scp",
+        "source": "admin@192.168.2.4:/D:/output/calib_reports/whole_2026_05_29/w4",
+        "local_dir": "/home/ubuntu/calib_data/calib_2026_05_29_whole_v1/distributed_qc/raw/w4"
+      }
+    }
+  ]
+}

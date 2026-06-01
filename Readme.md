@@ -280,14 +280,15 @@ From outside a face, tag ids increase from bottom to top and left to right:
  0   1
 ```
 
-Feature ids are `tag_id * 4 + corner_id`, where corner ids follow the
-counter-clockwise physical tag-border order reported by the AprilTag detector.
-The detector stores the corresponding 3D tower corner positions in the dataset,
-so initialization and bundle adjustment can use a non-planar calibration object.
+Feature ids are `tag_id * 4 + corner_id`. The detector stores the corresponding
+3D tower corner positions in the dataset, so initialization and bundle
+adjustment can use a non-planar calibration object.
 The bundled 8-face tower YAML sets `tag_rotation_degrees: 180`, matching the
 purchased tower whose printed tag patterns are rotated 180 degrees in place
-while keeping the same bottom-to-top ID layout. This printed bitmap rotation
-does not rotate the physical 3D corner ids.
+while keeping the same bottom-to-top ID layout. For the Python/OpenCV tower
+builder, this maps OpenCV corners to physical corners as `[1, 0, 3, 2]` relative
+to `[lower-left, lower-right, upper-right, upper-left]`, matching the verified
+preview images.
 
 Example for extracting features from a synchronized outer ring:
 
@@ -307,9 +308,10 @@ same file name are treated as the same capture time. `--apriltag_tower_config`
 and `--pattern_files` are mutually exclusive for feature extraction. The tower
 path is currently implemented for batch image folders, not the live GUI.
 
-The default `face_width_m` is `0.18`, i.e. the occupied width of two 8 cm tags
-with one 2 cm gap. If the manufactured tower has side margins or a different
-outer face width, edit `face_width_m` in the YAML before extracting features.
+The bundled `face_width_m` is `0.24`, based on the measured physical octagon
+face width. This differs from the 0.18 m occupied width of two 8 cm tags with
+one 2 cm gap; `face_width_m` controls the tower apothem and therefore the
+relative placement of the 8 faces.
 
 After extraction, run calibration with `--dataset_files` as in the next section.
 

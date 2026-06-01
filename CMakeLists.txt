@@ -73,7 +73,7 @@ find_package(OpenGL REQUIRED)
 find_package(Eigen3 REQUIRED)
 
 # OpenCV (external)
-find_package(OpenCV REQUIRED COMPONENTS core calib3d)
+find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc)
 
 # Boost (external)
 find_package(Boost COMPONENTS serialization filesystem system REQUIRED)

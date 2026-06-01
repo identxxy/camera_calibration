@@ -1,0 +1,36 @@
+{
+  "clients": [
+    {
+      "name": "w1",
+      "host": "w1",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_29_min4/w1 --worker-id w1 --time 2026_05_29-14_05_12,2026_05_29-14_17_09,2026_05_29-14_20_01,2026_05_29-14_22_27,2026_05_29-14_24_32,2026_05_29-14_26_26 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {"method": "skip"}
+    },
+    {
+      "name": "w2",
+      "host": "w2",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_29_min4/w2 --worker-id w2 --time 2026_05_29-14_05_12,2026_05_29-14_17_09,2026_05_29-14_20_01,2026_05_29-14_22_27,2026_05_29-14_24_32,2026_05_29-14_26_26 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {"method": "skip"}
+    },
+    {
+      "name": "w3",
+      "host": "w3",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_29_min4/w3 --worker-id w3 --time 2026_05_29-14_05_12,2026_05_29-14_17_09,2026_05_29-14_20_01,2026_05_29-14_22_27,2026_05_29-14_24_32,2026_05_29-14_26_26 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {"method": "skip"}
+    },
+    {
+      "name": "w4",
+      "host": "w4",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_29_min4/w4 --worker-id w4 --time 2026_05_29-14_05_12,2026_05_29-14_17_09,2026_05_29-14_20_01,2026_05_29-14_22_27,2026_05_29-14_24_32,2026_05_29-14_26_26 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {"method": "skip"}
+    }
+  ]
+}

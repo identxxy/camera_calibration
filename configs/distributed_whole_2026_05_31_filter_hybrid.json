@@ -1,0 +1,124 @@
+{
+  "clients": [
+    {
+      "name": "w1_halfres_regular",
+      "host": "Administrator@192.168.2.1",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_hybrid/w1/regular_halfres --worker-id w1 --camera-id 22463688,22463690,22587616 --time 2026_05_31-17_54_18 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {
+        "method": "skip"
+      }
+    },
+    {
+      "name": "w1_22587611_fullres",
+      "host": "Administrator@192.168.2.1",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_hybrid/w1/22587611_fullres --worker-id w1_fullres --camera-id 22587611 --time 2026_05_31-17_54_18 --resize-factor 1.0 --min-tags 4 --skip-detections-jsonl",
+      "collect": {
+        "method": "skip"
+      }
+    },
+    {
+      "name": "w2_halfres",
+      "host": "Administrator@192.168.2.2",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_hybrid/w2/all_halfres --worker-id w2 --camera-id 22463689,22463691,22463702,22587614 --time 2026_05_31-17_54_18 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {
+        "method": "skip"
+      }
+    },
+    {
+      "name": "w3_5_halfres",
+      "host": "admin@192.168.2.3",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_hybrid/w3/5_halfres --worker-id w3 --camera-id 5-1,5-2,5-3 --time 2026_05_31-17_54_18 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {
+        "method": "skip"
+      }
+    },
+    {
+      "name": "w3_6_halfres",
+      "host": "admin@192.168.2.3",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_hybrid/w3/6_halfres --worker-id w3 --camera-id 6-1,6-2,6-3 --time 2026_05_31-17_54_18 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {
+        "method": "skip"
+      }
+    },
+    {
+      "name": "w3_7_halfres",
+      "host": "admin@192.168.2.3",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_hybrid/w3/7_halfres --worker-id w3 --camera-id 7-1,7-2,7-3 --time 2026_05_31-17_54_18 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {
+        "method": "skip"
+      }
+    },
+    {
+      "name": "w3_8_halfres",
+      "host": "admin@192.168.2.3",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_hybrid/w3/8_halfres --worker-id w3 --camera-id 8-1,8-2,8-3 --time 2026_05_31-17_54_18 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {
+        "method": "skip"
+      }
+    },
+    {
+      "name": "w4_1_halfres",
+      "host": "admin@192.168.2.4",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_hybrid/w4/1_halfres --worker-id w4 --camera-id 1-1,1-2,1-3 --time 2026_05_31-17_54_18 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {
+        "method": "skip"
+      }
+    },
+    {
+      "name": "w4_2_halfres",
+      "host": "admin@192.168.2.4",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_hybrid/w4/2_halfres --worker-id w4 --camera-id 2-1,2-2,2-3 --time 2026_05_31-17_54_18 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {
+        "method": "skip"
+      }
+    },
+    {
+      "name": "w4_3_halfres",
+      "host": "admin@192.168.2.4",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_hybrid/w4/3_halfres --worker-id w4 --camera-id 3-1,3-2,3-3 --time 2026_05_31-17_54_18 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {
+        "method": "skip"
+      }
+    },
+    {
+      "name": "w4_4_halfres_regular",
+      "host": "admin@192.168.2.4",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_hybrid/w4/4_regular_halfres --worker-id w4 --camera-id 4-1,4-2 --time 2026_05_31-17_54_18 --resize-factor 0.5 --min-tags 4 --skip-detections-jsonl",
+      "collect": {
+        "method": "skip"
+      }
+    },
+    {
+      "name": "w4_4-3_fullres",
+      "host": "admin@192.168.2.4",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_hybrid/w4/4-3_fullres --worker-id w4_fullres --camera-id 4-3 --time 2026_05_31-17_54_18 --resize-factor 1.0 --min-tags 4 --skip-detections-jsonl",
+      "collect": {
+        "method": "skip"
+      }
+    }
+  ]
+}

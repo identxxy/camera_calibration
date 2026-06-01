@@ -105,7 +105,7 @@ TEST(FeatureDetection, AprilTagTowerGeometryUsesBottomToTopRows) {
             tower.feature_id_to_position3d.at(30 * 4 + 0).z());
 }
 
-TEST(FeatureDetection, AprilTagTowerGeometryKeepsPhysicalCornersForRotatedTags) {
+TEST(FeatureDetection, AprilTagTowerGeometryMapsRotatedTagCornersToPhysicalCorners) {
   QTemporaryFile config_file;
   WriteTestTowerConfig(&config_file, /*tag_rotation_degrees*/ 180);
 
@@ -120,16 +120,16 @@ TEST(FeatureDetection, AprilTagTowerGeometryKeepsPhysicalCornersForRotatedTags) 
   const double apothem = 0.18 / (2.0 * tan(M_PI / 8.0));
 
   EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 0).x(), apothem, 1e-6);
-  // tag_rotation_degrees records printed bitmap orientation. It must not rotate
-  // the physical 3D corner ids returned by the AprilTag quad detector.
-  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 0).y(), -0.09, 1e-6);
-  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 0).z(), -0.79, 1e-6);
-  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 1).y(), -0.01, 1e-6);
-  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 1).z(), -0.79, 1e-6);
-  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 2).y(), -0.01, 1e-6);
-  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 2).z(), -0.71, 1e-6);
-  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 3).y(), -0.09, 1e-6);
-  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 3).z(), -0.71, 1e-6);
+  // The detector reports canonical tag corners. A 180 degree printed tag
+  // rotation places feature corner 0 at physical corner 2.
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 0).y(), -0.01, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 0).z(), -0.71, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 1).y(), -0.09, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 1).z(), -0.71, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 2).y(), -0.09, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 2).z(), -0.79, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 3).y(), -0.01, 1e-6);
+  EXPECT_NEAR(tower.feature_id_to_position3d.at(0 * 4 + 3).z(), -0.79, 1e-6);
 }
 
 TEST(FeatureDetection, AprilTagTowerDetectorDetectsRenderedPatternTagCorners) {
