@@ -138,6 +138,23 @@ int main(int argc, char** argv) {
       zarray_get(detections, i, &detection);
       printf("%s%d", (i == 0) ? "" : ",", detection->id);
     }
+    printf("],\"detections\":[");
+    for (int i = 0; i < tag_count; ++i) {
+      apriltag_detection_t* detection = NULL;
+      zarray_get(detections, i, &detection);
+      printf("%s{\"id\":%d,\"center\":[%.6f,%.6f],\"corners\":[",
+             (i == 0) ? "" : ",",
+             detection->id,
+             detection->c[0],
+             detection->c[1]);
+      for (int j = 0; j < 4; ++j) {
+        printf("%s[%.6f,%.6f]",
+               (j == 0) ? "" : ",",
+               detection->p[j][0],
+               detection->p[j][1]);
+      }
+      printf("],\"decision_margin\":%.6f}", detection->decision_margin);
+    }
     printf("]}\\n");
   }
 
