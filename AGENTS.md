@@ -45,6 +45,12 @@ intrinsic matrix `K`, distortion convention, image resolution, and whether the
 result must be consumable by OpenCV, COLMAP, SLAM, or this repository's generic
 model loaders.
 
+For the fixed outer studio ring, cameras `4-1`, `4-2`, and `4-3` are top-down
+view cameras. The other outer-ring cameras are mounted roughly horizontally and
+look inward toward the studio center. Treat this as a hardware/layout prior when
+checking COLMAP initialization, rig visualization, AprilTag tower geometry, and
+inner/outer bridge consistency.
+
 ## Studio Capture Data Quality Rules
 
 For synchronized studio rig captures, two frame-count anomalies are expected and

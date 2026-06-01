@@ -13,7 +13,10 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError:
+    yaml = None
 
 
 def quat_to_matrix(qx, qy, qz, qw):
@@ -46,11 +49,47 @@ def pose_to_matrix(pose):
 
 
 def load_poses(path):
+    if yaml is None:
+        return load_poses_simple(path)
     node = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     pose_count = int(node["pose_count"])
     used = np.zeros(pose_count, dtype=bool)
     poses = [np.eye(4, dtype=np.float64) for _ in range(pose_count)]
     for pose in node.get("poses", []):
+        index = int(pose["index"])
+        used[index] = True
+        poses[index] = pose_to_matrix(pose)
+    return used, poses
+
+
+def load_poses_simple(path):
+    pose_count = None
+    current = None
+    pose_nodes = []
+
+    def flush():
+        if current is not None:
+            pose_nodes.append(current.copy())
+
+    for raw in Path(path).read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("pose_count:"):
+            pose_count = int(line.split(":", 1)[1].strip())
+        elif line.startswith("- index:"):
+            flush()
+            current = {"index": line.split(":", 1)[1].strip()}
+        elif current is not None and ":" in line:
+            key, value = line.split(":", 1)
+            current[key.strip()] = value.strip()
+    flush()
+
+    if pose_count is None:
+        raise RuntimeError(f"Missing pose_count in {path}")
+    used = np.zeros(pose_count, dtype=bool)
+    poses = [np.eye(4, dtype=np.float64) for _ in range(pose_count)]
+    for pose in pose_nodes:
         index = int(pose["index"])
         used[index] = True
         poses[index] = pose_to_matrix(pose)
@@ -372,6 +411,44 @@ def render_reprojection_sections(reports):
     )
 
 
+def render_board_orientation_section(rig_data):
+    options = rig_data.get("viewer_options", {}) or {}
+    alignment = options.get("board_orientation_alignment") or {}
+    sources = alignment.get("sources") or {}
+    if not sources:
+        return ""
+    rows = []
+    for name, stats in sources.items():
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(str(name))}</td>"
+            f"<td>{html_int(stats.get('sample_count'))}</td>"
+            f"<td>{html_fmt(stats.get('median_angle_from_horizontal_deg'), 3)}</td>"
+            f"<td>{html_fmt(stats.get('p90_angle_from_horizontal_deg'), 3)}</td>"
+            f"<td>{html_fmt(stats.get('max_angle_from_horizontal_deg'), 3)}</td>"
+            f"<td>{html.escape(str(stats.get('description') or ''))}</td>"
+            "</tr>"
+        )
+    aggregate = alignment.get("aggregate") or {}
+    gravity = alignment.get("gravity_display_up_vector")
+    gravity_text = ", ".join(html_fmt(value, 4) for value in gravity) if gravity else "-"
+    return (
+        "<h2 class='section-title'>Board Orientation / Gravity</h2>"
+        "<section class='orientation-block'>"
+        "<div class='stage-summary'>"
+        f"<span>method: {html.escape(str(alignment.get('method') or '-'))}</span>"
+        f"<span>display up: {html.escape(gravity_text)}</span>"
+        f"<span>all normals p90 from horizontal: {html_fmt(aggregate.get('p90_angle_from_horizontal_deg'), 3)} deg</span>"
+        f"<span>source: <code>{html.escape(str(alignment.get('gravity_source') or ''))}</code></span>"
+        "</div>"
+        "<div class='table-wrap reproj-table-wrap'><table class='orientation-table'>"
+        "<thead><tr><th>Board set</th><th>Normals</th><th>Median horizontal err deg</th>"
+        "<th>P90 horizontal err deg</th><th>Max horizontal err deg</th><th>Definition</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+        "</section>"
+    )
+
+
 def camera_center_in_reference(camera_tr_reference):
     return np.linalg.inv(camera_tr_reference)[:3, 3]
 
@@ -676,6 +753,20 @@ HTML_TEMPLATE = """<!doctype html>
       inset: 0;
       background: radial-gradient(circle at 30% 20%, #252525 0, #141414 58%);
     }
+    .webgl-error {
+      position: absolute;
+      left: 24px;
+      right: 380px;
+      top: 24px;
+      max-width: 620px;
+      padding: 14px 16px;
+      background: #fff4ef;
+      border: 1px solid #e5a088;
+      color: #422318;
+      font-size: 13px;
+      line-height: 1.45;
+      z-index: 3;
+    }
     #panel {
       position: absolute;
       top: 12px;
@@ -760,6 +851,45 @@ HTML_TEMPLATE = """<!doctype html>
       border-color: var(--focus);
       color: #174ea6;
     }
+    .segmented {
+      display: grid;
+      gap: 6px;
+      margin: 0 0 10px;
+    }
+    .segmented-title {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
+      text-transform: uppercase;
+    }
+    .segmented-buttons {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 5px;
+    }
+    .segmented-buttons button {
+      min-width: 0;
+      padding: 0 6px;
+    }
+    .control-section {
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+      margin-top: 10px;
+    }
+    .control-section:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+      margin-top: 0;
+    }
+    .control-section-title {
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 7px;
+    }
+    .button-row.view-row {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
     .legend {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -796,7 +926,7 @@ HTML_TEMPLATE = """<!doctype html>
       width: 100%;
       border-collapse: collapse;
       font-size: 12px;
-      min-width: 310px;
+      min-width: 760px;
     }
     th, td {
       padding: 7px 8px;
@@ -814,6 +944,10 @@ HTML_TEMPLATE = """<!doctype html>
     tr { cursor: pointer; }
     tr:hover { background: #f0f5ff; }
     tr.selected { background: #dfe9ff; }
+    tr.coverage-inactive {
+      color: var(--muted);
+      background: #f4f4f1;
+    }
     .reprojection-block {
       display: grid;
       gap: 18px;
@@ -934,15 +1068,16 @@ HTML_TEMPLATE = """<!doctype html>
 </head>
 <body>
   <header>
-    <h1>Inner 8-Camera Rig Report</h1>
+    <h1 id="report-title">Inner 8-Camera Rig Report</h1>
     <p id="source"></p>
   </header>
   <main>
     <section class="summary-grid">
-      <div class="metric"><strong id="metric-camera-count">-</strong><span>solved cameras</span></div>
+      <div class="metric"><strong id="metric-camera-count">-</strong><span>visible / total cameras</span></div>
       <div class="metric"><strong id="metric-near-far">0.30-0.70 m</strong><span>default frustum range</span></div>
       <div class="metric"><strong id="metric-max-delta">-</strong><span>max small refine delta</span></div>
       <div class="metric"><strong id="metric-sparse-points">0</strong><span>COLMAP sparse points</span></div>
+      <div class="metric"><strong id="metric-board-normal">-</strong><span>board normal p90 horizontal err</span></div>
       <div class="metric"><strong id="metric-overlap">off</strong><span>strict all-camera overlap</span></div>
     </section>
 
@@ -951,25 +1086,57 @@ HTML_TEMPLATE = """<!doctype html>
       <div id="viewport"></div>
       <aside id="panel">
         <h2>3D Rig Controls</h2>
-        <div class="button-row">
-          <button id="top">Top</button>
-          <button id="front">Front</button>
-          <button id="toggle-gizmo" class="active">Gizmo</button>
-          <button id="toggle-frustum" class="active">Frustums</button>
-          <button id="toggle-axes" class="active">Axes</button>
-          <button id="toggle-labels" class="active">Labels</button>
-          <button id="toggle-grid" class="active">Grid</button>
-          <button id="toggle-images" class="active">Images</button>
-          <button id="toggle-points" class="active">Points</button>
-          <button id="toggle-overlap">Overlap</button>
+        <div class="control-section">
+          <div class="control-section-title">Rig Scope</div>
+          <div class="segmented">
+            <div class="segmented-title">Camera Set</div>
+            <div class="segmented-buttons">
+              <button id="scope-all" class="active">All</button>
+              <button id="scope-inner">Inner</button>
+              <button id="scope-outer">Outer</button>
+            </div>
+          </div>
+          <div class="segmented">
+            <div class="segmented-title">Dataset Coverage</div>
+            <div class="segmented-buttons">
+              <button id="coverage-whole" class="active">Whole</button>
+              <button id="coverage-large-marker">Large</button>
+              <button id="coverage-small-marker">Small</button>
+            </div>
+          </div>
         </div>
-        <div class="range-row">
-          <label><span class="range-head"><span>Near</span><span id="near-value"></span></span>
-            <input id="near-slider" type="range" min="0.05" max="2.00" step="0.01">
-          </label>
-          <label><span class="range-head"><span>Far</span><span id="far-value"></span></span>
-            <input id="far-slider" type="range" min="0.10" max="3.00" step="0.01">
-          </label>
+        <div class="control-section">
+          <div class="control-section-title">View</div>
+          <div class="button-row view-row">
+            <button id="top">Top</button>
+            <button id="front">Front</button>
+            <button id="toggle-gizmo" class="active">Gizmo</button>
+          </div>
+        </div>
+        <div class="control-section">
+          <div class="control-section-title">Layers</div>
+          <div class="button-row">
+            <button id="toggle-frustum" class="active">Frustums</button>
+            <button id="toggle-axes" class="active">Axes</button>
+            <button id="toggle-labels" class="active">Labels</button>
+            <button id="toggle-grid" class="active">Grid</button>
+            <button id="toggle-images" class="active">Images</button>
+            <button id="toggle-points" class="active">Points</button>
+            <button id="toggle-outer-topdown" class="active">Topdown</button>
+            <button id="toggle-outer-colmap" class="active">Rough</button>
+            <button id="toggle-overlap">Overlap</button>
+          </div>
+        </div>
+        <div class="control-section">
+          <div class="control-section-title">Frustum Range</div>
+          <div class="range-row">
+            <label><span class="range-head"><span>Near</span><span id="near-value"></span></span>
+              <input id="near-slider" type="range" min="0.05" max="2.00" step="0.01">
+            </label>
+            <label><span class="range-head"><span>Far</span><span id="far-value"></span></span>
+              <input id="far-slider" type="range" min="0.10" max="3.00" step="0.01">
+            </label>
+          </div>
         </div>
         <p class="sub" id="overlap-status"></p>
         <div class="legend">
@@ -983,12 +1150,13 @@ HTML_TEMPLATE = """<!doctype html>
     </section>
 
     __REPROJECTION_HTML__
+    __BOARD_ORIENTATION_HTML__
 
-    <h2 class="section-title">Camera Extrinsics</h2>
+    <h2 class="section-title">Camera Intrinsics / Final Residuals</h2>
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Cam</th><th>Center x</th><th>Center y</th><th>Center z</th><th>Delta mm</th><th>Rot deg</th></tr>
+          <tr><th>Cam</th><th>Set</th><th>Coverage</th><th>Raw obs</th><th>Solve obs</th><th>Median px</th><th>P90 px</th><th>Max px</th><th>fx</th><th>fy</th><th>Decision</th></tr>
         </thead>
         <tbody id="camera-table"></tbody>
       </table>
@@ -1002,19 +1170,23 @@ const RIG_DATA = __RIG_DATA__;
 
 const viewport = document.getElementById("viewport");
 const renderCanvas = document.createElement("canvas");
-const renderContext = renderCanvas.getContext("webgl", {antialias: true, alpha: false});
-const renderer = new THREE.WebGLRenderer({
-  canvas: renderCanvas,
-  context: renderContext,
-  antialias: true,
-  alpha: false,
-});
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({
+    canvas: renderCanvas,
+    antialias: true,
+    alpha: false,
+    powerPreference: "high-performance",
+  });
+} catch (error) {
+  viewport.innerHTML = '<div class="webgl-error"><strong>WebGL renderer failed.</strong><br>Try enabling browser hardware acceleration, or reload after closing other GPU-heavy tabs.</div>';
+  throw error;
+}
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setClearColor(0x141414, 1);
 viewport.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x141414, 4.0, 14.0);
 
 const camera = new THREE.PerspectiveCamera(48, 1, 0.01, 100);
 let controls = null;
@@ -1046,6 +1218,11 @@ scene.add(pivotFrameGroup);
 
 const bounds = RIG_DATA.bounds;
 const radius = Math.max(0.7, bounds.radius);
+scene.fog = new THREE.Fog(
+  0x141414,
+  Math.max(10.0, radius * 4.0),
+  Math.max(24.0, radius * 12.0)
+);
 const grid = new THREE.GridHelper(radius * 3.2, 16, 0x9a9a9a, 0x404040);
 grid.material.transparent = true;
 grid.material.opacity = 0.45;
@@ -1059,12 +1236,19 @@ const pointer = new THREE.Vector2();
 const pickables = [];
 const cameraMeshes = new Map();
 const frustumObjects = new Map();
+const cameraSceneObjects = new Map();
 const tableRows = new Map();
 let selectedIndex = RIG_DATA.cameras.length ? RIG_DATA.cameras[0].index : -1;
 let nearDistance = RIG_DATA.frustum.default_near;
 let farDistance = RIG_DATA.frustum.default_far;
+const cameraVisibility = Object.assign(
+  {inner: true, outer: true, outer_topdown: true, outer_colmap: true},
+  (RIG_DATA.viewer_options || {}).default_visibility || {}
+);
+let cameraScope = "all";
+let coverageMode = ((RIG_DATA.dataset_coverage || {}).default_mode) || "whole";
 let currentFrameMode = "iso";
-let worldFromCam0Quat = new THREE.Quaternion();
+let worldFromCam0Quat = initialWorldFromReferenceQuaternion();
 let transformControl = null;
 let worldGizmoPointerActive = false;
 let worldGizmoDragging = false;
@@ -1082,24 +1266,102 @@ function createOrbitControls(target) {
   return nextControls;
 }
 
-function rebuildOrbitControlsForCurrentUp(enabled) {
+function rebuildOrbitControlsForCurrentUp(enabled, preferredUp) {
   const position = camera.position.clone();
   const target = controls ? controls.target.clone() : new THREE.Vector3();
   if (controls) {
     controls.dispose();
   }
-  camera.up.copy(WORLD_UP);
+  const nextUp = preferredUp ? preferredUp.clone().normalize() : WORLD_UP.clone();
+  camera.up.copy(nextUp);
   // This OrbitControls build captures camera.up when constructed.
   controls = createOrbitControls(target);
   controls.enabled = enabled;
   camera.position.copy(position);
   controls.target.copy(target);
+  camera.up.copy(nextUp);
   camera.lookAt(controls.target);
 }
 
 function fmt(value, digits) {
   if (value === undefined || value === null || Number.isNaN(Number(value))) return "-";
   return Number(value).toFixed(digits);
+}
+
+function cameraLabel(cam) {
+  return cam.label || ("cam" + cam.index);
+}
+
+function cameraCategory(cam) {
+  const kind = String(cam.kind || "").toLowerCase();
+  const label = cameraLabel(cam).toLowerCase();
+  if (kind.startsWith("inner") || label.startsWith("inner")) return "inner";
+  if (kind.startsWith("outer_topdown")) return "outer_topdown";
+  if (kind.startsWith("outer_colmap")) return "outer_colmap";
+  if (kind.startsWith("outer") || /^\\d+-\\d+/.test(label)) return "outer";
+  return "other";
+}
+
+function cameraIsVisible(cam) {
+  const category = cameraCategory(cam);
+  if (cameraScope === "inner" && category !== "inner") return false;
+  if (cameraScope === "outer" && !category.startsWith("outer")) return false;
+  if (category === "inner") return cameraVisibility.inner;
+  if (category.startsWith("outer")) return cameraVisibility.outer && cameraVisibility[category] !== false;
+  return true;
+}
+
+function coverageForCamera(cam) {
+  const coverage = cam.coverage || {};
+  return coverage[coverageMode] || {active: true, status: "unknown", quality: "unknown", observation_count: null, detail: "No dataset coverage metadata in this viewer."};
+}
+
+function calibrationQuality(cam) {
+  return cam.calibration_quality || {
+    source: "missing",
+    decision: "missing",
+    observation_count: null,
+    median_error_px: null,
+    p90_error_px: null,
+    max_error_px: null,
+    fx: null,
+    fy: null,
+  };
+}
+
+function displayResidualQuality(cam) {
+  const q = calibrationQuality(cam);
+  const c = coverageForCamera(cam);
+  if ((coverageMode === "large_marker" || coverageMode === "small_marker") && c.active !== false) {
+    return {
+      source: coverageMode + "_pnp",
+      decision: c.status || c.quality || coverageMode,
+      observation_count: c.total_inliers ?? c.observation_count ?? null,
+      median_error_px: c.median_view_error_px ?? null,
+      p90_error_px: null,
+      max_error_px: null,
+    };
+  }
+  return q;
+}
+
+function cameraCoverageActive(cam) {
+  return coverageForCamera(cam).active !== false;
+}
+
+function cameraCategoryExists(category) {
+  if (category === "outer") {
+    return RIG_DATA.cameras.some((cam) => cameraCategory(cam).startsWith("outer"));
+  }
+  return RIG_DATA.cameras.some((cam) => cameraCategory(cam) === category);
+}
+
+function viewerOption(name, fallback) {
+  const options = RIG_DATA.viewer_options || {};
+  if (Object.prototype.hasOwnProperty.call(options, name)) {
+    return options[name];
+  }
+  return fallback;
 }
 
 function flattenLines(lines) {
@@ -1123,6 +1385,22 @@ function makeLineSegments(lines, color, opacity) {
 
 function v3(values) {
   return new THREE.Vector3(values[0], values[1], values[2]);
+}
+
+function initialWorldFromReferenceQuaternion() {
+  const options = RIG_DATA.viewer_options || {};
+  const quat = options.default_world_from_reference_quaternion_xyzw;
+  if (Array.isArray(quat) && quat.length === 4) {
+    return new THREE.Quaternion(quat[0], quat[1], quat[2], quat[3]).normalize();
+  }
+  const up = options.default_reference_up_vector_three;
+  if (Array.isArray(up) && up.length === 3) {
+    const from = v3(up);
+    if (from.lengthSq() > 0) {
+      return new THREE.Quaternion().setFromUnitVectors(from.normalize(), WORLD_UP.clone());
+    }
+  }
+  return new THREE.Quaternion();
 }
 
 function vecToArray(vector) {
@@ -1421,7 +1699,7 @@ function buildSparsePointCloud() {
 }
 
 function buildScene() {
-  const sphereRadius = Math.max(0.018, radius * 0.026);
+  const sphereRadius = 0.03;
   const sphereGeometry = new THREE.SphereGeometry(sphereRadius, 28, 16);
 
   RIG_DATA.cameras.forEach((cam) => {
@@ -1493,10 +1771,16 @@ function buildScene() {
     pickables.push(mesh);
     cameraMeshes.set(cam.index, mesh);
 
-    const label = makeLabel("cam" + cam.index, "#" + color.getHexString());
+    const label = makeLabel(cameraLabel(cam), "#" + color.getHexString());
     label.position.set(cam.center[0], cam.center[1] + sphereRadius * 3.2, cam.center[2]);
     label.userData.index = cam.index;
     labelGroup.add(label);
+    cameraSceneObjects.set(cam.index, {
+      cam,
+      axes: [xAxis, yAxis, zAxis],
+      marker: mesh,
+      label,
+    });
   });
   updateFrustums();
   buildSparsePointCloud();
@@ -1516,7 +1800,13 @@ function updateFrustums() {
     }
     allPlanes.push(...frustumPlanes(frustum));
   });
-  updateOverlap(allPlanes);
+  if (viewerOption("enable_overlap", true)) {
+    updateOverlap(allPlanes);
+  } else {
+    overlapGroup.clear();
+    const status = document.getElementById("overlap-status");
+    if (status) status.textContent = "Overlap: disabled for this viewer";
+  }
 }
 
 function updateOverlap(planes) {
@@ -1613,16 +1903,24 @@ function buildPivotFrameGizmo() {
 function buildTable() {
   const body = document.getElementById("camera-table");
   body.innerHTML = "";
+  tableRows.clear();
   RIG_DATA.cameras.forEach((cam) => {
     const row = document.createElement("tr");
     row.dataset.index = cam.index;
-    const deltaMm = cam.metrics.delta_translation_m === undefined ? NaN : cam.metrics.delta_translation_m * 1000.0;
-    row.innerHTML = "<td>cam" + cam.index + "</td>"
-      + "<td>" + fmt(cam.center[0], 3) + "</td>"
-      + "<td>" + fmt(-cam.center[1], 3) + "</td>"
-      + "<td>" + fmt(-cam.center[2], 3) + "</td>"
-      + "<td>" + fmt(deltaMm, 2) + "</td>"
-      + "<td>" + fmt(cam.metrics.rotation_deg, 2) + "</td>";
+    const c = coverageForCamera(cam);
+    const q = calibrationQuality(cam);
+    const residual = displayResidualQuality(cam);
+    row.innerHTML = "<td>" + cameraLabel(cam) + "</td>"
+      + "<td>" + cameraCategory(cam).replace("outer_final", "outer") + "</td>"
+      + "<td>" + (c.active === false ? "inactive" : "active") + "</td>"
+      + "<td>" + fmt(c.observation_count, 0) + "</td>"
+      + "<td>" + fmt(residual.observation_count ?? residual.residual_count, 0) + "</td>"
+      + "<td>" + fmt(residual.median_error_px, 3) + "</td>"
+      + "<td>" + fmt(residual.p90_error_px, 3) + "</td>"
+      + "<td>" + fmt(residual.max_error_px, 3) + "</td>"
+      + "<td>" + fmt(q.fx, 1) + "</td>"
+      + "<td>" + fmt(q.fy, 1) + "</td>"
+      + "<td>" + (residual.decision || residual.source || q.decision || q.source || "-") + "</td>";
     row.addEventListener("click", () => selectCamera(cam.index, true));
     body.appendChild(row);
     tableRows.set(cam.index, row);
@@ -1630,22 +1928,31 @@ function buildTable() {
 }
 
 function buildSummary() {
-  const solved = RIG_DATA.cameras.filter((cam) => cam.used).length;
+  const visible = visibleCameraCount();
+  const activeInDataset = RIG_DATA.cameras.filter((cam) => cameraCoverageActive(cam)).length;
   const deltas = RIG_DATA.cameras
     .map((cam) => cam.metrics.delta_translation_m)
     .filter((value) => value !== undefined && Number.isFinite(Number(value)))
     .map((value) => Number(value) * 1000.0);
   const maxDelta = deltas.length ? Math.max(...deltas) : NaN;
-  document.getElementById("metric-camera-count").textContent = solved + " / " + RIG_DATA.cameras.length;
+  document.getElementById("metric-camera-count").textContent =
+    visible + " / " + RIG_DATA.cameras.length + " (" + activeInDataset + " active)";
   document.getElementById("metric-near-far").textContent =
     RIG_DATA.frustum.default_near.toFixed(2) + "-" + RIG_DATA.frustum.default_far.toFixed(2) + " m";
   document.getElementById("metric-max-delta").textContent = fmt(maxDelta, 2) + " mm";
   document.getElementById("metric-sparse-points").textContent =
     String((RIG_DATA.sparse_point_cloud || {}).point_count || 0);
+  const boardAggregate = (((RIG_DATA.viewer_options || {}).board_orientation_alignment || {}).aggregate || {});
+  document.getElementById("metric-board-normal").textContent =
+    fmt(boardAggregate.p90_angle_from_horizontal_deg, 2) + " deg";
 }
 
 function firstFrameImageCount() {
   return RIG_DATA.cameras.filter((cam) => cam.image_url).length;
+}
+
+function visibleCameraCount() {
+  return RIG_DATA.cameras.filter((cam) => cameraIsVisible(cam)).length;
 }
 
 function selectedCameraData() {
@@ -1657,19 +1964,28 @@ function updateSelectedPanel() {
   const el = document.getElementById("selected");
   tableRows.forEach((row, index) => row.classList.toggle("selected", index === selectedIndex));
   cameraMeshes.forEach((mesh, index) => {
-    const scale = index === selectedIndex ? 1.65 : 1.0;
-    mesh.scale.setScalar(scale);
+    mesh.scale.setScalar(1.0);
   });
   if (!cam) {
     el.textContent = "No camera selected.";
     return;
   }
   const m = cam.metrics || {};
-  el.innerHTML = "<strong>cam" + cam.index + "</strong><br>"
-    + "center(camera0): "
-    + fmt(cam.center[0], 4) + ", "
-    + fmt(-cam.center[1], 4) + ", "
-    + fmt(-cam.center[2], 4) + " m<br>"
+  const c = coverageForCamera(cam);
+  const q = calibrationQuality(cam);
+  const residual = displayResidualQuality(cam);
+  const coverageLabel = ((RIG_DATA.dataset_coverage || {}).modes || {})[coverageMode] || {label: coverageMode};
+  el.innerHTML = "<strong>" + cameraLabel(cam) + "</strong><br>"
+    + "dataset: " + coverageLabel.label + " / " + (c.active === false ? "inactive" : "active")
+    + " (" + (c.detail || c.status || "-") + ")<br>"
+    + "raw coverage obs: " + fmt(c.observation_count, 0) + "<br>"
+    + "final residual: "
+    + fmt(residual.median_error_px, 3) + " med, "
+    + fmt(residual.p90_error_px, 3) + " p90, "
+    + fmt(residual.max_error_px, 3) + " max px; "
+    + fmt(residual.observation_count ?? residual.residual_count, 0) + " accepted obs<br>"
+    + "intrinsics: fx " + fmt(q.fx, 1) + ", fy " + fmt(q.fy, 1)
+    + "; decision: " + (residual.decision || residual.source || q.decision || q.source || "-") + "<br>"
     + "delta refine: "
     + fmt((m.delta_translation_m || 0) * 1000.0, 3) + " mm, "
     + fmt(m.delta_rotation_deg, 4) + " deg<br>"
@@ -1686,6 +2002,70 @@ function selectCamera(index, focus) {
       controls.target.copy(cam0ToWorldPoint(cam.center));
     }
   }
+}
+
+function setObjectOpacity(object, opacity) {
+  if (!object || !object.material) return;
+  object.material.transparent = opacity < 0.999;
+  object.material.opacity = opacity;
+  object.material.needsUpdate = true;
+}
+
+function applyCoverageStyle(item, visible) {
+  const active = cameraCoverageActive(item.cam);
+  const mutedColor = 0x7f858a;
+  const baseColor = cameraColor(item.cam.index);
+  const lineOpacity = active ? 0.95 : 0.20;
+  const fillOpacity = active ? RIG_DATA.frustum.fill_opacity : Math.min(0.035, RIG_DATA.frustum.fill_opacity);
+  const markerOpacity = active ? 1.0 : 0.28;
+  const labelOpacity = active ? 1.0 : 0.34;
+  item.line.material.color.set(active ? baseColor : mutedColor);
+  item.fill.material.color.set(active ? baseColor : mutedColor);
+  setObjectOpacity(item.line, lineOpacity);
+  setObjectOpacity(item.fill, fillOpacity);
+  if (item.imagePlane) {
+    setObjectOpacity(item.imagePlane, active ? 0.92 : 0.12);
+  }
+  const sceneItem = cameraSceneObjects.get(item.cam.index);
+  if (sceneItem) {
+    sceneItem.marker.material.color.set(active ? baseColor : mutedColor);
+    setObjectOpacity(sceneItem.marker, markerOpacity);
+    sceneItem.axes.forEach((axis) => setObjectOpacity(axis, active ? 1.0 : 0.18));
+    setObjectOpacity(sceneItem.label, labelOpacity);
+  }
+  if (!visible) {
+    item.line.visible = false;
+    item.fill.visible = false;
+    if (item.imagePlane) item.imagePlane.visible = false;
+  }
+}
+
+function applyCameraVisibility() {
+  frustumObjects.forEach((item) => {
+    const visible = cameraIsVisible(item.cam);
+    item.line.visible = visible;
+    item.fill.visible = visible;
+    if (item.imagePlane) item.imagePlane.visible = visible;
+    applyCoverageStyle(item, visible);
+  });
+  cameraSceneObjects.forEach((item) => {
+    const visible = cameraIsVisible(item.cam);
+    item.axes.forEach((axis) => { axis.visible = visible; });
+    item.marker.visible = visible;
+    item.label.visible = visible;
+  });
+  tableRows.forEach((row, index) => {
+    const cam = RIG_DATA.cameras.find((item) => item.index === index);
+    const visible = cam && cameraIsVisible(cam);
+    row.style.display = visible ? "" : "none";
+    row.classList.toggle("coverage-inactive", Boolean(cam && !cameraCoverageActive(cam)));
+  });
+  const selected = selectedCameraData();
+  if (selected && !cameraIsVisible(selected)) {
+    const next = RIG_DATA.cameras.find((cam) => cameraIsVisible(cam));
+    selectedIndex = next ? next.index : -1;
+  }
+  updateSelectedPanel();
 }
 
 function cam0UpInWorldVector() {
@@ -1729,6 +2109,45 @@ function cam0ToWorldPoint(point) {
   return v3(point).applyQuaternion(worldFromCam0Quat);
 }
 
+function gravityAlignedAxis(localAxis) {
+  return localAxis.clone().applyQuaternion(worldFromCam0Quat).normalize();
+}
+
+function horizontalFrameAxis(localAxis) {
+  const axis = gravityAlignedAxis(localAxis);
+  axis.addScaledVector(WORLD_UP, -axis.dot(WORLD_UP));
+  if (axis.lengthSq() > 1e-8) {
+    return axis.normalize();
+  }
+  return null;
+}
+
+function horizontalRigForward() {
+  return horizontalFrameAxis(new THREE.Vector3(0, 0, 1))
+    || horizontalFrameAxis(new THREE.Vector3(1, 0, 0))
+    || new THREE.Vector3(1, 0, 0);
+}
+
+function projectedCameraUp(preferredUp, viewDirection) {
+  const up = preferredUp.clone().normalize();
+  const view = viewDirection.clone().normalize();
+  up.addScaledVector(view, -up.dot(view));
+  if (up.lengthSq() > 1e-8) {
+    return up.normalize();
+  }
+  for (const fallback of [
+    gravityAlignedAxis(new THREE.Vector3(0, 0, 1)),
+    gravityAlignedAxis(new THREE.Vector3(1, 0, 0)),
+    WORLD_UP.clone(),
+  ]) {
+    fallback.addScaledVector(view, -fallback.dot(view));
+    if (fallback.lengthSq() > 1e-8) {
+      return fallback.normalize();
+    }
+  }
+  return WORLD_UP.clone();
+}
+
 function frameRig(mode) {
   currentFrameMode = mode;
   const c = bounds.center;
@@ -1736,26 +2155,34 @@ function frameRig(mode) {
   const targetY = c[1] + (mobile ? -radius * 0.36 : 0);
   const zoom = mobile ? 1.45 : 1.0;
   const localTarget = new THREE.Vector3(c[0], targetY, c[2]);
-  let localOffset;
+  // The world/root quaternion already maps the estimated rig gravity to display WORLD_UP.
+  // Top/front view buttons are therefore defined in the display gravity frame, not in
+  // the original rig local-Y frame.
+  const gravityUp = WORLD_UP.clone();
+  const controlsUp = gravityUp.clone().negate();
+  const rigForward = horizontalRigForward();
+  let offset;
   if (mode === "top") {
-    localOffset = new THREE.Vector3(0, radius * 2.85 * zoom, 0.002);
+    offset = gravityUp.clone().multiplyScalar(-radius * 2.85 * zoom)
+      .addScaledVector(rigForward, radius * 0.002);
   } else if (mode === "front") {
-    localOffset = new THREE.Vector3(0, radius * 0.24 * zoom, radius * 2.65 * zoom);
+    offset = rigForward.clone().multiplyScalar(radius * 2.65 * zoom);
   } else {
-    localOffset = new THREE.Vector3(radius * 1.55 * zoom, radius * 1.15 * zoom, radius * 1.95 * zoom);
+    offset = new THREE.Vector3(radius * 1.55 * zoom, radius * 1.15 * zoom, radius * 1.95 * zoom)
+      .applyQuaternion(worldFromCam0Quat);
   }
-  const target = localTarget.applyQuaternion(cam0ToWorldRoot.quaternion);
-  const offset = localOffset.applyQuaternion(cam0ToWorldRoot.quaternion);
+  const target = cam0ToWorldPoint(localTarget.toArray());
   camera.position.copy(target.clone().add(offset));
   controls.target.copy(target);
   camera.near = 0.005;
   camera.far = Math.max(20, radius * 20);
   camera.updateProjectionMatrix();
-  rebuildOrbitControlsForCurrentUp(true);
+  rebuildOrbitControlsForCurrentUp(true, controlsUp);
 }
 
 function setToggle(buttonId, object) {
   const button = document.getElementById(buttonId);
+  if (!button) return;
   button.addEventListener("click", () => {
     object.visible = !object.visible;
     button.classList.toggle("active", object.visible);
@@ -1767,6 +2194,7 @@ function setToggle(buttonId, object) {
 
 function setGizmoToggle(buttonId) {
   const button = document.getElementById(buttonId);
+  if (!button) return;
   button.addEventListener("click", () => {
     const visible = !pivotFrameGroup.visible;
     pivotFrameGroup.visible = visible;
@@ -1826,7 +2254,7 @@ function onPointerDown(event) {
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects(pickables, false);
+  const hits = raycaster.intersectObjects(pickables.filter((object) => object.visible), false);
   if (hits.length) {
     selectCamera(hits[0].object.userData.index, true);
   }
@@ -1848,9 +2276,89 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-document.getElementById("source").textContent =
-  RIG_DATA.cameras.length + " cameras; "
-  + firstFrameImageCount() + " first-frame textures; generated " + RIG_DATA.generated_at;
+function setupCameraCategoryToggles() {
+  [
+    ["toggle-outer-topdown", "outer_topdown"],
+    ["toggle-outer-colmap", "outer_colmap"],
+  ].forEach(([buttonId, category]) => {
+    const button = document.getElementById(buttonId);
+    if (!button) return;
+    if (!cameraCategoryExists(category)) {
+      button.style.display = "none";
+      return;
+    }
+    button.classList.toggle("active", cameraVisibility[category] !== false);
+    button.addEventListener("click", () => {
+      cameraVisibility[category] = !cameraVisibility[category];
+      button.classList.toggle("active", cameraVisibility[category]);
+      applyCameraVisibility();
+    });
+  });
+}
+
+function setButtonGroupActive(prefix, activeId) {
+  document.querySelectorAll("[id^='" + prefix + "']").forEach((button) => {
+    button.classList.toggle("active", button.id === activeId);
+  });
+}
+
+function refreshDatasetCoverageUi() {
+  const modes = (RIG_DATA.dataset_coverage || {}).modes || {};
+  const mode = modes[coverageMode] || {};
+  document.getElementById("source").textContent =
+    RIG_DATA.cameras.length + " cameras; "
+    + firstFrameImageCount() + " first-frame textures; generated " + RIG_DATA.generated_at
+    + "; dataset coverage: " + (mode.label || coverageMode)
+    + " (" + (mode.active_camera_count ?? "-") + " active)";
+  buildTable();
+  buildSummary();
+  applyCameraVisibility();
+}
+
+function setupScopeControls() {
+  [
+    ["scope-all", "all"],
+    ["scope-inner", "inner"],
+    ["scope-outer", "outer"],
+  ].forEach(([buttonId, scope]) => {
+    const button = document.getElementById(buttonId);
+    if (!button) return;
+    button.addEventListener("click", () => {
+      cameraScope = scope;
+      setButtonGroupActive("scope-", buttonId);
+      buildSummary();
+      applyCameraVisibility();
+    });
+  });
+}
+
+function setupCoverageControls() {
+  [
+    ["coverage-whole", "whole"],
+    ["coverage-large-marker", "large_marker"],
+    ["coverage-small-marker", "small_marker"],
+  ].forEach(([buttonId, mode]) => {
+    const button = document.getElementById(buttonId);
+    if (!button) return;
+    const modeInfo = ((RIG_DATA.dataset_coverage || {}).modes || {})[mode];
+    if (!modeInfo) {
+      button.style.display = "none";
+      return;
+    }
+    button.addEventListener("click", () => {
+      coverageMode = mode;
+      setButtonGroupActive("coverage-", buttonId);
+      refreshDatasetCoverageUi();
+    });
+  });
+  setButtonGroupActive("coverage-", coverageMode === "large_marker"
+    ? "coverage-large-marker"
+    : coverageMode === "small_marker"
+      ? "coverage-small-marker"
+      : "coverage-whole");
+}
+
+document.getElementById("report-title").textContent = RIG_DATA.title || "Interactive 3D Camera Rig";
 document.getElementById("top").addEventListener("click", () => frameRig("top"));
 document.getElementById("front").addEventListener("click", () => frameRig("front"));
 setToggle("toggle-frustum", frustumGroup);
@@ -1859,7 +2367,16 @@ setToggle("toggle-labels", labelGroup);
 setToggle("toggle-grid", grid);
 setToggle("toggle-images", imagePlaneGroup);
 setToggle("toggle-points", pointCloudGroup);
-setToggle("toggle-overlap", overlapGroup);
+setupScopeControls();
+setupCoverageControls();
+setupCameraCategoryToggles();
+if (viewerOption("enable_overlap", true)) {
+  setToggle("toggle-overlap", overlapGroup);
+} else {
+  const overlapButton = document.getElementById("toggle-overlap");
+  if (overlapButton) overlapButton.style.display = "none";
+  document.getElementById("metric-overlap").textContent = "disabled";
+}
 window.addEventListener("resize", onResize);
 new ResizeObserver(onResize).observe(viewport);
 
@@ -1871,12 +2388,14 @@ renderer.domElement.addEventListener("pointerdown", onPointerDown);
 controls = createOrbitControls();
 buildTable();
 buildSummary();
+refreshDatasetCoverageUi();
 if (viewport.clientWidth <= 760) {
   labelGroup.visible = false;
   document.getElementById("toggle-labels").classList.remove("active");
 }
 onResize();
 applyWorldFromCam0(false);
+applyCameraVisibility();
 frameRig("iso");
 selectCamera(selectedIndex, false);
 animate();
@@ -1911,6 +2430,14 @@ window.__rigViewer = {
     imageTextureReadyCount: Array.from(frustumObjects.values()).filter((item) =>
       item.imagePlane && item.imagePlane.material && item.imagePlane.material.map && item.imagePlane.material.map.image
     ).length,
+    visibleCameraCount: visibleCameraCount(),
+    cameraScope,
+    coverageMode,
+    datasetActiveVisibleCount: RIG_DATA.cameras.filter((cam) => cameraIsVisible(cam) && cameraCoverageActive(cam)).length,
+    innerVisible: cameraVisibility.inner,
+    outerVisible: cameraVisibility.outer,
+    outerTopdownVisible: cameraVisibility.outer_topdown,
+    outerColmapVisible: cameraVisibility.outer_colmap,
     imageGroupVisible: imagePlaneGroup.visible,
     sparsePointCount: (RIG_DATA.sparse_point_cloud || {}).point_count || 0,
     pointGroupVisible: pointCloudGroup.visible,
@@ -1945,6 +2472,10 @@ def write_html(path, rig_data):
     html_text = html_text.replace(
         "__REPROJECTION_HTML__",
         render_reprojection_sections(rig_data.get("reprojection_reports", [])),
+    )
+    html_text = html_text.replace(
+        "__BOARD_ORIENTATION_HTML__",
+        render_board_orientation_section(rig_data),
     )
     Path(path).write_text(html_text, encoding="utf-8")
 
