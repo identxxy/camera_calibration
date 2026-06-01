@@ -1,146 +1,122 @@
-# Visual-Inertial Calibration Assessment
+# Visual-IMU Calibration From Full-Board Features
 
-This note scopes the next step from four-fisheye intrinsic calibration to
-headset visual-inertial calibration from MCAP captures.
+This note records the current headset fisheye visual-inertial calibration path.
+The implementation is intentionally split into a native visual frontend and a
+Python inertial backend:
 
-## Current State
+```text
+native C++ full-board detector
+  -> cam*_features.bin
+  -> Python rotation / SE(3) visual-IMU solvers
+  -> Seeker KB8 YAML + JSON + HTML report
+```
 
-The current fisheye tooling extracts four image streams from MCAP, screens
-sharp board observations, prepares per-camera intrinsic calibration, exports
-KB8-compatible Seeker YAML, and generates QA reports.
+The C++ detector remains part of the reproducible pipeline. It extracts the
+repository's full A4 tagged-pattern observations; it should not be replaced by
+Kalibr AprilGrid detection for this board.
 
-The current Seeker YAML generators write `T_cam_imu`, `T_imu_cam`, and
-`timeshift_cam_imu`, but those values are placeholders based on an `imu == cam0`
-reference. They are not measured IMU extrinsics.
+## Input Assumptions
 
-## Recommendation
+The visual-inertial capture must keep the A4 board static and move the headset
+camera-IMU rig. Moving the board in front of a stationary headset is not
+observable for camera-IMU extrinsics because the visual target moves but the IMU
+does not measure the same motion.
 
-This is suitable to continue in the headset fisheye calibration WIP, but the
-first milestone should be a Kalibr-compatible visual-inertial bridge rather than
-a native KB8 visual-inertial bundle adjuster.
+The current tested board is:
 
-Recommended first milestone:
+```text
+pattern_resolution_17x24_segments_16_apriltag_0
+```
 
-1. Parse image and IMU topics from MCAP.
-2. Export a Kalibr-compatible multi-camera + IMU dataset.
-3. Run multi-camera visual-inertial calibration with fixed or strongly seeded
-   camera intrinsics.
-4. Convert measured `T_cam_imu`, `T_imu_cam`, and `timeshift_cam_imu` back into
-   the Seeker KB8 YAML format.
-5. Add a report section for IMU/image timing, target coverage, camera-IMU
-   residuals, and transform consistency.
+The current tested T0 inputs are:
 
-This keeps the implementation moderate and uses a proven continuous-time
-visual-inertial optimizer. A native optimizer that uses this repository's KB8
-projection directly is possible, but it is a larger project and should be a
-second milestone only if the bridge is not accurate enough.
+```text
+/home/ubuntu/camera_calibration/.local/seeker_vi_kalibr_20260530/data/seeker_20260530_down_vi_calib.mcap
+/home/ubuntu/camera_calibration/.local/seeker_vi_kalibr_20260530/data/seeker_20260530_up_vi_calib.mcap
+/home/ubuntu/camera_calibration/.local/seeker_vi_kalibr_20260530/inputs/kalibr_cam_chain_kb8_generated_20260526.yaml
+/home/ubuntu/camera_calibration/.local/seeker_vi_kalibr_20260530/outputs/full_board_features_20260531/cam{0,1,2,3}_features.bin
+```
 
-## Capture Requirement
+Important: the old `kalibr_cam_chain_kb8_generated_20260526.yaml` field named
+`T_cam_imu` is not a measured physical IMU prior. It is a camera-camera rig /
+pseudo-rig prior using cam0 as the reference frame. The VI scripts use it only to
+keep the four-camera rig fixed while solving the physical IMU rotation and
+translation.
 
-The visual-inertial dataset must move the camera-IMU rig. Moving only the
-calibration board in front of a stationary headset is not sufficient: the camera
-sees target motion, but the IMU does not observe the same motion, so camera-IMU
-extrinsics and time offset are not observable.
+## Solvers
 
-Use a static calibration target and move the headset rig around it.
+`calibrate_visual_imu_rotation_from_full_board.py` estimates camera-to-physical
+IMU rotation from full-board visual poses and gyro angular velocity. It exports a
+rig-consistent KB8 YAML and a raw per-camera diagnostic YAML. Translation is
+still inherited from the pseudo-rig prior in this rotation-only pass.
 
-Required capture properties:
+`calibrate_visual_imu_se3_from_full_board.py` uses the rotation result,
+full-board visual second derivatives, accelerometer samples, and the fixed
+camera-camera rig prior to solve:
 
-- Board or Aprilgrid is static in the world during the sequence.
-- Headset rig moves as one rigid body with the IMU.
-- Start and end with several seconds of stillness for gravity and bias checks.
-- Include roll, pitch, yaw, translation, and non-constant acceleration.
-- Avoid a pure yaw-only or pure rotation-only sequence.
-- Keep motion smooth enough to avoid severe blur, but not so slow that IMU
-  excitation is weak.
-- Ensure all four cameras observe the board over the sequence. Simultaneous
-  visibility is not required for every frame, but the observation graph must
-  connect all cameras through the rigid rig.
-- Preserve raw image timestamps and raw IMU timestamps from the same clock
-  domain when possible.
+```text
+t_cam0_imu
+g_down, g_up
+accel_bias_down, accel_bias_up
+```
 
-Practical target sequence:
+The SE(3) pass writes physical `T_cam_imu` and inverse `T_imu_cam` into the
+driver-readable KB8 YAML. Time offset remains fixed at `0.0 s` in this pass.
 
-- 60-120 seconds per capture.
-- 10 seconds still at the beginning.
-- Slow figure-eight and arc motions in front of the board.
-- Deliberate roll and pitch changes.
-- Several left/right/up/down translations.
-- 10 seconds still at the end.
+## Reproduction On T0
 
-## Expected Outputs
+Run the SE(3) solve from the checked-out repo while mounting the existing T0
+feature and MCAP data:
 
-The calibrated product should include:
+```bash
+BASE=/home/ubuntu/camera_calibration/.local/seeker_vi_kalibr_20260530
+OUT=$BASE/outputs/full_board_vi_se3_20260531_merge_verify
+mkdir -p "$OUT"
+docker run --rm --entrypoint python3 \
+  -v /home/ubuntu/camera_calibration:/workspace/camera_calibration \
+  -w /workspace/camera_calibration \
+  seeker-kalibr-mcap:noetic \
+  applications/camera_calibration/scripts/fisheye_calibration/calibrate_visual_imu_se3_from_full_board.py \
+    --prior-yaml /workspace/camera_calibration/.local/seeker_vi_kalibr_20260530/inputs/kalibr_cam_chain_kb8_generated_20260526.yaml \
+    --rotation-yaml /workspace/camera_calibration/.local/seeker_vi_kalibr_20260530/outputs/full_board_vi_rotation_20260531/seeker_kb8_full_board_vi_rig_aligned.yaml \
+    --rotation-summary /workspace/camera_calibration/.local/seeker_vi_kalibr_20260530/outputs/full_board_vi_rotation_20260531/full_board_vi_summary.json \
+    --feature-root /workspace/camera_calibration/.local/seeker_vi_kalibr_20260530/outputs/full_board_features_20260531 \
+    --down-mcap /workspace/camera_calibration/.local/seeker_vi_kalibr_20260530/data/seeker_20260530_down_vi_calib.mcap \
+    --up-mcap /workspace/camera_calibration/.local/seeker_vi_kalibr_20260530/data/seeker_20260530_up_vi_calib.mcap \
+    --output-yaml /workspace/camera_calibration/.local/seeker_vi_kalibr_20260530/outputs/full_board_vi_se3_20260531_merge_verify/seeker_kb8_full_board_vi_se3.yaml \
+    --summary-json /workspace/camera_calibration/.local/seeker_vi_kalibr_20260530/outputs/full_board_vi_se3_20260531_merge_verify/full_board_vi_se3_summary.json \
+    --report-html /workspace/camera_calibration/.local/seeker_vi_kalibr_20260530/outputs/full_board_vi_se3_20260531_merge_verify/full_board_vi_se3_report.html
+```
 
-- Four camera intrinsics, preferably keeping the current KB8 product for the
-  driver.
-- Four measured camera-IMU transforms.
-- Camera-IMU time offset.
-- IMU noise and bias random-walk estimates if available from the solver.
-- A driver-readable Seeker calibration YAML where `T_cam_imu` is no longer a
-  placeholder.
-- A QA report covering reprojection error, camera coverage, IMU residuals,
-  estimated time offset, and transform stability across repeated runs.
+Expected 2026-05-31 SE(3) metrics:
 
-## Difficulty
+```text
+rank = 15 / 15
+sample_count = 2852
+sample_inlier_count = 2566
+condition ~= 13.3247
+gravity_norm down/up ~= 9.996 / 9.592 m/s^2
+inlier accel residual median/p95 ~= 0.211 / 0.373 m/s^2
+T_cam0_imu translation ~= [0.138360, -0.076104, 0.006933] m
+```
 
-Kalibr bridge path: medium difficulty. Most work is reliable MCAP export,
-topic/timestamp validation, model conversion, and report generation.
+## Output Checks
 
-Native KB8 visual-inertial optimization path: high difficulty. It requires
-continuous-time trajectory modeling, IMU preintegration or spline residuals,
-bias/noise handling, time-offset optimization, and robust initialization.
+Before publishing a YAML:
 
-The bridge path is appropriate for the current WIP. The native path should be
-separate work after the bridge reveals whether model mismatch is actually a
-limiting factor.
+- Confirm `T_cam_imu` and `T_imu_cam` are numerical inverses for every camera.
+- Confirm the summary rank is full, the condition number is modest, and gravity
+  norms are physically plausible.
+- Confirm accelerometer residuals are close to the expected values above for
+  this dataset.
+- Confirm the report clearly states that the camera-camera rig prior is fixed
+  and that this is not yet a full Kalibr-style joint nonlinear visual-inertial
+  bundle adjustment.
 
-## Kalibr vs This Repository
+## Residual Risk
 
-Kalibr is better suited for the first measured visual-inertial calibration:
-
-- It has a mature visual-inertial formulation for camera-IMU extrinsics,
-  temporal offset, IMU noise, and bias random walk.
-- It models the moving camera-IMU rig with a continuous-time trajectory, which
-  is the right abstraction for asynchronous image and high-rate IMU samples.
-- Its output format is close to the camchain YAML style already used by the
-  Seeker driver integration.
-- It is a good independent reference implementation for validating whether the
-  capture itself contains enough motion excitation.
-
-Kalibr is weaker for this project in several ways:
-
-- Its camera model set is more constrained than this repository's generic and
-  non-central model family.
-- A compact driver-side KB8 product may need model conversion or a fixed
-  intrinsic workflow instead of direct native optimization.
-- It adds an external toolchain and dataset conversion step.
-- Debugging failures can be harder because the optimizer, target extraction, and
-  model assumptions live outside the current codebase.
-
-This repository is better for the existing camera-only workflow:
-
-- It already owns the MCAP-to-board-observation preparation, quality screening,
-  KB8 export, Seeker YAML generation, and static QA report.
-- It supports flexible camera models including `central_generic`,
-  `noncentral_generic`, and `central_thin_prism_fisheye`.
-- It is easier to customize for Seeker-specific reporting, filtering, and driver
-  file formats.
-- It avoids a lossy handoff when staying within camera-only calibration.
-
-This repository is weaker for visual-inertial calibration today:
-
-- There is no established native IMU residual path in the current workflow.
-- `T_cam_imu`, `T_imu_cam`, and `timeshift_cam_imu` are currently generated as
-  placeholders, not measured quantities.
-- Implementing the missing pieces natively would require trajectory
-  parameterization, IMU residuals, bias/noise modeling, time-offset
-  optimization, and careful initialization.
-
-Practical decision:
-
-- Use this repository for image extraction, intrinsic calibration, QA, and final
-  Seeker YAML/report generation.
-- Use Kalibr as the first camera-IMU solver.
-- Only build a native KB8 visual-inertial optimizer if Kalibr's camera model
-  conversion or residual quality becomes the bottleneck.
+The current product is a native fixed-intrinsics, fixed-camera-rig VI SE(3)
+solve. It is useful as a measured physical camera-IMU transform for the current
+Seeker KB8 product, but it is not yet a full continuous-time joint optimizer
+over intrinsics, camera rig extrinsics, IMU bias/noise, time offset, and target
+trajectory.
