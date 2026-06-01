@@ -123,7 +123,7 @@ def read_dataset_feature_points(path):
         raise ValueError(f"{path} is not a calib_data dataset")
     offset += 10
     version, offset = read_u32(data, offset)
-    if version != 0:
+    if version not in (0, 1):
         raise ValueError(f"{path} has unsupported dataset version {version}")
     num_cameras, offset = read_u32(data, offset)
     image_sizes = []

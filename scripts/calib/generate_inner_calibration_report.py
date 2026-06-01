@@ -62,11 +62,12 @@ def read_dataset(path):
                 feature_id, x, y = struct.unpack(">iii", f.read(12))
                 feature_id_to_position[feature_id] = (x, y)
             feature_id_to_position3d = {}
-            count_3d = struct.unpack(">I", f.read(4))[0]
-            for _ in range(count_3d):
-                feature_id = struct.unpack(">i", f.read(4))[0]
-                xyz = struct.unpack("<fff", f.read(12))
-                feature_id_to_position3d[feature_id] = xyz
+            if version >= 1:
+                count_3d = struct.unpack(">I", f.read(4))[0]
+                for _ in range(count_3d):
+                    feature_id = struct.unpack(">i", f.read(4))[0]
+                    xyz = struct.unpack("<fff", f.read(12))
+                    feature_id_to_position3d[feature_id] = xyz
             known_geometries.append({
                 "cell_length": cell_length,
                 "feature_id_to_position": feature_id_to_position,
