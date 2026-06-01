@@ -1,0 +1,25 @@
+camera_index	stage_name	machine	camera_id	source_dir	frame_count
+0	cam00_w4_1-1	w4_D	1-1		0
+1	cam01_w4_1-2	w4_D	1-2		0
+2	cam02_w4_1-3	w4_D	1-3		0
+3	cam03_w4_2-1	w4_D	2-1		0
+4	cam04_w4_2-2	w4_D	2-2		0
+5	cam05_w4_2-3	w4_D	2-3		0
+6	cam06_w4_3-1	w4_D	3-1		0
+7	cam07_w4_3-2	w4_D	3-2		0
+8	cam08_w4_3-3	w4_D	3-3		0
+9	cam09_w4_4-1	w4_D	4-1		0
+10	cam10_w4_4-2	w4_D	4-2		0
+11	cam11_w4_4-3	w4_D	4-3		0
+12	cam12_w3_5-1	w3_D	5-1		0
+13	cam13_w3_5-2	w3_D	5-2		0
+14	cam14_w3_5-3	w3_D	5-3		0
+15	cam15_w3_6-1	w3_D	6-1		0
+16	cam16_w3_6-2	w3_D	6-2		0
+17	cam17_w3_6-3	w3_D	6-3		0
+18	cam18_w3_7-1	w3_D	7-1		0
+19	cam19_w3_7-2	w3_D	7-2		0
+20	cam20_w3_7-3	w3_D	7-3		0
+21	cam21_w3_8-1	w3_D	8-1		0
+22	cam22_w3_8-2	w3_D	8-2		0
+23	cam23_w3_8-3	w3_D	8-3		0
