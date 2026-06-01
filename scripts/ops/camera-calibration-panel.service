@@ -1,0 +1,13 @@
+[Unit]
+Description=Camera calibration operator panel
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ubuntu/camera_calibration
+ExecStart=/usr/bin/python3 /home/ubuntu/camera_calibration/scripts/calib/calibration_panel_server.py --repo-root /home/ubuntu/camera_calibration --runs-root /home/ubuntu/calib_data/panel_runs --host 0.0.0.0 --port 9898
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

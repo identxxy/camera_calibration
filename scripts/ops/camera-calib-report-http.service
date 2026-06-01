@@ -1,0 +1,13 @@
+[Unit]
+Description=Camera calibration report HTTP server
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ubuntu/camera_calibration
+ExecStart=/usr/bin/python3 /home/ubuntu/camera_calibration/scripts/ops/t0_calib_report_http_server.py --root /home/ubuntu/calib_data --host 0.0.0.0 --port 9899
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

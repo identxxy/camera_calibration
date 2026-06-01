@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Calibration Panel</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Calibration Panel</h1>
+      <p><span id="server-status">Connecting...</span> · 采集后选择 run mode,确认参数,点击 Start</p>
+    </div>
+    <button id="refresh-jobs" class="ghost">Refresh</button>
+  </header>
+
+  <main class="layout">
+    <section class="mode-column">
+      <div class="section-head">
+        <h2>Run Mode</h2>
+        <label class="dry-run">
+          <input id="dry-run" type="checkbox" checked>
+          <span>Dry run</span>
+        </label>
+      </div>
+      <div id="mode-list" class="mode-list"></div>
+      <form id="mode-form" class="mode-form">
+        <div id="mode-fields"></div>
+        <button id="start-job" type="submit" class="primary">Start Selected Calibration</button>
+      </form>
+    </section>
+
+    <section class="job-column">
+      <div class="section-head">
+        <h2>Jobs</h2>
+        <span id="job-count" class="pill">0</span>
+      </div>
+      <div id="job-list" class="job-list"></div>
+    </section>
+
+    <section class="detail-column">
+      <div class="section-head">
+        <h2>Job Detail</h2>
+        <button id="cancel-job" class="danger" disabled>Cancel</button>
+      </div>
+      <div id="job-detail" class="job-detail empty">No job selected.</div>
+      <pre id="job-log" class="job-log"></pre>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

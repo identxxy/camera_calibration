@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage the current 2026-05-26 studio calibration captures on t0.
+"""Stage studio calibration captures on t0.
 
 The script creates normalized symlink datasets from the mounted Windows Dshare
 folders. It intentionally does not overwrite existing staging roots.
@@ -42,6 +42,12 @@ SESSIONS = {
         "time": "2026_05_26-14_13_47",
         "pattern": "pattern_resolution_17x24_segments_16_apriltag_0.yaml",
         "cameras": OUTER_CAMERAS + INNER_CAMERAS,
+    },
+    "large_marker_inner8": {
+        "source_marker": "large_marker",
+        "time": "2026_05_26-14_13_47",
+        "pattern": "pattern_resolution_17x24_segments_16_apriltag_0.yaml",
+        "cameras": INNER_CAMERAS,
     },
     "small_marker_inner8": {
         "source_marker": "small_marker",
@@ -162,6 +168,18 @@ def stage_session(out_root, mount, name, spec, max_tail_trim):
     return summary
 
 
+def session_specs(args):
+    specs = json.loads(json.dumps(SESSIONS))
+    if args.whole_time:
+        specs["whole_outer_tower"]["time"] = args.whole_time
+    if args.large_marker_time:
+        specs["large_marker_bridge_all32"]["time"] = args.large_marker_time
+        specs["large_marker_inner8"]["time"] = args.large_marker_time
+    if args.small_marker_time:
+        specs["small_marker_inner8"]["time"] = args.small_marker_time
+    return specs
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -180,6 +198,9 @@ def main():
         default=2,
         help="Maximum allowed terminal frame-count difference for a valid camera.",
     )
+    parser.add_argument("--whole-time", default="", help="Override whole capture timestamp.")
+    parser.add_argument("--large-marker-time", default="", help="Override large_marker capture timestamp.")
+    parser.add_argument("--small-marker-time", default="", help="Override small_marker capture timestamp.")
     args = parser.parse_args()
 
     mount = Path(args.mount_root)
@@ -189,7 +210,7 @@ def main():
 
     out_root.mkdir(parents=True)
     summary = {"staging_root": str(out_root), "sessions": {}}
-    for name, spec in SESSIONS.items():
+    for name, spec in session_specs(args).items():
         summary["sessions"][name] = stage_session(
             out_root, mount, name, spec, args.max_tail_trim)
 
