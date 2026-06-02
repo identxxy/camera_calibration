@@ -317,12 +317,12 @@ def default_build_dir(repo_root):
     if env_build_dir:
         return Path(env_build_dir)
 
-    for build_name in ("build_t0", "build_t0_codex", "build_docker", "build_codex", "build"):
+    for build_name in ("build_docker", "build_codex", "build_verify", "build"):
         build_dir = repo_root / build_name
         binary = build_dir / "applications/camera_calibration/camera_calibration"
         if binary.exists():
             return build_dir
-    return repo_root / "build_t0"
+    return repo_root / "build"
 
 
 def make_calibration_scripts(output_root, pattern_files, image_format, model, cell_length, pyramid_levels):

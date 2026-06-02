@@ -1266,7 +1266,18 @@ const scene = new THREE.Scene();
 
 const camera = new THREE.PerspectiveCamera(48, 1, 0.01, 100);
 let controls = null;
-const WORLD_UP = new THREE.Vector3(0, 1, 0);
+function configuredWorldUp() {
+  const options = RIG_DATA.viewer_options || {};
+  const values = options.world_up_three;
+  if (Array.isArray(values) && values.length === 3) {
+    const up = new THREE.Vector3(values[0], values[1], values[2]);
+    if (up.lengthSq() > 0) {
+      return up.normalize();
+    }
+  }
+  return new THREE.Vector3(0, 1, 0);
+}
+const WORLD_UP = configuredWorldUp();
 
 // The Three.js scene frame is the fixed display world.
 // Calibrated geometry stays in CAM0 gauge below this root, and this root stores
@@ -2223,6 +2234,22 @@ function buildScene() {
       label,
     });
   });
+  (RIG_DATA.reference_frames || []).forEach((frame) => {
+    const center = frame.center || [0, 0, 0];
+    const axes = frame.axes || {};
+    if (axes.x) axisGroup.add(makeLineSegments([axes.x], 0xe53935, 1));
+    if (axes.y) axisGroup.add(makeLineSegments([axes.y], 0x1e8e3e, 1));
+    if (axes.z) axisGroup.add(makeLineSegments([axes.z], 0x1a73e8, 1));
+    const markerRadius = Number(frame.marker_radius || sphereRadius * 1.35);
+    const markerGeometry = new THREE.SphereGeometry(markerRadius, 28, 16);
+    const markerColor = new THREE.Color(frame.color || "#fbbc04");
+    const marker = new THREE.Mesh(markerGeometry, new THREE.MeshBasicMaterial({color: markerColor}));
+    marker.position.set(center[0], center[1], center[2]);
+    markerGroup.add(marker);
+    const label = makeLabel(frame.label || "reference", frame.label_color || "#fbbc04");
+    label.position.set(center[0], center[1] + markerRadius * 3.2, center[2]);
+    labelGroup.add(label);
+  });
   updateFrustums();
   buildSparsePointCloud();
 }
@@ -2931,6 +2958,7 @@ window.__rigViewer = {
       item.imagePlane && item.imagePlane.material && item.imagePlane.material.map && item.imagePlane.material.map.image
     ).length,
     visibleCameraCount: visibleCameraCount(),
+    referenceFrameCount: (RIG_DATA.reference_frames || []).length,
     cameraScope,
     coverageMode,
     datasetActiveVisibleCount: RIG_DATA.cameras.filter((cam) => cameraIsVisible(cam) && cameraCoverageActive(cam)).length,
