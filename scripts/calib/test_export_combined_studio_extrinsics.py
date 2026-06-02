@@ -2,6 +2,7 @@
 """Tests for combined studio extrinsics export."""
 
 import json
+import math
 import sys
 import tempfile
 import unittest
@@ -13,6 +14,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import export_combined_studio_extrinsics as export_extrinsics  # noqa: E402
+import studio_canonical_frame  # noqa: E402
 
 
 def write_pose_yaml(path, count, offset):
@@ -47,6 +49,12 @@ def write_intrinsics_yaml(path, fx):
         ]),
         encoding="utf-8",
     )
+
+
+def pose_from_center(center):
+    pose = export_extrinsics.np.eye(4)
+    pose[:3, 3] = -export_extrinsics.np.asarray(center, dtype=export_extrinsics.np.float64)
+    return pose
 
 
 class ExportCombinedStudioExtrinsicsTest(unittest.TestCase):
@@ -145,6 +153,50 @@ class ExportCombinedStudioExtrinsicsTest(unittest.TestCase):
             self.assertIn("model: CentralOpenCVModel", text)
             self.assertIn("parameters: [4000", text)
             self.assertIn('label: "cam31"', text)
+
+    def test_canonical_frame_transform_sets_origin_y_and_gap_axes(self):
+        poses = [export_extrinsics.np.eye(4) for _ in range(32)]
+        rows = []
+        for index, label in enumerate(export_extrinsics.OUTER_CAMERA_LABELS):
+            side, level = [int(part) for part in label.split("-")]
+            theta = 2.0 * math.pi * (side - 1) / 8.0
+            center = [math.cos(theta), float(level - 2), math.sin(theta)]
+            if side == 4:
+                center = [4.0, 4.0 + float(level), 4.0]
+            poses[index] = pose_from_center(center)
+            rows.append({
+                "index": index,
+                "label": label,
+                "group": "outer",
+                "camera_id": label,
+                "source_yaml": "outer.yaml",
+                "source_index": index,
+            })
+        for index in range(24, 32):
+            rows.append({
+                "index": index,
+                "label": f"inner{index - 24}",
+                "group": "inner",
+                "camera_id": f"inner{index - 24}",
+                "source_yaml": "inner.yaml",
+                "source_index": index,
+            })
+
+        frame = export_extrinsics.estimate_frame_from_camera_poses(poses, rows)
+        transformed = [export_extrinsics.transform_pose_to_aligned(pose, frame) for pose in poses]
+
+        centers = {
+            row["label"]: studio_canonical_frame.camera_center_from_camera_tr_rig(transformed[row["index"]])
+            for row in rows
+            if row["label"] in export_extrinsics.OUTER_CAMERA_LABELS
+        }
+        level2 = [centers[f"{side}-2"] for side in range(1, 9) if side != 4]
+        origin = export_extrinsics.np.mean(export_extrinsics.np.asarray(level2), axis=0)
+        self.assertLess(float(export_extrinsics.np.linalg.norm(origin)), 1e-9)
+        for side in (1, 2, 3, 5, 6, 7, 8):
+            self.assertGreater(float(centers[f"{side}-3"][1] - centers[f"{side}-1"][1]), 0.0)
+        gap_mid = 0.5 * (centers["3-2"] + centers["5-2"])
+        self.assertLess(float(gap_mid[2]), -0.1)
 
 
 if __name__ == "__main__":

@@ -908,6 +908,55 @@ HTML_TEMPLATE = """<!doctype html>
       height: 3px;
       display: inline-block;
     }
+    .correspondence-controls {
+      display: none;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .correspondence-controls.active {
+      display: grid;
+    }
+    .correspondence-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .correspondence-controls label {
+      display: grid;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--muted);
+      min-width: 0;
+    }
+    .correspondence-controls select,
+    .correspondence-controls input {
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+    }
+    .correspondence-controls select {
+      height: 28px;
+      border: 1px solid var(--line);
+      background: #ffffff;
+      color: var(--ink);
+      font-size: 12px;
+    }
+    .correspondence-controls .checkbox-row {
+      display: inline-flex;
+      grid-template-columns: none;
+      align-items: center;
+      gap: 7px;
+      color: var(--ink);
+    }
+    .correspondence-controls .checkbox-row input {
+      width: 14px;
+      height: 14px;
+      margin: 0;
+    }
+    .correspondence-value {
+      color: var(--ink);
+      font-variant-numeric: tabular-nums;
+    }
     #selected {
       border-top: 1px solid var(--line);
       border-bottom: 1px solid var(--line);
@@ -1127,6 +1176,33 @@ HTML_TEMPLATE = """<!doctype html>
             <button id="toggle-overlap">Overlap</button>
           </div>
         </div>
+        <div class="control-section" id="correspondence-section">
+          <div class="control-section-title">Correspondence</div>
+          <div class="button-row">
+            <button id="load-correspondence">Load Corr</button>
+          </div>
+          <div class="correspondence-controls" id="correspondence-controls">
+            <label class="checkbox-row">
+              <input id="correspondence-all-frames" type="checkbox">
+              <span>All frames</span>
+            </label>
+            <label>Frame <span class="correspondence-value" id="correspondence-frame-value"></span>
+              <input id="correspondence-frame-slider" type="range" min="0" max="0" step="1" value="0">
+            </label>
+            <label>Point group
+              <select id="correspondence-point-group"></select>
+            </label>
+            <div class="correspondence-grid">
+              <label>Max shown <span class="correspondence-value" id="correspondence-max-value"></span>
+                <input id="correspondence-max" type="range" min="100" max="30000" step="100" value="8000">
+              </label>
+              <label>Residual <= <span class="correspondence-value" id="correspondence-residual-max-value"></span>
+                <input id="correspondence-residual-max" type="range" min="1" max="200" step="1" value="200">
+              </label>
+            </div>
+          </div>
+          <p class="sub" id="correspondence-status"></p>
+        </div>
         <div class="control-section">
           <div class="control-section-title">Frustum Range</div>
           <div class="range-row">
@@ -1204,6 +1280,7 @@ const pointCloudGroup = new THREE.Group();
 const axisGroup = new THREE.Group();
 const labelGroup = new THREE.Group();
 const markerGroup = new THREE.Group();
+const correspondenceGroup = new THREE.Group();
 const overlapGroup = new THREE.Group();
 const pivotFrameGroup = new THREE.Group();
 cam0ToWorldRoot.add(frustumGroup);
@@ -1212,8 +1289,10 @@ cam0ToWorldRoot.add(pointCloudGroup);
 cam0ToWorldRoot.add(axisGroup);
 cam0ToWorldRoot.add(labelGroup);
 cam0ToWorldRoot.add(markerGroup);
+cam0ToWorldRoot.add(correspondenceGroup);
 cam0ToWorldRoot.add(overlapGroup);
 overlapGroup.visible = false;
+correspondenceGroup.visible = false;
 scene.add(pivotFrameGroup);
 
 const bounds = RIG_DATA.bounds;
@@ -1252,6 +1331,14 @@ let worldFromCam0Quat = initialWorldFromReferenceQuaternion();
 let transformControl = null;
 let worldGizmoPointerActive = false;
 let worldGizmoDragging = false;
+let correspondenceData = null;
+let correspondenceLoaded = false;
+let correspondenceVisible = false;
+let correspondenceSelectedFrameByDataset = {};
+let correspondenceAllFramesByDataset = {};
+let correspondenceSelectedPointGroupByDataset = {};
+let correspondenceMaxShown = 8000;
+let correspondenceResidualMax = 200;
 const worldGizmoDragAnchor = new THREE.Vector3();
 
 function createOrbitControls(target) {
@@ -1698,6 +1785,360 @@ function buildSparsePointCloud() {
   pointCloudGroup.add(points);
 }
 
+function correspondenceUrl() {
+  return viewerOption("correspondence_data_url", "");
+}
+
+function correspondenceDatasetName() {
+  if (coverageMode === "large_marker") return "large";
+  if (coverageMode === "small_marker") return "small";
+  return "whole";
+}
+
+function correspondenceDataset() {
+  if (!correspondenceData) return null;
+  const name = correspondenceDatasetName();
+  if (name === "whole") return correspondenceData.outer || null;
+  return ((correspondenceData.datasets || {})[name]) || null;
+}
+
+function correspondenceFrameStats(dataset) {
+  const counts = new Map();
+  const observations = dataset && dataset.observations ? dataset.observations : [];
+  observations.forEach((obs) => {
+    const key = String(obs.frame_index);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  if (!counts.size) {
+    const frames = dataset && dataset.frames ? dataset.frames : [];
+    frames.forEach((frame) => counts.set(String(frame), 0));
+  }
+  return Array.from(counts.entries())
+    .map(([frame, count]) => ({frame, count}))
+    .sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      const av = Number(a.frame);
+      const bv = Number(b.frame);
+      if (Number.isFinite(av) && Number.isFinite(bv)) return av - bv;
+      return String(a.frame).localeCompare(String(b.frame));
+    });
+}
+
+function correspondenceFrameNumbers(dataset) {
+  const frames = new Set();
+  const observations = dataset && dataset.observations ? dataset.observations : [];
+  observations.forEach((obs) => {
+    const value = Number(obs.frame_index);
+    if (Number.isFinite(value)) frames.add(value);
+  });
+  const listedFrames = dataset && dataset.frames ? dataset.frames : [];
+  listedFrames.forEach((frame) => {
+    const value = Number(frame);
+    if (Number.isFinite(value)) frames.add(value);
+  });
+  return Array.from(frames).sort((a, b) => a - b);
+}
+
+function correspondenceFrameObservationCount(dataset, frame) {
+  const observations = dataset && dataset.observations ? dataset.observations : [];
+  return observations.filter((obs) => String(obs.frame_index) === String(frame)).length;
+}
+
+function correspondenceUsesAllFrames(name) {
+  return correspondenceAllFramesByDataset[name] === true;
+}
+
+function correspondenceDefaultFrame(name, dataset) {
+  if (correspondenceSelectedFrameByDataset[name] !== undefined
+      && correspondenceSelectedFrameByDataset[name] !== "__all__") {
+    return correspondenceSelectedFrameByDataset[name];
+  }
+  const defaults = (correspondenceData && correspondenceData.defaults && correspondenceData.defaults.frame_by_dataset) || {};
+  if (defaults[name] !== undefined && defaults[name] !== null) {
+    return defaults[name];
+  }
+  const top = dataset && dataset.top_frames && dataset.top_frames.length ? dataset.top_frames[0] : null;
+  if (top && top.frame_index !== undefined && top.frame_index !== null) {
+    return top.frame_index;
+  }
+  const stats = correspondenceFrameStats(dataset);
+  return stats.length ? stats[0].frame : null;
+}
+
+function correspondencePointKey(obs, includeFrame) {
+  const framePrefix = includeFrame ? ("frame:" + String(obs.frame_index) + "|") : "";
+  if (obs.point_index !== undefined && obs.point_index !== null) {
+    return framePrefix + "point:" + String(obs.point_index);
+  }
+  if (obs.face_id !== undefined || obs.tag_id !== undefined || obs.corner_id !== undefined) {
+    return framePrefix + "face:" + String(obs.face_id)
+      + "|tag:" + String(obs.tag_id)
+      + "|corner:" + String(obs.corner_id);
+  }
+  return framePrefix + "feature:" + String(obs.feature_id);
+}
+
+function correspondencePointLabel(obs, includeFrame) {
+  const prefix = includeFrame ? ("F" + String(obs.frame_index) + " ") : "";
+  if (obs.point_index !== undefined && obs.point_index !== null) {
+    return prefix + "point " + String(obs.point_index);
+  }
+  if (obs.face_id !== undefined || obs.tag_id !== undefined || obs.corner_id !== undefined) {
+    return prefix + "face " + String(obs.face_id)
+      + " tag " + String(obs.tag_id)
+      + " c" + String(obs.corner_id);
+  }
+  return prefix + "feature " + String(obs.feature_id);
+}
+
+function selectedCorrespondencePointGroupKey() {
+  const name = correspondenceDatasetName();
+  const key = correspondenceSelectedPointGroupByDataset[name];
+  return key === undefined ? "__all__" : key;
+}
+
+function syncCorrespondenceControlValues() {
+  const maxInput = document.getElementById("correspondence-max");
+  const residualInput = document.getElementById("correspondence-residual-max");
+  const maxValue = document.getElementById("correspondence-max-value");
+  const residualValue = document.getElementById("correspondence-residual-max-value");
+  if (maxInput) {
+    correspondenceMaxShown = Math.max(1, Number(maxInput.value || correspondenceMaxShown));
+  }
+  if (residualInput) {
+    correspondenceResidualMax = Math.max(0, Number(residualInput.value || correspondenceResidualMax));
+  }
+  if (maxValue) maxValue.textContent = String(correspondenceMaxShown);
+  if (residualValue) residualValue.textContent = correspondenceResidualMax >= 200 ? "200+ px" : correspondenceResidualMax + " px";
+}
+
+function populateCorrespondenceFrameControl() {
+  const controlsEl = document.getElementById("correspondence-controls");
+  const slider = document.getElementById("correspondence-frame-slider");
+  const allFramesCheckbox = document.getElementById("correspondence-all-frames");
+  const frameValue = document.getElementById("correspondence-frame-value");
+  if (!controlsEl || !slider || !allFramesCheckbox || !frameValue) return;
+  if (!correspondenceLoaded || !correspondenceData) {
+    controlsEl.classList.remove("active");
+    return;
+  }
+  const name = correspondenceDatasetName();
+  const dataset = correspondenceDataset();
+  const frames = correspondenceFrameNumbers(dataset);
+  controlsEl.classList.add("active");
+  const minFrame = frames.length ? frames[0] : 0;
+  const maxFrame = frames.length ? frames[frames.length - 1] : 0;
+  slider.min = String(minFrame);
+  slider.max = String(maxFrame);
+  slider.step = "1";
+  let selected = Number(correspondenceDefaultFrame(name, dataset));
+  if (!Number.isFinite(selected)) selected = minFrame;
+  selected = Math.max(minFrame, Math.min(maxFrame, selected));
+  slider.value = String(Math.round(selected));
+  correspondenceSelectedFrameByDataset[name] = slider.value;
+  allFramesCheckbox.checked = correspondenceUsesAllFrames(name);
+  slider.disabled = allFramesCheckbox.checked || !frames.length;
+  const obsCount = correspondenceFrameObservationCount(dataset, slider.value);
+  frameValue.textContent = allFramesCheckbox.checked
+    ? "all"
+    : String(slider.value) + " (" + obsCount + " obs)";
+  if (!frames.length) {
+    frameValue.textContent = "none";
+  }
+  syncCorrespondenceControlValues();
+  populateCorrespondencePointGroupControl();
+}
+
+function populateCorrespondencePointGroupControl() {
+  const select = document.getElementById("correspondence-point-group");
+  if (!select || !correspondenceLoaded || !correspondenceData) return;
+  const name = correspondenceDatasetName();
+  const dataset = correspondenceDataset();
+  const frame = correspondenceDefaultFrame(name, dataset);
+  const allFrames = correspondenceUsesAllFrames(name);
+  const observations = dataset && dataset.observations ? dataset.observations : [];
+  const groups = new Map();
+  let frameObservationCount = 0;
+  for (const obs of observations) {
+    if (!allFrames && frame !== null && frame !== undefined && String(obs.frame_index) !== String(frame)) continue;
+    frameObservationCount += 1;
+    const key = correspondencePointKey(obs, allFrames);
+    let item = groups.get(key);
+    if (!item) {
+      item = {key, label: correspondencePointLabel(obs, allFrames), count: 0};
+      groups.set(key, item);
+    }
+    item.count += 1;
+  }
+  const previous = selectedCorrespondencePointGroupKey();
+  select.innerHTML = "";
+  const allOption = document.createElement("option");
+  allOption.value = "__all__";
+  allOption.textContent = "All points (" + frameObservationCount + " obs)";
+  select.appendChild(allOption);
+  Array.from(groups.values())
+    .sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      return a.label.localeCompare(b.label);
+    })
+    .slice(0, 512)
+    .forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.key;
+      option.textContent = item.label + " (" + item.count + " obs)";
+      select.appendChild(option);
+    });
+  select.value = Array.from(select.options).some((option) => option.value === previous) ? previous : "__all__";
+  correspondenceSelectedPointGroupByDataset[name] = select.value;
+}
+
+function residualColor(residualPx) {
+  const value = Number(residualPx || 0);
+  const t = Math.max(0, Math.min(1, Math.log1p(value) / Math.log1p(50)));
+  return new THREE.Color().setHSL((1 - t) * 0.33, 0.9, 0.48);
+}
+
+function clearCorrespondenceOverlay() {
+  while (correspondenceGroup.children.length) {
+    const child = correspondenceGroup.children.pop();
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) child.material.dispose();
+  }
+}
+
+function updateCorrespondenceOverlay() {
+  const status = document.getElementById("correspondence-status");
+  if (!status) return;
+  clearCorrespondenceOverlay();
+  if (!correspondenceLoaded || !correspondenceVisible || !correspondenceData) {
+    correspondenceGroup.visible = false;
+    status.textContent = correspondenceLoaded ? "Correspondence hidden." : "Correspondence data is loaded on demand.";
+    return;
+  }
+  const name = correspondenceDatasetName();
+  const dataset = correspondenceDataset();
+  const observations = dataset && dataset.observations ? dataset.observations : [];
+  if (!observations.length) {
+    correspondenceGroup.visible = false;
+    status.textContent = "No feature-level correspondence rows for " + name + ".";
+    return;
+  }
+  const frame = correspondenceDefaultFrame(name, dataset);
+  const allFrames = correspondenceUsesAllFrames(name);
+  const pointGroupKey = selectedCorrespondencePointGroupKey();
+  const cameraLabelById = new Map(RIG_DATA.cameras.map((cam) => [String(cam.label), cam]));
+  const cameraIdByIndex = new Map(RIG_DATA.cameras.map((cam) => [Number(cam.index), cam]));
+  const selected = [];
+  let available = 0;
+  for (const obs of observations) {
+    if (!allFrames && frame !== null && frame !== undefined && String(obs.frame_index) !== String(frame)) continue;
+    if (pointGroupKey !== "__all__" && correspondencePointKey(obs, allFrames) !== pointGroupKey) continue;
+    if (Number(obs.residual_px || 0) > correspondenceResidualMax) continue;
+    const cam = cameraLabelById.get(String(obs.viewer_camera_label || ""))
+      || cameraLabelById.get(String(obs.camera_id))
+      || cameraIdByIndex.get(Number(obs.camera_index));
+    if (cam && !cameraIsVisible(cam)) continue;
+    available += 1;
+    if (selected.length < correspondenceMaxShown) selected.push({obs, cam});
+  }
+  if (!selected.length) {
+    correspondenceGroup.visible = false;
+    status.textContent = name + " " + (allFrames ? "all frames" : "frame " + frame) + ": no visible correspondences.";
+    return;
+  }
+
+  const pointPositions = [];
+  const pointColors = [];
+  const linePositions = [];
+  const lineColors = [];
+  for (const item of selected) {
+    const obs = item.obs;
+    const cam = item.cam;
+    const point = obs.three;
+    const line = obs.line_three;
+    if (!point || point.length !== 3) continue;
+    const color = residualColor(obs.residual_px);
+    pointPositions.push(point[0], point[1], point[2]);
+    pointColors.push(color.r, color.g, color.b);
+    const lineStart = cam && cam.center ? cam.center : (line && line[0]);
+    const lineEnd = point || (line && line[1]);
+    if (lineStart && lineEnd && lineStart.length === 3 && lineEnd.length === 3) {
+      linePositions.push(lineStart[0], lineStart[1], lineStart[2], lineEnd[0], lineEnd[1], lineEnd[2]);
+      lineColors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+    }
+  }
+
+  if (pointPositions.length) {
+    const pointGeometry = new THREE.BufferGeometry();
+    pointGeometry.setAttribute("position", new THREE.Float32BufferAttribute(pointPositions, 3));
+    pointGeometry.setAttribute("color", new THREE.Float32BufferAttribute(pointColors, 3));
+    const points = new THREE.Points(pointGeometry, new THREE.PointsMaterial({
+      size: Math.max(0.008, radius * 0.008),
+      sizeAttenuation: true,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.96,
+      depthWrite: true,
+    }));
+    correspondenceGroup.add(points);
+  }
+  if (linePositions.length) {
+    const lineGeometry = new THREE.BufferGeometry();
+    lineGeometry.setAttribute("position", new THREE.Float32BufferAttribute(linePositions, 3));
+    lineGeometry.setAttribute("color", new THREE.Float32BufferAttribute(lineColors, 3));
+    const lines = new THREE.LineSegments(lineGeometry, new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.18,
+      depthWrite: false,
+    }));
+    correspondenceGroup.add(lines);
+  }
+  correspondenceGroup.visible = true;
+  status.textContent = name + " " + (allFrames ? "all frames" : "frame " + frame) + ": "
+    + selected.length + "/" + available + " correspondences shown; residual <= "
+    + (correspondenceResidualMax >= 200 ? "200+" : correspondenceResidualMax)
+    + " px; point group = " + (pointGroupKey === "__all__" ? "all" : pointGroupKey)
+    + "; color = log residual px.";
+}
+
+async function loadOrToggleCorrespondence() {
+  const button = document.getElementById("load-correspondence");
+  const status = document.getElementById("correspondence-status");
+  const url = correspondenceUrl();
+  if (!url) {
+    if (button) button.style.display = "none";
+    if (status) status.textContent = "No correspondence data URL configured.";
+    return;
+  }
+  if (!correspondenceLoaded) {
+    if (button) button.textContent = "Loading...";
+    if (status) status.textContent = "Fetching correspondence JSON...";
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(response.status + " " + response.statusText);
+      correspondenceData = await response.json();
+      correspondenceLoaded = true;
+      correspondenceVisible = true;
+      populateCorrespondenceFrameControl();
+    } catch (error) {
+      correspondenceLoaded = false;
+      correspondenceVisible = false;
+      if (button) button.textContent = "Load Corr";
+      if (status) status.textContent = "Load failed: " + error.message;
+      return;
+    }
+  } else {
+    correspondenceVisible = !correspondenceVisible;
+  }
+  if (button) {
+    button.textContent = correspondenceVisible ? "Hide Corr" : "Show Corr";
+    button.classList.toggle("active", correspondenceVisible);
+  }
+  populateCorrespondenceFrameControl();
+  updateCorrespondenceOverlay();
+}
+
 function buildScene() {
   const sphereRadius = 0.03;
   const sphereGeometry = new THREE.SphereGeometry(sphereRadius, 28, 16);
@@ -2066,6 +2507,9 @@ function applyCameraVisibility() {
     selectedIndex = next ? next.index : -1;
   }
   updateSelectedPanel();
+  if (correspondenceLoaded && correspondenceVisible) {
+    updateCorrespondenceOverlay();
+  }
 }
 
 function cam0UpInWorldVector() {
@@ -2296,6 +2740,58 @@ function setupCameraCategoryToggles() {
   });
 }
 
+function setupCorrespondenceControls() {
+  const section = document.getElementById("correspondence-section");
+  const button = document.getElementById("load-correspondence");
+  const status = document.getElementById("correspondence-status");
+  const frameSlider = document.getElementById("correspondence-frame-slider");
+  const allFramesCheckbox = document.getElementById("correspondence-all-frames");
+  const pointSelect = document.getElementById("correspondence-point-group");
+  const maxInput = document.getElementById("correspondence-max");
+  const residualInput = document.getElementById("correspondence-residual-max");
+  if (!correspondenceUrl()) {
+    if (section) section.style.display = "none";
+    return;
+  }
+  if (status) status.textContent = "Click Load Corr to fetch feature correspondences.";
+  if (button) button.addEventListener("click", loadOrToggleCorrespondence);
+  if (frameSlider) {
+    frameSlider.addEventListener("input", () => {
+      const name = correspondenceDatasetName();
+      correspondenceSelectedFrameByDataset[name] = frameSlider.value;
+      correspondenceSelectedPointGroupByDataset[name] = "__all__";
+      correspondenceAllFramesByDataset[name] = false;
+      if (allFramesCheckbox) allFramesCheckbox.checked = false;
+      populateCorrespondenceFrameControl();
+      updateCorrespondenceOverlay();
+    });
+  }
+  if (allFramesCheckbox) {
+    allFramesCheckbox.addEventListener("change", () => {
+      const name = correspondenceDatasetName();
+      correspondenceAllFramesByDataset[name] = allFramesCheckbox.checked;
+      correspondenceSelectedPointGroupByDataset[correspondenceDatasetName()] = "__all__";
+      populateCorrespondenceFrameControl();
+      populateCorrespondencePointGroupControl();
+      updateCorrespondenceOverlay();
+    });
+  }
+  if (pointSelect) {
+    pointSelect.addEventListener("change", () => {
+      correspondenceSelectedPointGroupByDataset[correspondenceDatasetName()] = pointSelect.value;
+      updateCorrespondenceOverlay();
+    });
+  }
+  [maxInput, residualInput].forEach((input) => {
+    if (!input) return;
+    input.addEventListener("input", () => {
+      syncCorrespondenceControlValues();
+      updateCorrespondenceOverlay();
+    });
+  });
+  syncCorrespondenceControlValues();
+}
+
 function setButtonGroupActive(prefix, activeId) {
   document.querySelectorAll("[id^='" + prefix + "']").forEach((button) => {
     button.classList.toggle("active", button.id === activeId);
@@ -2312,6 +2808,9 @@ function refreshDatasetCoverageUi() {
     + " (" + (mode.active_camera_count ?? "-") + " active)";
   buildTable();
   buildSummary();
+  if (correspondenceLoaded) {
+    populateCorrespondenceFrameControl();
+  }
   applyCameraVisibility();
 }
 
@@ -2370,6 +2869,7 @@ setToggle("toggle-points", pointCloudGroup);
 setupScopeControls();
 setupCoverageControls();
 setupCameraCategoryToggles();
+setupCorrespondenceControls();
 if (viewerOption("enable_overlap", true)) {
   setToggle("toggle-overlap", overlapGroup);
 } else {
@@ -2445,6 +2945,9 @@ window.__rigViewer = {
     gizmoEnabled: !transformControl || transformControl.enabled,
     overlapVisible: overlapGroup.visible,
     overlapMeshCount: overlapGroup.children.length,
+    correspondenceLoaded,
+    correspondenceVisible: correspondenceGroup.visible,
+    correspondenceObjectCount: correspondenceGroup.children.length,
     displayUp: WORLD_UP.toArray(),
     cam0UpInWorld: cam0UpInWorldVector().toArray(),
     worldFromCam0Quaternion: worldFromCam0Quat.toArray(),

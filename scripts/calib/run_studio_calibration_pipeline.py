@@ -114,6 +114,8 @@ def build_paths(args):
     )
     bridge_root = output_root / "inner_bridge"
     unified_artifact_dir = output_root / "calibration_artifacts" / "studio_32_cameras_current"
+    marker_correspondence_dir = output_root / "marker_correspondences"
+    advanced_correspondence_root = output_root / "advanced_correspondence_viewer_v1"
     current_output_dir = resolve_path(args.current_output_dir)
     whole_data_report = (
         resolve_path(args.whole_data_report)
@@ -135,6 +137,24 @@ def build_paths(args):
         "bridge_intrinsics_dir": bridge_root / "planned_inputs" / "bridge_all32_fixed_intrinsics",
         "unified_artifact_dir": unified_artifact_dir,
         "unified_camera_yaml": unified_artifact_dir / "studio_32_cameras.yaml",
+        "large_marker_dataset": bridge_root / args.large_marker_sequence / f"features_parallel_pattern0_bridge_stride{args.large_frame_stride}_v1.bin",
+        "large_marker_state_dir": bridge_root / args.large_marker_sequence / f"fixed_intrinsic_bridge_pnp_stride{args.large_frame_stride}_v1",
+        "large_marker_manifest": bridge_root / "planned_inputs" / "large_marker_usable_manifest.tsv",
+        "small_marker_dataset": bridge_root / args.small_marker_sequence / f"features_pattern3_grid4_stride{args.small_frame_stride}_fast_v1.bin",
+        "small_marker_state_dir": bridge_root / args.small_marker_sequence / "fixed_intrinsic_small_grid4_quality_probe_v1",
+        "small_marker_manifest": bridge_root / "planned_inputs" / "small_marker_usable_manifest.tsv",
+        "marker_correspondence_dir": marker_correspondence_dir,
+        "large_marker_correspondence_tsv": marker_correspondence_dir / "large_marker_correspondences.tsv",
+        "large_marker_correspondence_summary": marker_correspondence_dir / "large_marker_correspondences.summary.json",
+        "small_marker_correspondence_tsv": marker_correspondence_dir / "small_marker_correspondences.tsv",
+        "small_marker_correspondence_summary": marker_correspondence_dir / "small_marker_correspondences.summary.json",
+        "outer_observation_residuals_tsv": outer_frame_face_dir / "diagnostics" / "observation_residuals.tsv",
+        "outer_frame_face_pose_yaml": outer_frame_face_dir / "rig_tr_frame_face.yaml",
+        "large_pnp_dir": bridge_root / args.large_marker_sequence / "fixed_intrinsic_bridge_pnp_stride1_v1",
+        "small_pnp_dir": bridge_root / args.small_marker_sequence / "fixed_intrinsic_small_grid4_quality_probe_v1",
+        "viewer_assets_dir": bridge_root / "combined_studio_rig_viewer_v1",
+        "advanced_correspondence_root": advanced_correspondence_root,
+        "advanced_correspondence_viewer": advanced_correspondence_root / "index.html",
         "current_output_dir": current_output_dir,
     }
 
@@ -171,7 +191,10 @@ def bridge_command(args, paths):
         "--large-marker-sequence", args.large_marker_sequence,
         "--large-inner-marker-sequence", args.large_inner_marker_sequence,
         "--small-marker-sequence", args.small_marker_sequence,
+        "--large-frame-stride", str(args.large_frame_stride),
+        "--small-frame-stride", str(args.small_frame_stride),
         "--run-large-bridge",
+        "--run-small-fixed-rig-quality",
         "--run-reports",
         "--run-tag", args.run_tag,
     ]
@@ -219,6 +242,53 @@ def export_unified_command(args, paths):
     ]
 
 
+def advanced_correspondence_command(args, paths):
+    return [
+        sys.executable,
+        repo_root() / "scripts/calib/generate_studio_correspondence_viewer.py",
+        "--output-dir", paths["advanced_correspondence_root"],
+        "--studio32-yaml", paths["unified_camera_yaml"],
+        "--outer-observation-residuals-tsv", paths["outer_observation_residuals_tsv"],
+        "--outer-frame-face-pose-yaml", paths["outer_frame_face_pose_yaml"],
+        "--large-correspondence-tsv", paths["large_marker_correspondence_tsv"],
+        "--small-correspondence-tsv", paths["small_marker_correspondence_tsv"],
+        "--large-pnp-dir", paths["large_pnp_dir"],
+        "--small-pnp-dir", paths["small_pnp_dir"],
+        "--viewer-assets-dir", paths["viewer_assets_dir"],
+    ]
+
+
+def marker_correspondence_command(args, paths, dataset_name):
+    if dataset_name == "large":
+        dataset = paths["large_marker_dataset"]
+        state_dir = paths["large_marker_state_dir"]
+        manifest = paths["large_marker_manifest"]
+        output_tsv = paths["large_marker_correspondence_tsv"]
+        summary = paths["large_marker_correspondence_summary"]
+        camera_index_offset = 0
+    elif dataset_name == "small":
+        dataset = paths["small_marker_dataset"]
+        state_dir = paths["small_marker_state_dir"]
+        manifest = paths["small_marker_manifest"]
+        output_tsv = paths["small_marker_correspondence_tsv"]
+        summary = paths["small_marker_correspondence_summary"]
+        camera_index_offset = 24
+    else:
+        raise ValueError(f"unknown correspondence dataset {dataset_name}")
+    return [
+        sys.executable,
+        repo_root() / "scripts/calib/export_calibration_correspondence_residuals.py",
+        "--dataset", dataset,
+        "--state-dir", state_dir,
+        "--output-tsv", output_tsv,
+        "--summary-json", summary,
+        "--dataset-name", dataset_name,
+        "--manifest", manifest,
+        "--reference-studio32-yaml", paths["unified_camera_yaml"],
+        "--camera-index-offset", str(camera_index_offset),
+    ]
+
+
 def make_stage(name, requested, command):
     return {
         "name": name,
@@ -237,11 +307,16 @@ def build_stages(args, paths):
     run_outer = not args.bridge_only
     run_bridge = not args.outer_only
     run_export = run_bridge
+    run_marker_correspondences = run_bridge
+    run_advanced = run_bridge
     run_publish = args.publish_current and run_bridge
     return [
         make_stage("outer_tower", run_outer, outer_command(args, paths)),
         make_stage("inner_bridge", run_bridge, bridge_command(args, paths)),
         make_stage("export_unified_cameras", run_export, export_unified_command(args, paths)),
+        make_stage("export_large_marker_correspondences", run_marker_correspondences, marker_correspondence_command(args, paths, "large")),
+        make_stage("export_small_marker_correspondences", run_marker_correspondences, marker_correspondence_command(args, paths, "small")),
+        make_stage("generate_advanced_correspondence_viewer", run_advanced, advanced_correspondence_command(args, paths)),
         make_stage("publish_current", run_publish, publish_command(args, paths)),
     ]
 
@@ -359,6 +434,9 @@ def write_outputs(args, paths, stages, started_at, finished_at, duration_s):
             "bridge_report": report_url(paths["bridge_root"] / "final_report" / "index.html", http_root, args.report_url_base),
             "unified_viewer": report_url(paths["bridge_viewer"], http_root, args.report_url_base),
             "unified_camera_yaml": report_url(paths["unified_camera_yaml"], http_root, args.report_url_base),
+            "large_marker_correspondences": report_url(paths["large_marker_correspondence_tsv"], http_root, args.report_url_base),
+            "small_marker_correspondences": report_url(paths["small_marker_correspondence_tsv"], http_root, args.report_url_base),
+            "advanced_correspondence_viewer": report_url(paths["advanced_correspondence_viewer"], http_root, args.report_url_base),
             "current_entry": report_url(paths["current_output_dir"] / "index.html", http_root, args.report_url_base)
             if args.publish_current else "",
         },
@@ -394,6 +472,8 @@ def parse_args():
     parser.add_argument("--large-marker-sequence", default="large_marker_bridge_all32")
     parser.add_argument("--large-inner-marker-sequence", default="large_marker_inner8")
     parser.add_argument("--small-marker-sequence", default="small_marker_inner8")
+    parser.add_argument("--large-frame-stride", type=int, default=1)
+    parser.add_argument("--small-frame-stride", type=int, default=4)
     parser.add_argument("--run-large-inner-init", action="store_true")
     parser.add_argument("--run-small-quality", action="store_true")
     parser.add_argument(
@@ -450,6 +530,10 @@ def parse_args():
     args = parser.parse_args()
     if args.outer_only and args.bridge_only:
         parser.error("--outer-only and --bridge-only are mutually exclusive")
+    if args.large_frame_stride < 1:
+        parser.error("--large-frame-stride must be >= 1")
+    if args.small_frame_stride < 1:
+        parser.error("--small-frame-stride must be >= 1")
     return args
 
 

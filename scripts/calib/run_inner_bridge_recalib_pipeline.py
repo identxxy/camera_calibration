@@ -160,6 +160,32 @@ def command_string(argv):
     return shlex.join(str(item) for item in argv)
 
 
+def correspondence_export_argv(
+        repo_root,
+        dataset_name,
+        dataset,
+        state_dir,
+        manifest,
+        output_tsv,
+        intrinsics_dir=None,
+        camera_index_offset=0):
+    argv = [
+        DEFAULT_T0_PYTHON,
+        str(Path(repo_root) / "scripts/calib/export_calibration_correspondence_residuals.py"),
+        "--dataset", str(dataset),
+        "--state-dir", str(state_dir),
+        "--dataset-name", dataset_name,
+        "--output-tsv", str(output_tsv),
+    ]
+    if manifest:
+        argv.extend(["--manifest", str(manifest)])
+    if intrinsics_dir:
+        argv.extend(["--intrinsics-dir", str(intrinsics_dir)])
+    if camera_index_offset:
+        argv.extend(["--camera-index-offset", str(camera_index_offset)])
+    return argv
+
+
 def git_metadata(root):
     root = Path(root)
 
@@ -1499,11 +1525,15 @@ def build_pipeline_stages(
     selected_inner_manifest = large_inner_manifest if selected_inner_state == large_inner_init_state else small_manifest
     final_inner_manifest = large_inner_manifest if final_inner_state == large_inner_init_state else small_manifest
     inner_reproj = reports_out / "inner_reprojection"
+    inner_reprojection_correspondence = inner_reproj / "correspondence_residuals.tsv"
     rig_report = reports_out / "rig_extrinsics"
     inner_viewer = reports_out / "interactive_inner_viewer"
     large_features = large_out / "features_parallel_pattern0_bridge_v1.bin"
     large_stride_features = large_out / f"features_parallel_pattern0_bridge_stride{args.large_frame_stride}_v1.bin"
     large_bridge_pnp = large_out / f"fixed_intrinsic_bridge_pnp_stride{args.large_frame_stride}_v1"
+    large_inner_correspondence = large_inner_init_state / "correspondence_residuals.tsv"
+    small_correspondence = small_fixed_rig_quality / "correspondence_residuals.tsv"
+    large_bridge_correspondence = large_bridge_pnp / "correspondence_residuals.tsv"
 
     inner_prior_ready = Path(effective_inner_prior).exists() or large_inner_init_dependency_ready
     small_quality_requested = stage_requested(args, "small-fixed-rig-quality")
@@ -1571,6 +1601,7 @@ def build_pipeline_stages(
         "--output_html", str(combined_viewer_html),
         "--viewer_scope", "combined",
         "--title", "Fast Inner/Outer Bridge Viewer",
+        "--correspondence_data_url", "../../advanced_correspondence_viewer_v1/correspondence_data.json",
         "--inner_reprojection_metrics_tsv", str(inner_reproj / "camera_metrics.tsv"),
         "--whole_coverage_tsv", str(data_root / "whole_outer24_filtered_min4_hybrid_min4cam" / "per_camera_stats.tsv"),
         "--large_marker_pnp_summary_tsv", str(large_bridge_pnp / "camera_pnp_summary.tsv"),
@@ -1714,6 +1745,38 @@ def build_pipeline_stages(
             group="large-inner-init",
         ),
         make_stage(
+            "export_large_inner_marker_correspondence_residuals",
+            stage_status(
+                args,
+                large_inner_ready and inner_intrinsics_ready,
+                stage_requested(args, "large-inner-init"),
+                large_inner_correspondence,
+            ),
+            {
+                "dataset": str(large_inner_stride_features),
+                "state_dir": str(large_inner_init_state),
+                "manifest": large_inner_manifest,
+            },
+            {
+                "correspondence_residuals_tsv": str(large_inner_correspondence),
+            },
+            argv=correspondence_export_argv(
+                repo_root,
+                "large_inner_marker",
+                large_inner_stride_features,
+                large_inner_init_state,
+                large_inner_manifest,
+                large_inner_correspondence,
+            ),
+            notes=(
+                [] if (large_inner_ready and inner_intrinsics_ready) else
+                ["inner fixed intrinsics directory is missing"] if not inner_intrinsics_ready else
+                large_inner_canonical["notes"]
+            ),
+            group="large-inner-init",
+            allow_failure=True,
+        ),
+        make_stage(
             "extract_small_marker_features",
             stage_status(args, small_ready, small_processing_requested, small_features),
             {
@@ -1785,6 +1848,40 @@ def build_pipeline_stages(
                 "--camera_manifest", small_manifest,
                 "--output_directory", str(small_fixed_rig_quality),
             ],
+            notes=(
+                small_quality_notes if small_fixed_rig_ready else
+                ["small fixed-rig quality probe disabled by --inner-refine-mode"] if not small_fixed_rig_enabled else
+                ["inner fixed intrinsics directory is missing"] if not inner_intrinsics_ready else
+                small_canonical["notes"]
+            ),
+            group="small-fixed-rig-quality",
+            allow_failure=True,
+        ),
+        make_stage(
+            "export_small_marker_correspondence_residuals",
+            stage_status(
+                args,
+                small_fixed_rig_ready,
+                small_quality_requested,
+                small_correspondence,
+            ),
+            {
+                "dataset": str(small_fixed_rig_quality_dataset),
+                "state_dir": str(small_fixed_rig_quality),
+                "manifest": small_manifest,
+                "refine_mode": args.inner_refine_mode,
+            },
+            {
+                "correspondence_residuals_tsv": str(small_correspondence),
+            },
+            argv=correspondence_export_argv(
+                repo_root,
+                "small_marker",
+                small_fixed_rig_quality_dataset,
+                small_fixed_rig_quality,
+                small_manifest,
+                small_correspondence,
+            ),
             notes=(
                 small_quality_notes if small_fixed_rig_ready else
                 ["small fixed-rig quality probe disabled by --inner-refine-mode"] if not small_fixed_rig_enabled else
@@ -1878,6 +1975,39 @@ def build_pipeline_stages(
                 ["inner joint input state is missing"]
             ),
             group="small-refine",
+        ),
+        make_stage(
+            "export_inner_reprojection_correspondence_residuals",
+            stage_status(
+                args,
+                final_report_dataset_ready and final_inner_ready,
+                stage_requested(args, "reports"),
+                inner_reprojection_correspondence,
+            ),
+            {
+                "dataset": str(final_inner_dataset),
+                "state_dir": str(final_inner_state),
+                "manifest": final_inner_manifest,
+                "inner_prior_source": inner_prior_source,
+            },
+            {
+                "correspondence_residuals_tsv": str(inner_reprojection_correspondence),
+            },
+            argv=correspondence_export_argv(
+                repo_root,
+                "inner_reprojection",
+                final_inner_dataset,
+                final_inner_state,
+                final_inner_manifest,
+                inner_reprojection_correspondence,
+            ),
+            notes=(
+                [] if (final_report_dataset_ready and final_inner_ready) else
+                ["final inner dataset is missing"] if not final_report_dataset_ready else
+                ["final inner state is missing"]
+            ),
+            group="reports",
+            allow_failure=True,
         ),
         make_stage(
             "generate_inner_reports",
@@ -1993,6 +2123,39 @@ def build_pipeline_stages(
             allow_failure=True,
         ),
         make_stage(
+            "export_large_marker_bridge_correspondence_residuals",
+            stage_status(
+                args,
+                bridge_input_ready and bridge_intrinsics_ready,
+                stage_requested(args, "large-bridge"),
+                large_bridge_correspondence,
+            ),
+            {
+                "dataset": str(large_stride_features),
+                "state_dir": str(large_bridge_pnp),
+                "manifest": large_manifest,
+                "index_convention": bridge_layout["index_convention"],
+            },
+            {
+                "correspondence_residuals_tsv": str(large_bridge_correspondence),
+            },
+            argv=correspondence_export_argv(
+                repo_root,
+                "large_marker_bridge",
+                large_stride_features,
+                large_bridge_pnp,
+                large_manifest,
+                large_bridge_correspondence,
+            ),
+            notes=(
+                ["all32 bridge uses outer intrinsics0..23 and inner intrinsics remapped to 24..31"]
+                if bridge_intrinsics_ready else
+                [f"missing_{bridge_intrinsics['missing_count']}_bridge_intrinsics_files"]
+            ),
+            group="large-bridge",
+            allow_failure=True,
+        ),
+        make_stage(
             "evaluate_topdown_bridge",
             stage_status(args, bridge_input_ready and outer_prior_ready, stage_requested(args, "large-bridge"), bridge_out / "bridge_summary.json"),
             {
@@ -2051,11 +2214,13 @@ def build_pipeline_stages(
         "large_inner_init_camera_tr_rig_yaml": str(large_inner_init_state / "camera_tr_rig.yaml"),
         "large_inner_init_state_dir": str(large_inner_init_state),
         "large_inner_init_dataset": str(large_inner_stride_features),
+        "large_inner_marker_correspondence_residuals_tsv": str(large_inner_correspondence),
         "small_fixed_rig_quality_camera_tr_rig_yaml": str(small_fixed_rig_quality / "camera_tr_rig.yaml"),
         "small_fixed_rig_quality_state_dir": str(small_fixed_rig_quality),
         "small_fixed_rig_quality_dataset": str(small_fixed_rig_quality_dataset),
         "small_fixed_rig_quality_pnp_views": str(small_fixed_rig_quality / "pnp_views.tsv"),
         "small_fixed_rig_quality_camera_pnp_summary": str(small_fixed_rig_quality / "camera_pnp_summary.tsv"),
+        "small_marker_correspondence_residuals_tsv": str(small_correspondence),
         "inner_selected_camera_tr_rig_yaml": str(selected_inner_camera_tr_rig),
         "inner_selected_state_dir": str(selected_inner_state),
         "inner_selected_dataset": str(selected_inner_dataset),
@@ -2065,9 +2230,11 @@ def build_pipeline_stages(
         "inner_joint_camera_tr_rig_yaml": str(inner_joint_refine / "camera_tr_rig.yaml"),
         "inner_joint_state_dir": str(inner_joint_refine),
         "inner_reprojection_report": str(inner_reproj / "index.html"),
+        "inner_reprojection_correspondence_residuals_tsv": str(inner_reprojection_correspondence),
         "inner_interactive_viewer": str(inner_viewer / "index.html"),
         "bridge_pose_yaml": str(bridge_out / "camera_tr_inner_refined_plus_outer_topdown.yaml"),
         "bridge_summary_json": str(bridge_out / "bridge_summary.json"),
+        "large_marker_bridge_correspondence_residuals_tsv": str(large_bridge_correspondence),
         "bridge_all32_fixed_intrinsics_dir": priors["bridge_intrinsics"],
         "outer_final_pose_yaml": outer_final_pose_yaml,
         "outer_final_pose_ready": outer_final_pose_ready,

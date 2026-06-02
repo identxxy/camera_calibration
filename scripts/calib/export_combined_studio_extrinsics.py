@@ -16,11 +16,19 @@ try:
         OUTER_CAMERA_LABELS,
         load_pose_yaml,
     )
+    from studio_canonical_frame import (
+        estimate_frame_from_camera_poses,
+        transform_pose_to_aligned,
+    )
 except ModuleNotFoundError:
     from scripts.calib.generate_combined_studio_rig_viewer import (
         DEFAULT_INNER_BRIDGE_INDICES,
         OUTER_CAMERA_LABELS,
         load_pose_yaml,
+    )
+    from scripts.calib.studio_canonical_frame import (
+        estimate_frame_from_camera_poses,
+        transform_pose_to_aligned,
     )
 
 
@@ -116,14 +124,61 @@ def validate_pose(index, pose):
         raise ValueError(f"Rotation determinant at output index {index} is {det}")
 
 
-def write_pose_yaml(path, poses):
+def format_float(value):
+    return f"{float(value):.14g}"
+
+
+def yaml_quote(value):
+    text = str(value)
+    if not text:
+        return '""'
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def append_coordinate_transform_yaml(lines, coordinate_frame, indent=""):
+    if not coordinate_frame:
+        return
+    lines.extend([
+        f"{indent}coordinate_transform:",
+        f"{indent}  method: {yaml_quote(coordinate_frame['method'])}",
+        f"{indent}  source_coordinate_frame: {yaml_quote(coordinate_frame['source_coordinate_frame'])}",
+        f"{indent}  aligned_coordinate_frame: {yaml_quote(coordinate_frame['aligned_coordinate_frame'])}",
+        f"{indent}  point_transform: {yaml_quote(coordinate_frame['point_transform'])}",
+        f"{indent}  origin_source: [{', '.join(format_float(v) for v in coordinate_frame['origin_source'])}]",
+        f"{indent}  aligned_from_source_rotation:",
+    ])
+    for row in coordinate_frame["aligned_from_source_rotation"]:
+        lines.append(f"{indent}    - [{', '.join(format_float(v) for v in row)}]")
+    lines.append(f"{indent}  source_from_aligned_rotation:")
+    for row in coordinate_frame["source_from_aligned_rotation"]:
+        lines.append(f"{indent}    - [{', '.join(format_float(v) for v in row)}]")
+    lines.extend([
+        f"{indent}  axes_source:",
+        f"{indent}    x: [{', '.join(format_float(v) for v in coordinate_frame['axes_source']['x'])}]",
+        f"{indent}    y: [{', '.join(format_float(v) for v in coordinate_frame['axes_source']['y'])}]",
+        f"{indent}    z: [{', '.join(format_float(v) for v in coordinate_frame['axes_source']['z'])}]",
+        f"{indent}  negative_z_gap_direction_source: "
+        f"[{', '.join(format_float(v) for v in coordinate_frame['negative_z_gap_direction_source'])}]",
+        f"{indent}  negative_z_gap_labels: "
+        f"[{', '.join(yaml_quote(v) for v in coordinate_frame['negative_z_gap_labels'])}]",
+        f"{indent}  origin_level2_labels: "
+        f"[{', '.join(yaml_quote(v) for v in coordinate_frame['origin_level2_labels'])}]",
+        f"{indent}  used_columns: [{', '.join(yaml_quote(v) for v in coordinate_frame['used_columns'])}]",
+        f"{indent}  level_plane_count: {coordinate_frame['level_plane_count']}",
+    ])
+
+
+def write_pose_yaml(path, poses, coordinate_frame=None):
     lines = [
         "# Combined studio 24+8 relative extrinsics.",
         "# Each pose is camera_tr_studio_rig: rig point -> camera coordinates, right-multiplication, meters.",
         "# OpenCV camera frame convention: +x right, +y down, +z forward.",
+        "# Published rig frame: origin is the non-4 *-2 center, +Y is gravity, -Z points toward the missing 4-2 side gap.",
         f"pose_count: {len(poses)}",
-        "poses:",
     ]
+    append_coordinate_transform_yaml(lines, coordinate_frame)
+    lines.append("poses:")
     for index, pose in enumerate(poses):
         validate_pose(index, pose)
         qx, qy, qz, qw = matrix_to_quat_xyzw(pose[:3, :3])
@@ -163,27 +218,17 @@ def parse_intrinsics_yaml(path):
     }
 
 
-def format_float(value):
-    return f"{float(value):.14g}"
-
-
-def yaml_quote(value):
-    text = str(value)
-    if not text:
-        return '""'
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
-
-
-def write_unified_camera_yaml(path, poses, camera_rows, intrinsics_dir):
+def write_unified_camera_yaml(path, poses, camera_rows, intrinsics_dir, coordinate_frame=None):
     intrinsics_dir = Path(intrinsics_dir)
+    frame_name = coordinate_frame["aligned_coordinate_frame"] if coordinate_frame else "studio_rig_current"
     lines = [
         "# Unified studio 24+8 camera calibration.",
         "# Extrinsics are camera_tr_studio_rig: rig point -> camera coordinates, meters.",
         "# Camera frame convention is OpenCV: +x right, +y down, +z forward.",
+        "# Published rig frame: origin is the non-4 *-2 center, +Y is gravity, -Z points toward the missing 4-2 side gap.",
         "schema_version: 1",
         "artifact: studio_32_camera_calibration",
-        "coordinate_frame: studio_rig_current",
+        f"coordinate_frame: {frame_name}",
         "pose_convention:",
         "  transform: camera_tr_studio_rig",
         "  meaning: rig point to camera coordinates",
@@ -195,8 +240,9 @@ def write_unified_camera_yaml(path, poses, camera_rows, intrinsics_dir):
         "  outer: indices 0..23 follow labels 1-1,1-2,1-3,...,8-3",
         "  inner: indices 24..31 follow inner0..inner7",
         f"camera_count: {len(camera_rows)}",
-        "cameras:",
     ]
+    append_coordinate_transform_yaml(lines, coordinate_frame)
+    lines.append("cameras:")
     for row in camera_rows:
         index = int(row["index"])
         pose = poses[index]
@@ -296,12 +342,13 @@ def build_combined_poses(args):
     return poses, rows
 
 
-def write_manifest(path, args, pose_yaml, label_tsv, unified_yaml, camera_rows):
+def write_manifest(path, args, pose_yaml, label_tsv, unified_yaml, camera_rows, coordinate_frame=None):
     manifest = {
         "schema_version": 1,
         "artifact": "studio_32_relative_extrinsics",
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "coordinate_frame": "studio_rig_current",
+        "coordinate_frame": coordinate_frame["aligned_coordinate_frame"] if coordinate_frame else "studio_rig_current",
+        "coordinate_transform": coordinate_frame or {},
         "pose_convention": {
             "transform": "camera_tr_studio_rig",
             "meaning": "rig point to camera coordinates",
@@ -349,19 +396,27 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--run-tag", default="latest")
     parser.add_argument("--viewer-url", default=DEFAULT_VIEWER_URL)
+    parser.add_argument("--no-canonical-studio-frame", action="store_true")
     args = parser.parse_args()
 
     poses, rows = build_combined_poses(args)
+    coordinate_frame = None
+    if not args.no_canonical_studio_frame:
+        coordinate_frame = estimate_frame_from_camera_poses(poses, rows)
+        if coordinate_frame is None:
+            raise RuntimeError("Could not estimate canonical studio frame from non-4 outer side cameras")
+        poses = [transform_pose_to_aligned(pose, coordinate_frame) for pose in poses]
     output_dir = Path(args.output_dir)
     pose_yaml = output_dir / "camera_tr_studio_rig.yaml"
     label_tsv = output_dir / "camera_labels.tsv"
     unified_yaml = output_dir / "studio_32_cameras.yaml"
     manifest_json = output_dir / "manifest.json"
-    write_pose_yaml(pose_yaml, poses)
+    write_pose_yaml(pose_yaml, poses, coordinate_frame)
     write_label_tsv(label_tsv, rows)
-    write_unified_camera_yaml(unified_yaml, poses, rows, args.intrinsics_dir)
-    write_manifest(manifest_json, args, pose_yaml, label_tsv, unified_yaml, rows)
+    write_unified_camera_yaml(unified_yaml, poses, rows, args.intrinsics_dir, coordinate_frame)
+    write_manifest(manifest_json, args, pose_yaml, label_tsv, unified_yaml, rows, coordinate_frame)
     print(json.dumps({
+        "coordinate_frame": coordinate_frame["aligned_coordinate_frame"] if coordinate_frame else "studio_rig_current",
         "pose_count": len(poses),
         "unified_yaml": str(unified_yaml),
         "pose_yaml": str(pose_yaml),

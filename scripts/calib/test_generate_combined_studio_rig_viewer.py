@@ -2,6 +2,7 @@
 """Focused tests for the combined studio rig viewer report."""
 
 import json
+import math
 import sys
 import tempfile
 import unittest
@@ -29,8 +30,9 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
     def test_estimate_outer_column_gravity_alignment_excludes_topdown_side(self):
         cameras = []
         for side in range(1, 9):
+            theta = 2.0 * math.pi * (side - 1) / 8.0
             for level in (1, 2, 3):
-                center = [float(side), float(level), 0.0]
+                center = [math.cos(theta), float(level), math.sin(theta)]
                 if side == 4:
                     center = [float(side), -100.0 * float(level), 0.0]
                 cameras.append({
@@ -42,13 +44,15 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
         alignment = combined_viewer.estimate_outer_column_gravity_alignment(cameras)
 
         self.assertIsNotNone(alignment)
-        self.assertEqual(alignment["method"], "outer_column_mean_displacement_excluding_4_topdown")
+        self.assertEqual(alignment["method"], "outer_level_plane_mean_normal_origin_level2_gap4")
         self.assertEqual(alignment["column_count"], 7)
         self.assertNotIn("4", alignment["used_columns"])
-        self.assertEqual(alignment["segment_count"], 14)
+        self.assertEqual(alignment["level_plane_count"], 3)
         self.assertAlmostEqual(alignment["display_up_vector"][0], 0.0, places=6)
         self.assertAlmostEqual(alignment["display_up_vector"][1], 1.0, places=6)
         self.assertAlmostEqual(alignment["display_up_vector"][2], 0.0, places=6)
+        self.assertEqual(alignment["negative_z_gap_labels"], ["3-2", "5-2"])
+        self.assertNotIn("4-2", alignment["origin_level2_labels"])
 
     def test_attach_calibration_quality_adds_intrinsic_sanity_status_and_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -121,7 +125,9 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
                         "warning_camera_count": 1,
                     },
                 },
-                "viewer_options": {},
+                "viewer_options": {
+                    "correspondence_data_url": "../../advanced_correspondence_viewer_v1/correspondence_data.json",
+                },
                 "dataset_coverage": {},
                 "cameras": [{
                     "index": 0,
@@ -164,6 +170,18 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
             self.assertIn("multiplyScalar(-radius * 2.85 * zoom)", html)
             self.assertIn("offset = rigForward.clone().multiplyScalar(radius * 2.65 * zoom);", html)
             self.assertIn("rebuildOrbitControlsForCurrentUp(true, controlsUp);", html)
+            self.assertIn("Load Corr", html)
+            self.assertIn("id=\"correspondence-frame-slider\"", html)
+            self.assertIn("id=\"correspondence-all-frames\"", html)
+            self.assertIn("id=\"correspondence-point-group\"", html)
+            self.assertIn("Max shown", html)
+            self.assertIn("Residual <=", html)
+            self.assertIn("function populateCorrespondenceFrameControl()", html)
+            self.assertIn("function populateCorrespondencePointGroupControl()", html)
+            self.assertIn("All frames", html)
+            self.assertIn("All points (", html)
+            self.assertIn("function updateCorrespondenceOverlay()", html)
+            self.assertIn("correspondenceObjectCount", html)
             self.assertEqual(
                 json.loads((output_html.parent / "rig_data.json").read_text(encoding="utf-8")),
                 data,

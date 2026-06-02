@@ -440,7 +440,81 @@ class InnerBridgeRecalibPipelineTest(unittest.TestCase):
             viewer_command = stages["generate_combined_bridge_viewer"]["planned_command"]
             self.assertIn("--inner_bridge_indices 24,25,26,27,28,29,30,31", viewer_command)
             self.assertIn("--topdown_bridge_indices 9,10,11", viewer_command)
+            self.assertIn("--correspondence_data_url ../../advanced_correspondence_viewer_v1/correspondence_data.json", viewer_command)
             self.assertNotIn("/home/vox/calib_data", pnp_command + eval_command + viewer_command)
+
+    def test_dry_run_plans_correspondence_residual_exports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "calib_data"
+            output_root = root / "out"
+            write_session(data_root, "small_marker_inner8", INNER_CAMERAS)
+            write_session(data_root, "large_marker_inner8", INNER_CAMERAS)
+            write_session(data_root, "large_marker_bridge_all32", OUTER_CAMERAS + INNER_CAMERAS)
+            write_intrinsics(data_root)
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--data-root", str(data_root),
+                    "--output-root", str(output_root),
+                    "--dry-run",
+                    "--run-large-inner-init",
+                    "--run-small-fixed-rig-quality",
+                    "--run-large-bridge",
+                    "--run-reports",
+                    "--force",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
+            stages = {stage["name"]: stage for stage in summary["stages"]}
+            candidates = summary["final_yaml_candidates"]
+
+            expected = {
+                "export_large_inner_marker_correspondence_residuals":
+                    candidates["large_inner_marker_correspondence_residuals_tsv"],
+                "export_small_marker_correspondence_residuals":
+                    candidates["small_marker_correspondence_residuals_tsv"],
+                "export_inner_reprojection_correspondence_residuals":
+                    candidates["inner_reprojection_correspondence_residuals_tsv"],
+                "export_large_marker_bridge_correspondence_residuals":
+                    candidates["large_marker_bridge_correspondence_residuals_tsv"],
+            }
+            for stage_name, output_tsv in expected.items():
+                self.assertIn(stage_name, stages)
+                command = stages[stage_name]["planned_command"]
+                self.assertIn("export_calibration_correspondence_residuals.py", command)
+                self.assertIn("--output-tsv", command)
+                self.assertIn(output_tsv, command)
+                self.assertEqual(stages[stage_name]["outputs"]["correspondence_residuals_tsv"], output_tsv)
+
+            self.assertTrue(
+                candidates["large_inner_marker_correspondence_residuals_tsv"].endswith(
+                    "large_marker_inner8/fixed_intrinsic_large_marker_inner8_init_v1/correspondence_residuals.tsv"
+                )
+            )
+            self.assertTrue(
+                candidates["small_marker_correspondence_residuals_tsv"].endswith(
+                    "small_marker_inner8/fixed_intrinsic_small_grid4_quality_probe_v1/correspondence_residuals.tsv"
+                )
+            )
+            self.assertTrue(
+                candidates["inner_reprojection_correspondence_residuals_tsv"].endswith(
+                    "reports/inner_reprojection/correspondence_residuals.tsv"
+                )
+            )
+            self.assertTrue(
+                candidates["large_marker_bridge_correspondence_residuals_tsv"].endswith(
+                    "large_marker_bridge_all32/fixed_intrinsic_bridge_pnp_stride1_v1/correspondence_residuals.tsv"
+                )
+            )
 
     def test_dry_run_writes_manifest_and_final_report_timing_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:

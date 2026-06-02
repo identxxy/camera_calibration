@@ -13,8 +13,18 @@ import numpy as np
 
 try:
     from generate_threejs_rig_viewer import write_html as write_rig_viewer_html
+    from studio_canonical_frame import (
+        estimate_studio_canonical_frame,
+        transform_point_to_aligned,
+        transform_vector_to_aligned,
+    )
 except ModuleNotFoundError:
     from scripts.calib.generate_threejs_rig_viewer import write_html as write_rig_viewer_html
+    from scripts.calib.studio_canonical_frame import (
+        estimate_studio_canonical_frame,
+        transform_point_to_aligned,
+        transform_vector_to_aligned,
+    )
 
 
 T0_CALIB_ROOT = Path("/home/ubuntu/calib_data")
@@ -899,57 +909,94 @@ def metric_vector_from_three(vector):
 
 
 def estimate_outer_column_gravity_alignment(cameras):
-    centers = {}
+    centers_metric = {}
+    centers_display = {}
     for camera in cameras:
         label = str(camera.get("label") or "")
         if not re.match(r"^[1-8]-[123]$", label):
             continue
-        # 4-* cameras are top-down bridge cameras, not vertical side columns.
         if label.startswith("4-"):
             continue
-        if label not in centers:
-            centers[label] = np.asarray(camera.get("center"), dtype=np.float64)
+        if camera.get("center_metric") is not None:
+            centers_metric[label] = np.asarray(camera.get("center_metric"), dtype=np.float64)
+        elif label not in centers_display:
+            centers_display[label] = np.asarray(camera.get("center"), dtype=np.float64)
 
-    segment_vectors = []
-    column_vectors = []
-    used_columns = []
-    for side in range(1, 9):
-        if side == 4:
-            continue
-        labels = [f"{side}-{level}" for level in (1, 2, 3)]
-        if not all(label in centers for label in labels):
-            continue
-        c1, c2, c3 = (centers[label] for label in labels)
-        for start, end in ((c1, c2), (c2, c3)):
-            delta = end - start
-            norm = np.linalg.norm(delta)
-            if norm > 0 and np.all(np.isfinite(delta)):
-                segment_vectors.append(delta)
-        column_delta = c3 - c1
-        column_norm = np.linalg.norm(column_delta)
-        if column_norm > 0 and np.all(np.isfinite(column_delta)):
-            column_vectors.append(column_delta / column_norm)
-            used_columns.append(side)
-
-    if not segment_vectors:
+    frame = estimate_studio_canonical_frame(centers_metric or centers_display)
+    if frame is None:
         return None
-
-    mean = np.mean(np.asarray(segment_vectors, dtype=np.float64), axis=0)
-    norm = np.linalg.norm(mean)
-    if norm <= 0 or not np.all(np.isfinite(mean)):
-        return None
-    display_up = mean / norm
+    y_axis = np.asarray(frame["axes_source"]["y"], dtype=np.float64)
+    display_up = vector_to_three(y_axis) if centers_metric else [float(v) for v in y_axis]
     metric_up = metric_vector_from_three(display_up)
-    return {
-        "method": "outer_column_mean_displacement_excluding_4_topdown",
-        "source": "outer camera centers: average suffix direction *-1 -> *-2 -> *-3, excluding 4-* top-down cameras",
+    result = {
+        "method": frame["method"],
+        "source": frame["source"],
         "display_up_vector": [float(v) for v in display_up],
         "metric_up_vector": metric_up,
-        "segment_count": int(len(segment_vectors)),
-        "column_count": int(len(used_columns)),
-        "used_columns": [str(side) for side in used_columns],
-        "mean_column_display_vectors": [[float(v) for v in vector] for vector in column_vectors],
+        "column_count": int(frame["column_count"]),
+        "used_columns": frame["used_columns"],
+        "level_plane_count": int(frame["level_plane_count"]),
+        "origin_source": frame["origin_source"],
+        "axes_source": frame["axes_source"],
+        "negative_z_gap_direction_source": frame["negative_z_gap_direction_source"],
+        "negative_z_gap_labels": frame["negative_z_gap_labels"],
+        "origin_level2_labels": frame["origin_level2_labels"],
+        "level_plane_normals_source": frame["level_plane_normals_source"],
     }
+    return result
+
+
+def update_camera_display_geometry(camera):
+    center_metric = np.asarray(camera["center_metric"], dtype=np.float64)
+    basis_metric = camera["basis_metric"]
+    camera["center_metric"] = [float(v) for v in center_metric]
+    camera["basis_metric"] = {
+        axis: [float(v) for v in np.asarray(vector, dtype=np.float64)]
+        for axis, vector in basis_metric.items()
+    }
+    center = to_three(center_metric)
+    x_axis = vector_to_three(camera["basis_metric"]["x"])
+    y_axis = vector_to_three(camera["basis_metric"]["y"])
+    z_axis = vector_to_three(camera["basis_metric"]["z"])
+    camera["center"] = center
+    camera["basis"] = {
+        "x": x_axis,
+        "y": y_axis,
+        "z": z_axis,
+    }
+    camera["axes"] = {
+        "x": axis_line(center, x_axis, 0.16),
+        "y": axis_line(center, y_axis, 0.16),
+        "z": axis_line(center, z_axis, 0.16),
+    }
+
+
+def apply_canonical_frame_to_cameras(cameras):
+    label_to_center = {
+        str(camera.get("label")): np.asarray(camera.get("center_metric"), dtype=np.float64)
+        for camera in cameras
+        if camera.get("center_metric") is not None
+    }
+    frame = estimate_studio_canonical_frame(label_to_center)
+    if frame is None:
+        return None
+    for camera in cameras:
+        if camera.get("center_metric") is None or camera.get("basis_metric") is None:
+            continue
+        camera["center_metric_source"] = [float(v) for v in camera["center_metric"]]
+        camera["center_metric"] = [
+            float(v) for v in transform_point_to_aligned(camera["center_metric"], frame)
+        ]
+        camera["basis_metric_source"] = {
+            axis: [float(v) for v in vector]
+            for axis, vector in camera["basis_metric"].items()
+        }
+        camera["basis_metric"] = {
+            axis: [float(v) for v in transform_vector_to_aligned(vector, frame)]
+            for axis, vector in camera["basis_metric"].items()
+        }
+        update_camera_display_geometry(camera)
+    return frame
 
 
 def estimate_tower_up_from_pose_yaml(path):
@@ -1157,31 +1204,24 @@ def axis_line(center, basis_vector, length):
 
 def camera_from_rig_tr_camera(label, index, kind, source, rig_tr_camera, metrics):
     rotation = rig_tr_camera[:3, :3]
-    center = to_three(rig_tr_camera[:3, 3])
-    x_axis = vector_to_three(rotation[:, 0])
-    y_axis = vector_to_three(rotation[:, 1])
-    z_axis = vector_to_three(rotation[:, 2])
-    return {
+    camera = {
         "index": index,
         "label": label,
         "used": True,
         "kind": kind,
         "source": source,
-        "center": center,
-        "basis": {
-            "x": x_axis,
-            "y": y_axis,
-            "z": z_axis,
-        },
-        "axes": {
-            "x": axis_line(center, x_axis, 0.16),
-            "y": axis_line(center, y_axis, 0.16),
-            "z": axis_line(center, z_axis, 0.16),
+        "center_metric": [float(v) for v in rig_tr_camera[:3, 3]],
+        "basis_metric": {
+            "x": rotation[:, 0],
+            "y": rotation[:, 1],
+            "z": rotation[:, 2],
         },
         "metrics": metrics,
         "image_url": "",
         "image_texture_url": "",
     }
+    update_camera_display_geometry(camera)
+    return camera
 
 
 def bridge_center_from_camera_tr_rig(camera_tr_rig):
@@ -1540,6 +1580,7 @@ def build_viewer_data(args):
             ))
             next_index += 1
 
+    canonical_frame = apply_canonical_frame_to_cameras(cameras)
     dataset_coverage = attach_dataset_coverage(cameras, args)
     calibration_quality = attach_calibration_quality(cameras, args)
     first_frame_count, texture_metrics = attach_first_frame_images(cameras, args)
@@ -1570,6 +1611,7 @@ def build_viewer_data(args):
     metrics["viewer_default_up_alignment"] = viewer_up_alignment
     metrics["outer_column_gravity_alignment"] = outer_column_up_alignment
     metrics["tower_up_alignment"] = tower_up_alignment
+    metrics["canonical_coordinate_frame"] = canonical_frame
     if board_orientation_alignment.get("aggregate"):
         metrics["board_normal_p90_angle_from_horizontal_deg"] = (
             board_orientation_alignment["aggregate"].get("p90_angle_from_horizontal_deg")
@@ -1618,6 +1660,8 @@ def build_viewer_data(args):
         "viewer_options": {
             "enable_overlap": False,
             "single_canonical_viewer": True,
+            "correspondence_data_url": getattr(args, "correspondence_data_url", ""),
+            "canonical_coordinate_frame": canonical_frame,
             "default_reference_up_vector_three": (
                 viewer_up_alignment["display_up_vector"] if viewer_up_alignment else None
             ),
@@ -2464,6 +2508,7 @@ def main():
     parser.add_argument("--frustum_fill_opacity", type=float, default=0.11)
     parser.add_argument("--texture_max_width", type=int, default=640)
     parser.add_argument("--texture_jpeg_quality", type=int, default=82)
+    parser.add_argument("--correspondence_data_url", default="")
     parser.add_argument("--title", default="Combined Studio Rig Viewer: inner8 + outer24")
     args = parser.parse_args()
 

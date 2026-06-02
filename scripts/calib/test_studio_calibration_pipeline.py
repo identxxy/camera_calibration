@@ -53,11 +53,14 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             stages = {stage["name"]: stage for stage in summary["stages"]}
 
             self.assertEqual(summary["mode"], "dry_run")
-            self.assertEqual(summary["run_timing"]["stage_count"], 4)
+            self.assertEqual(summary["run_timing"]["stage_count"], 7)
             self.assertIn("outer_tower", summary["run_timing"]["stage_durations_s"])
             self.assertTrue(stages["outer_tower"]["requested"])
             self.assertTrue(stages["inner_bridge"]["requested"])
             self.assertTrue(stages["export_unified_cameras"]["requested"])
+            self.assertTrue(stages["export_large_marker_correspondences"]["requested"])
+            self.assertTrue(stages["export_small_marker_correspondences"]["requested"])
+            self.assertTrue(stages["generate_advanced_correspondence_viewer"]["requested"])
             self.assertTrue(stages["publish_current"]["requested"])
 
             outer_pose = (
@@ -83,6 +86,7 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             self.assertIn(f"--inner-prior {inner_prior}", bridge_command)
             self.assertIn(f"--outer-prior {outer_prior}", bridge_command)
             self.assertIn("--run-large-bridge", bridge_command)
+            self.assertIn("--run-small-fixed-rig-quality", bridge_command)
             self.assertIn("--run-reports", bridge_command)
 
             export_command = stages["export_unified_cameras"]["commands"][0]
@@ -92,6 +96,29 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             self.assertIn("--intrinsics-dir", export_command)
             self.assertEqual(summary["outputs"]["unified_camera_yaml"], str(unified_yaml))
             self.assertEqual(summary["report_urls"]["unified_camera_yaml"], unified_yaml.as_uri())
+
+            large_corr_command = stages["export_large_marker_correspondences"]["commands"][0]
+            self.assertIn("export_calibration_correspondence_residuals.py", large_corr_command)
+            self.assertIn("--dataset-name large", large_corr_command)
+            self.assertIn("--camera-index-offset 0", large_corr_command)
+            self.assertIn(f"--reference-studio32-yaml {unified_yaml}", large_corr_command)
+
+            small_corr_command = stages["export_small_marker_correspondences"]["commands"][0]
+            self.assertIn("export_calibration_correspondence_residuals.py", small_corr_command)
+            self.assertIn("--dataset-name small", small_corr_command)
+            self.assertIn("--camera-index-offset 24", small_corr_command)
+
+            advanced_command = stages["generate_advanced_correspondence_viewer"]["commands"][0]
+            self.assertIn("generate_studio_correspondence_viewer.py", advanced_command)
+            self.assertIn(f"--studio32-yaml {unified_yaml}", advanced_command)
+            self.assertIn("--outer-observation-residuals-tsv", advanced_command)
+            self.assertIn("--large-correspondence-tsv", advanced_command)
+            self.assertIn("--small-correspondence-tsv", advanced_command)
+            self.assertIn("--large-pnp-dir", advanced_command)
+            self.assertEqual(
+                summary["outputs"]["advanced_correspondence_viewer"],
+                str(output_root / "advanced_correspondence_viewer_v1" / "index.html"),
+            )
 
             publish_command = stages["publish_current"]["commands"][0]
             self.assertIn("--current-bridge-run-rel", publish_command)
@@ -130,6 +157,9 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             self.assertTrue(stages["outer_tower"]["requested"])
             self.assertFalse(stages["inner_bridge"]["requested"])
             self.assertFalse(stages["export_unified_cameras"]["requested"])
+            self.assertFalse(stages["export_large_marker_correspondences"]["requested"])
+            self.assertFalse(stages["export_small_marker_correspondences"]["requested"])
+            self.assertFalse(stages["generate_advanced_correspondence_viewer"]["requested"])
             self.assertFalse(stages["publish_current"]["requested"])
 
     def test_default_current_priors_are_planned(self):
