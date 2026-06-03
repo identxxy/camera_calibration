@@ -287,17 +287,17 @@ OpenCV convention 只用于每台相机自己的 camera frame。最终发布的 
 
 ```text
 origin: mean center of non-4 *-2 cameras
-+Y: vertical up direction, oriented from *-1 layer toward *-3 layer
--Z: points toward the missing 4-2 side gap, estimated from the 3-2 / 5-2 gap
++Y: vertical down direction, oriented from *-3 layer toward *-1 layer
++Z: forward direction, opposite the missing 4-2 side gap
+-Z: backward direction, toward the missing 4-2 side gap
 +X: right-handed completion, so X x Y = Z
 ```
 
 这里的 `*-1/*-2/*-3` 指同一侧钢架上的下/中/上三层 outer cameras。也就是说
-`+Y` 从 `*-1` 指向 `*-3`，若 `*-1` 是下层、`*-3` 是上层，则 `+Y` 是物理向上，
-与重力加速度方向相反。这和 OpenCV camera frame 的 `+y down` 不冲突，因为
-`camera_tr_studio_rig` 的左侧是 OpenCV camera frame，右侧是物理 studio/world
-frame。`4-1`, `4-2`, `4-3` 是 top-down cameras，不参与该 canonical frame 的
-三层平面估计。
+`+Y` 从 `*-3` 指向 `*-1`，若 `*-1` 是下层、`*-3` 是上层，则 `+Y` 是物理向下，
+与重力加速度方向一致。`4-2` 缺口方向定义为 backward，因此 `+Z forward` 是
+`4-2` 缺口的反方向，`-Z` 才指向该缺口。`4-1`, `4-2`, `4-3` 是 top-down
+cameras，不参与该 canonical frame 的三层平面估计。
 
 YAML 内部会保留 `coordinate_transform` block，包括：
 
@@ -309,6 +309,8 @@ origin_source
 aligned_from_source_rotation
 source_from_aligned_rotation
 axes_source
+axis_meaning
+positive_z_forward_direction_source
 origin_level2_labels
 negative_z_gap_labels
 ```
@@ -339,7 +341,9 @@ p_cam = R @ p_studio + t
 u = project_with_K_and_distortion(p_cam, intrinsics)
 ```
 
-这里 OpenCV 的 `+y down` 只发生在 `p_cam`，不会要求 `p_studio` 也必须 `+Y down`。
+最终 `studio_rig` 也使用 `+Y down`，但它仍然不是 OpenCV camera frame；OpenCV
+camera frame 的 `+z` 是每台相机的 optical forward，而 `studio_rig +Z` 是场地
+forward，即 `4-2` 缺口的反方向。
 
 #### 2. Camera Pose / Camera Center In Studio Frame
 
@@ -372,25 +376,24 @@ T_camera_target = T_camera_studio * inverse(T_target_studio)
 也就是说，坐标系转换要右乘到现有 `camera_tr_studio_rig` 的后面，因为
 `camera_tr_studio_rig` 是 `studio -> camera`。
 
-#### 4. Example: Right-Handed World With +Y Down
+#### 4. Convert From The Previous +Y-Up Studio Frame
 
-如果某个下游系统希望 world frame 也像 OpenCV 一样 `+Y down`，同时仍保持右手系，
-不能只翻转一个 `Y` 轴；单轴翻转会变成左手系。一个常见选择是绕 `X` 轴旋转
-`180 deg`：
+旧版 2026-06-03 之前的 `studio_rig_level2_gravity_aligned` 是 `+Y up`、
+`+Z forward`。新版 `studio_rig_y_down_z_forward` 等价于在旧版上做右手系两轴
+翻转：
 
 ```text
-p_target = diag(1, -1, -1) * p_studio
+p_new = diag(-1, -1, 1) * p_old
 
-target +X = studio +X
-target +Y = studio -Y  # vertical down
-target +Z = studio -Z  # toward the missing 4-2 side gap
+new +Y = old -Y  # vertical down
+new +Z = old +Z  # forward, opposite 4-2 gap
 ```
 
-然后按通用公式：
+如果要把旧版外参转换到新版 world frame：
 
 ```python
 T_target_studio = np.eye(4)
-T_target_studio[:3, :3] = np.diag([1.0, -1.0, -1.0])
+T_target_studio[:3, :3] = np.diag([-1.0, -1.0, 1.0])
 T_camera_target = T_camera_studio @ np.linalg.inv(T_target_studio)
 ```
 

@@ -64,8 +64,8 @@ def estimate_studio_canonical_frame(label_to_center):
 
     The published frame is:
       origin: average center of side-level *-2 cameras, excluding 4-2
-      +Y: average normal of the three side-camera layers, oriented *-1 -> *-3
-      -Z: level-2 gap direction between 3-2 and 5-2
+      +Y: vertical down, oriented *-3 -> *-1
+      +Z: forward, opposite the missing 4-2 side gap
       +X: right-handed completion, so X x Y = Z
     """
     centers = collect_outer_side_centers(label_to_center)
@@ -115,27 +115,27 @@ def estimate_studio_canonical_frame(label_to_center):
         })
     if not layer_normals:
         return None
-    y_axis = normalize(np.mean(np.asarray(layer_normals, dtype=np.float64), axis=0))
-    if y_axis is None:
+    y_up_axis = normalize(np.mean(np.asarray(layer_normals, dtype=np.float64), axis=0))
+    if y_up_axis is None:
         return None
-    if float(np.dot(y_axis, vertical_ref)) < 0:
-        y_axis = -y_axis
+    if float(np.dot(y_up_axis, vertical_ref)) < 0:
+        y_up_axis = -y_up_axis
 
     if (3, 2) not in centers or (5, 2) not in centers:
         return None
     gap_midpoint = 0.5 * (centers[(3, 2)] + centers[(5, 2)])
     gap_direction = gap_midpoint - origin
-    gap_direction = gap_direction - float(np.dot(gap_direction, y_axis)) * y_axis
+    gap_direction = gap_direction - float(np.dot(gap_direction, y_up_axis)) * y_up_axis
     gap_direction = normalize(gap_direction)
     if gap_direction is None:
         return None
 
-    z_seed = -gap_direction
-    x_axis = normalize(np.cross(y_axis, z_seed))
-    if x_axis is None:
-        return None
-    z_axis = normalize(np.cross(x_axis, y_axis))
+    z_axis = normalize(-gap_direction)
     if z_axis is None:
+        return None
+    y_axis = -y_up_axis
+    x_axis = normalize(np.cross(y_axis, z_axis))
+    if x_axis is None:
         return None
     axes = np.vstack([x_axis, y_axis, z_axis])
     if abs(float(np.linalg.det(axes)) - 1.0) > 1e-3:
@@ -145,11 +145,11 @@ def estimate_studio_canonical_frame(label_to_center):
         "method": "outer_level_plane_mean_normal_origin_level2_gap4",
         "source": (
             "outer non-4 side cameras: origin is mean of *-2 centers, +Y is "
-            "the mean normal of levels *-1/*-2/*-3 oriented *-1 -> *-3, "
-            "and -Z points toward the missing 4-2 side gap"
+            "vertical down oriented *-3 -> *-1, +Z is forward opposite the "
+            "missing 4-2 side gap, and -Z points toward that backward gap"
         ),
         "source_coordinate_frame": "studio_rig_current",
-        "aligned_coordinate_frame": "studio_rig_level2_gravity_aligned",
+        "aligned_coordinate_frame": "studio_rig_y_down_z_forward",
         "point_transform": "p_aligned = R_aligned_from_source @ (p_source - origin_source)",
         "origin_source": [float(v) for v in origin],
         "aligned_from_source_rotation": [[float(v) for v in row] for row in axes],
@@ -161,9 +161,10 @@ def estimate_studio_canonical_frame(label_to_center):
         },
         "axis_meaning": {
             "x": "right-handed horizontal right axis",
-            "y": "studio/world vertical up direction, oriented from *-1 toward *-3; opposite physical gravity acceleration; not camera-frame +y",
-            "z": "opposite of the missing 4-2 side gap; -Z points toward that gap",
+            "y": "studio/world vertical down direction, oriented from *-3 toward *-1; aligned with physical gravity acceleration",
+            "z": "studio/world forward direction, opposite the missing 4-2 side gap; -Z points toward that backward gap",
         },
+        "positive_z_forward_direction_source": [float(v) for v in z_axis],
         "negative_z_gap_direction_source": [float(v) for v in gap_direction],
         "negative_z_gap_labels": ["3-2", "5-2"],
         "level_plane_count": len(layer_entries),

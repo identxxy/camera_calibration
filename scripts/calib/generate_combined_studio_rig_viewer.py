@@ -925,8 +925,8 @@ def estimate_outer_column_gravity_alignment(cameras):
     frame = estimate_studio_canonical_frame(centers_metric or centers_display)
     if frame is None:
         return None
-    y_axis = np.asarray(frame["axes_source"]["y"], dtype=np.float64)
-    display_up = vector_to_three(y_axis) if centers_metric else [float(v) for v in y_axis]
+    physical_up = -np.asarray(frame["axes_source"]["y"], dtype=np.float64)
+    display_up = vector_to_three(physical_up) if centers_metric else [float(v) for v in physical_up]
     metric_up = metric_vector_from_three(display_up)
     result = {
         "method": frame["method"],

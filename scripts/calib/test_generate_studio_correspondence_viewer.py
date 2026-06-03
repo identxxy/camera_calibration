@@ -140,7 +140,7 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
                 "coordinate_transform:\n"
                 "  method: test_transform\n"
                 "  source_coordinate_frame: studio_rig_current\n"
-                "  aligned_coordinate_frame: studio_rig_level2_gravity_aligned\n"
+                "  aligned_coordinate_frame: studio_rig_y_down_z_forward\n"
                 "  point_transform: p_aligned = R_aligned_from_source @ (p_source - origin_source)\n"
                 "  origin_source: [1.0, 2.0, 3.0]\n"
                 "  aligned_from_source_rotation:\n"
@@ -235,7 +235,7 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
             self.assertEqual(data["outer"]["observations"][0]["world"], [0.5, 0.25, 0.0])
             self.assertEqual(
                 data["viewer_options"]["coordinate_transform"]["aligned_coordinate_frame"],
-                "studio_rig_level2_gravity_aligned",
+                "studio_rig_y_down_z_forward",
             )
             self.assertEqual(data["datasets"]["large"]["point_count"], 2)
             self.assertEqual(data["datasets"]["large"]["views"][0]["kind"], "per_view_pose_summary")

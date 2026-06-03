@@ -58,6 +58,22 @@ def pose_from_center(center):
 
 
 class ExportCombinedStudioExtrinsicsTest(unittest.TestCase):
+    def test_reads_inner_camera_ids_from_camera_labels_tsv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "camera_labels.tsv"
+            path.write_text(
+                "index\tlabel\tgroup\tcamera_id\tsource_yaml\tsource_index\n"
+                "0\t1-1\touter\t1-1\touter.yaml\t0\n"
+                "24\tinner0\tinner\t22463688\tinner.yaml\t24\n"
+                "25\tinner1\tinner\t22463690\tinner.yaml\t25\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                export_extrinsics.read_inner_camera_ids(path),
+                {0: "22463688", 1: "22463690"},
+            )
+
     def test_export_uses_outer_0_to_23_and_inner_24_to_31(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -149,6 +165,11 @@ class ExportCombinedStudioExtrinsicsTest(unittest.TestCase):
             self.assertIn("schema_version: 1", text)
             self.assertIn("camera_count: 32", text)
             self.assertIn("camera_tr_studio_rig:", text)
+            self.assertIn("T_camera_studio = camera_tr_studio_rig", text)
+            self.assertIn("p_camera = R @ p_studio + t", text)
+            self.assertIn("studio_rig +Y: physical vertical down", text)
+            self.assertIn("studio_rig +Z: physical forward", text)
+            self.assertIn("C_studio = -R.T @ t", text)
             self.assertIn("intrinsics:", text)
             self.assertIn("model: CentralOpenCVModel", text)
             self.assertIn("parameters: [4000", text)
@@ -194,7 +215,7 @@ class ExportCombinedStudioExtrinsicsTest(unittest.TestCase):
         origin = export_extrinsics.np.mean(export_extrinsics.np.asarray(level2), axis=0)
         self.assertLess(float(export_extrinsics.np.linalg.norm(origin)), 1e-9)
         for side in (1, 2, 3, 5, 6, 7, 8):
-            self.assertGreater(float(centers[f"{side}-3"][1] - centers[f"{side}-1"][1]), 0.0)
+            self.assertLess(float(centers[f"{side}-3"][1] - centers[f"{side}-1"][1]), 0.0)
         gap_mid = 0.5 * (centers["3-2"] + centers["5-2"])
         self.assertLess(float(gap_mid[2]), -0.1)
 

@@ -137,18 +137,18 @@ Final YAML extrinsics are `camera_tr_studio_rig`: rig/world points transform int
 OpenCV camera coordinates. OpenCV `+x right, +y down, +z forward` applies only to
 the camera frame. The published `studio_rig` is a physical studio/world frame,
 not cam0 and not an OpenCV camera frame. Its origin is the mean center of non-4
-`*-2` outer cameras, `+Y` is vertical up from `*-1` to `*-3` (opposite physical
-gravity acceleration), `-Z` points toward the missing `4-2` side gap, and `+X`
-completes a right-handed frame. The YAML also stores the `coordinate_transform`
-block that maps from the pre-alignment source rig.
+`*-2` outer cameras, `+Y` is vertical down from `*-3` to `*-1`, `+Z` is forward
+opposite the missing `4-2` side gap, `-Z` points toward that backward gap, and
+`+X` completes a right-handed frame. The YAML also stores the
+`coordinate_transform` block that maps from the pre-alignment source rig.
 
 When importing the YAML elsewhere, keep the transform direction explicit:
 `p_camera = T_camera_studio * p_studio`. For camera centers, invert it:
 `C_studio = -R_camera_studio.T @ t_camera_studio`. For a target world frame where
 `p_target = T_target_studio * p_studio`, use
-`T_camera_target = T_camera_studio * inverse(T_target_studio)`. If a right-handed
-target world wants `+Y` down, use a two-axis flip such as `diag(1, -1, -1)`,
-not a single-Y reflection.
+`T_camera_target = T_camera_studio * inverse(T_target_studio)`. The previous
+2026-06-03 `+Y up` studio frame converts to the current `+Y down, +Z forward`
+frame with `diag(-1, -1, 1)`, not a single-axis reflection.
 
 For detailed runbooks, start with:
 

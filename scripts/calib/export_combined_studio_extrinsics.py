@@ -98,19 +98,40 @@ def read_inner_camera_ids(manifest_path):
         return {}
     header = rows[0].split("\t")
     try:
-        index_col = header.index("camera_index")
         camera_id_col = header.index("camera_id")
     except ValueError:
+        return {}
+    index_col = header.index("camera_index") if "camera_index" in header else None
+    label_col = header.index("label") if "label" in header else None
+    output_index_col = header.index("index") if "index" in header else None
+    if index_col is None and label_col is None and output_index_col is None:
         return {}
     result = {}
     for row in rows[1:]:
         cols = row.split("\t")
-        if len(cols) <= max(index_col, camera_id_col):
+        required_cols = [camera_id_col]
+        if index_col is not None:
+            required_cols.append(index_col)
+        if label_col is not None:
+            required_cols.append(label_col)
+        if output_index_col is not None:
+            required_cols.append(output_index_col)
+        if len(cols) <= max(required_cols):
             continue
+        inner_index = None
         try:
-            result[int(cols[index_col])] = cols[camera_id_col]
+            if index_col is not None:
+                inner_index = int(cols[index_col])
+            elif label_col is not None and cols[label_col].startswith("inner"):
+                inner_index = int(cols[label_col].removeprefix("inner"))
+            elif output_index_col is not None:
+                output_index = int(cols[output_index_col])
+                if output_index >= 24:
+                    inner_index = output_index - 24
         except ValueError:
-            continue
+            inner_index = None
+        if inner_index is not None:
+            result[inner_index] = cols[camera_id_col]
     return result
 
 
@@ -140,6 +161,10 @@ def append_coordinate_transform_yaml(lines, coordinate_frame, indent=""):
     if not coordinate_frame:
         return
     lines.extend([
+        f"{indent}# coordinate_transform is only for provenance/debugging.",
+        f"{indent}# Final consumers should normally use camera_tr_studio_rig directly.",
+        f"{indent}# p_aligned = R_aligned_from_source @ (p_source - origin_source).",
+        f"{indent}# axes_source rows are the final +X/+Y/+Z axes expressed in source rig coordinates.",
         f"{indent}coordinate_transform:",
         f"{indent}  method: {yaml_quote(coordinate_frame['method'])}",
         f"{indent}  source_coordinate_frame: {yaml_quote(coordinate_frame['source_coordinate_frame'])}",
@@ -158,6 +183,12 @@ def append_coordinate_transform_yaml(lines, coordinate_frame, indent=""):
         f"{indent}    x: [{', '.join(format_float(v) for v in coordinate_frame['axes_source']['x'])}]",
         f"{indent}    y: [{', '.join(format_float(v) for v in coordinate_frame['axes_source']['y'])}]",
         f"{indent}    z: [{', '.join(format_float(v) for v in coordinate_frame['axes_source']['z'])}]",
+        f"{indent}  axis_meaning:",
+        f"{indent}    x: {yaml_quote(coordinate_frame['axis_meaning']['x'])}",
+        f"{indent}    y: {yaml_quote(coordinate_frame['axis_meaning']['y'])}",
+        f"{indent}    z: {yaml_quote(coordinate_frame['axis_meaning']['z'])}",
+        f"{indent}  positive_z_forward_direction_source: "
+        f"[{', '.join(format_float(v) for v in coordinate_frame['positive_z_forward_direction_source'])}]",
         f"{indent}  negative_z_gap_direction_source: "
         f"[{', '.join(format_float(v) for v in coordinate_frame['negative_z_gap_direction_source'])}]",
         f"{indent}  negative_z_gap_labels: "
@@ -169,14 +200,33 @@ def append_coordinate_transform_yaml(lines, coordinate_frame, indent=""):
     ])
 
 
+STUDIO_RIG_Y_DOWN_Z_FORWARD_COMMENTS = [
+    "# Coordinate convention, self-contained for downstream consumers:",
+    "# - This YAML is the source of truth for the final 32-camera studio calibration.",
+    "# - Do not assume cam0, COLMAP, or Three.js world axes; read the frame definition below.",
+    "# - Extrinsics are T_camera_studio = camera_tr_studio_rig, a world-to-camera transform.",
+    "# - For a studio point p_studio in meters: p_camera = R @ p_studio + t.",
+    "# - p_camera is in the OpenCV camera frame: +x image right, +y image down, +z optical forward.",
+    "# - The published studio_rig is a physical studio/world frame, not an OpenCV camera frame.",
+    "# - studio_rig origin: mean center of non-4 outer *-2 cameras.",
+    "# - studio_rig +Y: physical vertical down, oriented from the upper *-3 layer to the lower *-1 layer.",
+    "# - studio_rig +Z: physical forward, opposite the missing 4-2 side gap.",
+    "# - studio_rig -Z: backward, toward the missing 4-2 side gap.",
+    "# - studio_rig +X: right-handed completion, so +X cross +Y = +Z.",
+    "# - Outer labels are side-layer labels. 4-1/4-2/4-3 are top-down cameras and are excluded from frame fitting.",
+    "# - Camera center in studio frame: C_studio = -R.T @ t.",
+    "# - Camera-to-world pose is inverse(T_camera_studio).",
+    "# - If a target world uses p_target = T_target_studio @ p_studio, export extrinsics as",
+    "#   T_camera_target = T_camera_studio @ inverse(T_target_studio).",
+    "# - For +Y-up viewers such as many Three.js scenes, apply an explicit world-frame conversion;",
+    "#   never reinterpret this YAML as +Y-up in place.",
+]
+
+
 def write_pose_yaml(path, poses, coordinate_frame=None):
     lines = [
         "# Combined studio 24+8 relative extrinsics.",
-        "# Each pose is camera_tr_studio_rig: rig point -> camera coordinates, right-multiplication, meters.",
-        "# OpenCV camera frame convention: +x right, +y down, +z forward.",
-        "# Published rig frame is a physical studio/world frame, not an OpenCV camera frame.",
-        "# Rig origin is the non-4 *-2 center; rig +Y is vertical up (*-1 -> *-3), opposite gravity acceleration.",
-        "# Rig -Z points toward the missing 4-2 side gap.",
+        *STUDIO_RIG_Y_DOWN_Z_FORWARD_COMMENTS,
         f"pose_count: {len(poses)}",
     ]
     append_coordinate_transform_yaml(lines, coordinate_frame)
@@ -225,11 +275,7 @@ def write_unified_camera_yaml(path, poses, camera_rows, intrinsics_dir, coordina
     frame_name = coordinate_frame["aligned_coordinate_frame"] if coordinate_frame else "studio_rig_current"
     lines = [
         "# Unified studio 24+8 camera calibration.",
-        "# Extrinsics are camera_tr_studio_rig: rig point -> camera coordinates, meters.",
-        "# Camera frame convention is OpenCV: +x right, +y down, +z forward.",
-        "# Published rig frame is a physical studio/world frame, not an OpenCV camera frame.",
-        "# Rig origin is the non-4 *-2 center; rig +Y is vertical up (*-1 -> *-3), opposite gravity acceleration.",
-        "# Rig -Z points toward the missing 4-2 side gap.",
+        *STUDIO_RIG_Y_DOWN_Z_FORWARD_COMMENTS,
         "schema_version: 1",
         "artifact: studio_32_camera_calibration",
         f"coordinate_frame: {frame_name}",
