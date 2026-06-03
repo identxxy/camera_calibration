@@ -66,3 +66,95 @@ must be handled differently:
 These rules apply before feature extraction and bundle adjustment. The staging
 step should decide the active camera set per sequence, then normalize filenames
 only over the valid common frame set.
+
+## Studio 32-Camera Calibration Quick Start
+
+The current studio system has 32 synchronized cameras:
+
+- outer ring: 24 fixed cameras, indexed `1-1..8-3`;
+- inner ring: 8 movable cameras, indexed as `inner0..inner7` in inner-only
+  products and remapped to all32 indices `24..31` in bridge/unified products.
+
+Outer cameras `4-1`, `4-2`, and `4-3` are top-down view cameras. In the all32
+bridge convention they are outer indices `9`, `10`, and `11`. The other outer
+cameras are roughly horizontal inward-looking cameras. Use this as a hardware
+prior when judging visualizations, COLMAP bootstrap results, bridge consistency,
+and gravity/world-frame alignment.
+
+There are three capture/data modes:
+
+- `whole`: move the AprilTag tower through the studio. This is for outer-ring
+  calibration/refinement and broad inner/outer co-visibility. The production
+  tower path uses independent frame/face poses and does not depend on an ideal
+  octagonal-prism `face_width_m`.
+- `large_marker`: low-density A4 board, pattern `_0`. This is the production
+  inner/outer bridge board. It binds the refined inner rig to the outer studio
+  frame through all32 observations.
+- `small_marker`: high-density A4 board, pattern `_3`. This is the inner-ring
+  precision/quality board. Use it for inner8 intrinsics/extrinsics quality or
+  diagnostic refine, not as the outer bridge input.
+
+Canonical operator entrypoints on t0:
+
+```text
+Panel root:        http://192.168.2.0:9898/
+Report root:       http://192.168.2.0:9899/
+Production all32:  http://192.168.2.0:9898/?mode=run_studio_calibration_pipeline
+Whole only:        http://192.168.2.0:9898/?mode=operate_whole_outer_cage
+Large bridge:      http://192.168.2.0:9898/?mode=operate_large_marker_bridge
+Small inner:       http://192.168.2.0:9898/?mode=operate_small_marker_inner
+Full bootstrap:    http://192.168.2.0:9898/?mode=run_outer_tower_recalib_pipeline
+```
+
+Use `run_studio_calibration_pipeline` for normal reproducible all32 runs after
+QC/staging. Use `operate_whole_outer_cage` for production whole-only outer delta
+refine. `run_outer_tower_recalib_pipeline` is the diagnostic/full bootstrap
+entrypoint: it can re-enable COLMAP frame voting, RANSAC rig voting, and
+side-prior completion when the existing outer prior is missing or visibly wrong.
+
+Important calibration boundary:
+
+- The first usable outer coarse prior came from multi-frame COLMAP scene voting,
+  RANSAC rig voting, and side-prior completion.
+- Current production recalibration does not treat COLMAP/RANSAC as the final
+  calibration. It starts from a trusted prior and runs AprilTag frame-face /
+  tag-plane delta refinement plus large-marker bridge validation.
+- If the outer cage only moved slightly and camera order/topology is unchanged,
+  do not rerun COLMAP; refine from the trusted prior.
+- If the outer cage was physically reconfigured, labels changed, or the prior is
+  visually invalid, rerun the full bootstrap path to build a new coarse prior,
+  then still promote only a result that passes frame-face/bridge/residual gates.
+
+The current portable final product is a unified 32-camera YAML plus report/viewer:
+
+```text
+studio_32_cameras.yaml
+combined_studio_rig_viewer_v1/index.html
+advanced_correspondence_viewer_v1/index.html
+```
+
+Final YAML extrinsics are `camera_tr_studio_rig`: rig/world points transform into
+OpenCV camera coordinates. OpenCV `+x right, +y down, +z forward` applies only to
+the camera frame. The published `studio_rig` is a physical studio/world frame,
+not cam0 and not an OpenCV camera frame. Its origin is the mean center of non-4
+`*-2` outer cameras, `+Y` is vertical up from `*-1` to `*-3` (opposite physical
+gravity acceleration), `-Z` points toward the missing `4-2` side gap, and `+X`
+completes a right-handed frame. The YAML also stores the `coordinate_transform`
+block that maps from the pre-alignment source rig.
+
+When importing the YAML elsewhere, keep the transform direction explicit:
+`p_camera = T_camera_studio * p_studio`. For camera centers, invert it:
+`C_studio = -R_camera_studio.T @ t_camera_studio`. For a target world frame where
+`p_target = T_target_studio * p_studio`, use
+`T_camera_target = T_camera_studio * inverse(T_target_studio)`. If a right-handed
+target world wants `+Y` down, use a two-axis flip such as `diag(1, -1, -1)`,
+not a single-Y reflection.
+
+For detailed runbooks, start with:
+
+```text
+scripts/calib/README_studio_32_camera_system.md
+scripts/calib/README_studio_calibration_pipeline.md
+scripts/calib/README_calibration_panel.md
+studio/knowledge/studio_calibration_bootstrap_and_fast_recalib.md
+```

@@ -174,7 +174,9 @@ def write_pose_yaml(path, poses, coordinate_frame=None):
         "# Combined studio 24+8 relative extrinsics.",
         "# Each pose is camera_tr_studio_rig: rig point -> camera coordinates, right-multiplication, meters.",
         "# OpenCV camera frame convention: +x right, +y down, +z forward.",
-        "# Published rig frame: origin is the non-4 *-2 center, +Y is gravity, -Z points toward the missing 4-2 side gap.",
+        "# Published rig frame is a physical studio/world frame, not an OpenCV camera frame.",
+        "# Rig origin is the non-4 *-2 center; rig +Y is vertical up (*-1 -> *-3), opposite gravity acceleration.",
+        "# Rig -Z points toward the missing 4-2 side gap.",
         f"pose_count: {len(poses)}",
     ]
     append_coordinate_transform_yaml(lines, coordinate_frame)
@@ -225,7 +227,9 @@ def write_unified_camera_yaml(path, poses, camera_rows, intrinsics_dir, coordina
         "# Unified studio 24+8 camera calibration.",
         "# Extrinsics are camera_tr_studio_rig: rig point -> camera coordinates, meters.",
         "# Camera frame convention is OpenCV: +x right, +y down, +z forward.",
-        "# Published rig frame: origin is the non-4 *-2 center, +Y is gravity, -Z points toward the missing 4-2 side gap.",
+        "# Published rig frame is a physical studio/world frame, not an OpenCV camera frame.",
+        "# Rig origin is the non-4 *-2 center; rig +Y is vertical up (*-1 -> *-3), opposite gravity acceleration.",
+        "# Rig -Z points toward the missing 4-2 side gap.",
         "schema_version: 1",
         "artifact: studio_32_camera_calibration",
         f"coordinate_frame: {frame_name}",

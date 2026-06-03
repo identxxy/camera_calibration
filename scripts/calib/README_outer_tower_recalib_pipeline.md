@@ -140,7 +140,11 @@ prior, use one of:
 ```
 
 These modes are diagnostic or initialization modes when distortion is not also
-being optimized. The final outer result should use the full per-camera OpenCV5
+being optimized. The production wrapper keeps the default final selection on
+fixed-intrinsic frame-face refinement unless a non-fixed diagnostic result is
+explicitly promoted after passing the quality gates.
+
+The lower-level refine script also has a full per-camera OpenCV5 diagnostic
 mode:
 
 ```bash
@@ -149,7 +153,8 @@ mode:
 
 This refines per-camera `fx/fy/cx/cy/k1/k2/p1/p2/k3` together with camera SE(3)
 extrinsics, synchronized tower poses, and optionally the global tower face width.
-The update is strongly regularized by default with
+It is a controlled experiment path, not the normal production final result. The
+update is strongly regularized by default with
 `--tag-intrinsics-focal-sigma-frac 0.01`,
 `--tag-intrinsics-principal-sigma-px 8.0`, and
 `--tag-intrinsics-distortion-sigma 0.05`. The per-block step limits

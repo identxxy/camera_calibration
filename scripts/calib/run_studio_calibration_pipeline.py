@@ -194,7 +194,6 @@ def bridge_command(args, paths):
         "--large-frame-stride", str(args.large_frame_stride),
         "--small-frame-stride", str(args.small_frame_stride),
         "--run-large-bridge",
-        "--run-small-fixed-rig-quality",
         "--run-reports",
         "--run-tag", args.run_tag,
     ]

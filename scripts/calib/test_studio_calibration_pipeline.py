@@ -39,6 +39,7 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
                     "--outer-frame-face-prior-pose-yaml", str(outer_delta_prior),
                     "--outer-frame-face-intrinsics-dir", str(outer_intrinsics_prior),
                     "--whole-data-report", str(whole_data_report),
+                    "--run-small-quality",
                     "--dry-run",
                     "--publish-current",
                 ],
@@ -191,6 +192,7 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             self.assertIn("recalib_20260531_193215_v2_outer_wide50", outer_command)
             self.assertIn("final_inner8_calibration_v1", bridge_command)
             self.assertIn("colmap_outer24_firstframe_colmap404_v3", bridge_command)
+            self.assertNotIn("--run-small-fixed-rig-quality", bridge_command)
 
 
 if __name__ == "__main__":

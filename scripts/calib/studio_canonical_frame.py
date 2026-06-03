@@ -161,7 +161,7 @@ def estimate_studio_canonical_frame(label_to_center):
         },
         "axis_meaning": {
             "x": "right-handed horizontal right axis",
-            "y": "gravity direction, oriented from *-1 toward *-3",
+            "y": "studio/world vertical up direction, oriented from *-1 toward *-3; opposite physical gravity acceleration; not camera-frame +y",
             "z": "opposite of the missing 4-2 side gap; -Z points toward that gap",
         },
         "negative_z_gap_direction_source": [float(v) for v in gap_direction],

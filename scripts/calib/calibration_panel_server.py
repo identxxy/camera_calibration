@@ -185,9 +185,9 @@ MODE_DEFINITIONS = {
             },
             {"name": "sample_count", "label": "COLMAP sample count", "type": "number", "default": 32},
             {"name": "colmap_jobs", "label": "COLMAP frame jobs", "type": "number", "default": 4},
-            {"name": "run_colmap_vote", "label": "Run COLMAP vote", "type": "checkbox", "default": True},
-            {"name": "run_side_prior", "label": "Run side prior", "type": "checkbox", "default": True},
-            {"name": "run_tag_refine", "label": "Run tag refine", "type": "checkbox", "default": True},
+            {"name": "run_colmap_vote", "label": "Run COLMAP vote", "type": "checkbox", "default": False},
+            {"name": "run_side_prior", "label": "Run side prior", "type": "checkbox", "default": False},
+            {"name": "run_tag_refine", "label": "Run tag refine", "type": "checkbox", "default": False},
             {"name": "run_frame_face_refine", "label": "Run frame-face refine", "type": "checkbox", "default": True},
             {"name": "frame_face_refine_preset", "label": "Frame-face preset", "type": "text", "default": "wide50_then_gate6"},
             {
@@ -203,7 +203,7 @@ MODE_DEFINITIONS = {
                 "default": DEFAULT_CURRENT_OUTER_INTRINSICS_DIR,
             },
             {"name": "run_quality", "label": "Run quality report", "type": "checkbox", "default": True},
-            {"name": "run_viewer", "label": "Run viewer", "type": "checkbox", "default": True},
+            {"name": "run_viewer", "label": "Run viewer", "type": "checkbox", "default": False},
             {"name": "run_reports", "label": "Run final reports", "type": "checkbox", "default": True},
             {
                 "name": "force_pipeline_outputs",

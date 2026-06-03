@@ -16,6 +16,19 @@ import calibration_panel_server as panel  # noqa: E402
 
 
 class CalibrationPanelServerTest(unittest.TestCase):
+    def test_whole_operation_form_defaults_match_production_builder(self):
+        params = {
+            param["name"]: param.get("default")
+            for param in panel.MODE_DEFINITIONS["operate_whole_outer_cage"]["params"]
+        }
+
+        self.assertFalse(params["run_colmap_vote"])
+        self.assertFalse(params["run_side_prior"])
+        self.assertFalse(params["run_tag_refine"])
+        self.assertTrue(params["run_frame_face_refine"])
+        self.assertFalse(params["run_viewer"])
+        self.assertTrue(params["run_reports"])
+
     def test_rejects_unknown_run_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

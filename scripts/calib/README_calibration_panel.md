@@ -87,6 +87,8 @@ Production pipeline entrypoint:
 
 Per-operation and diagnostic entrypoints:
 
+- Production whole outer cage panel:
+  `http://192.168.2.0:9898/?mode=operate_whole_outer_cage`
 - Fast inner/bridge final report:
   `http://192.168.2.0:9899/calib_2026_05_26_jpg_v3/recalib_pipelines/fast_inner_bridge/latest/final_report/index.html`
 - Fast inner/bridge summary:
@@ -97,7 +99,7 @@ Per-operation and diagnostic entrypoints:
   `http://192.168.2.0:9899/calib_2026_05_26_jpg_v3/recalib_pipelines/outer_tower/latest/final_report/index.html`
 - Outer tower summary:
   `http://192.168.2.0:9899/calib_2026_05_26_jpg_v3/recalib_pipelines/outer_tower/latest/summary.json`
-- Outer tower panel:
+- Diagnostic/full outer tower panel:
   `http://192.168.2.0:9898/?mode=run_outer_tower_recalib_pipeline`
 
 Existing rough/debug pages remain discoverable under the folded diagnostics
@@ -142,15 +144,20 @@ not be interpreted as final outer calibration results.
   BA/refinement is a follow-up stage rather than part of this panel run. Bridge
   PnP uses full-frame stride 1 by default because stride 2 disconnected the
   current all32 bridge graph from camera0.
+- `operate_whole_outer_cage`: calls
+  `scripts/calib/run_outer_tower_recalib_pipeline.py` through the production
+  operation alias. Its browser form defaults match the current production whole
+  operation: frame-face refine with preset `wide50_then_gate6`, quality/final
+  reports enabled, and COLMAP vote, side-prior, old tag-refine, and per-stage
+  viewer disabled unless explicitly requested by the operator.
 - `run_outer_tower_recalib_pipeline`: calls
   `scripts/calib/run_outer_tower_recalib_pipeline.py`. It writes to
   `/home/ubuntu/calib_data/studio_calibration_runs/latest_outer_tower`
   by default and passes `--dry-run` unless the operator disables that field.
-  The current operation default for whole data is `--run-frame-face-refine`
-  with `--frame-face-refine-preset wide50_then_gate6`, using full-resolution raw
-  AprilTag corners plus the published gate6 prior/intrinsics. COLMAP vote,
-  side-prior, and old tag-refine stages remain available as diagnostics, but
-  they are not the default production whole operation.
+  This mode remains a diagnostic/full bootstrap entrypoint: its browser form
+  exposes and defaults to the older COLMAP vote, side-prior, tag-refine, and
+  viewer stages so an operator can deliberately rerun the bootstrap family.
+  Use `operate_whole_outer_cage` for the current production whole operation.
   The panel exposes `tag_intrinsics_refine_mode` for diagnostic outer
   intrinsic+extrinsic joint probes (`fixed`, `shared_fxfy`,
   `per_camera_fxfy`, `per_camera_fxfycxcy`). The default remains `fixed`;

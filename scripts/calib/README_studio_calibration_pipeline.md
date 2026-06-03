@@ -6,6 +6,13 @@ Last updated: 2026-06-01
 capture data 的 Operation 入口、今晚回归测试的 stage 顺序、当前 integration
 wrapper 覆盖范围，以及最终 32-camera YAML artifact 的发布位置。
 
+如果需要先理解硬件布局、外圈 / 内圈职责、AprilTag tower、large / small
+marker 的语义，以及本仓库相对原始 calibration tool 的改造范围，先读：
+
+```text
+scripts/calib/README_studio_32_camera_system.md
+```
+
 ## Current Canonical Artifact
 
 当前正式 machine-readable 32-camera YAML:
@@ -148,6 +155,7 @@ python3 scripts/calib/run_studio_calibration_pipeline.py \
   --whole-data-root /home/ubuntu/calib_data/calib_2026_05_31_v3 \
   --inner-data-root /home/ubuntu/calib_data/calib_2026_05_31_v3 \
   --run-tag regression_20260531 \
+  --run-small-quality \
   --dry-run \
   --publish-current
 ```
@@ -170,12 +178,15 @@ python3 scripts/calib/run_studio_calibration_pipeline.py \
 --run-large-inner-init
 ```
 
-wrapper 内部 stage 名称固定为：
+wrapper 内部 stage 名称固定为 7 项：
 
 1. `outer_tower`
 2. `inner_bridge`
 3. `export_unified_cameras`
-4. `publish_current`，仅 `--publish-current` 且 bridge 被请求时执行
+4. `export_large_marker_correspondences`
+5. `export_small_marker_correspondences`
+6. `generate_advanced_correspondence_viewer`
+7. `publish_current`，仅 `--publish-current` 且 bridge 被请求时执行
 
 默认输出：
 
@@ -193,6 +204,9 @@ outer_tower/frame_face_refine_wide50_then_gate6/camera_tr_rig_delta_refined.yaml
 outer_tower/frame_face_refine_wide50_then_gate6/intrinsics_refined/
 inner_bridge/final_report/index.html
 inner_bridge/combined_studio_rig_viewer_v1/index.html
+marker_correspondences/large_marker_correspondences.tsv
+marker_correspondences/small_marker_correspondences.tsv
+advanced_correspondence_viewer_v1/index.html
 calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml
 ```
 
@@ -271,6 +285,7 @@ not as a final high-confidence production baseline.
 - outer active/prior-only camera list、accepted-output median/p90 residual
 - bridge metric gate 状态和 top-down anchor residual
 - small-marker fixed-rig quality 状态
+- large/small correspondence TSV summary 和 advanced correspondence viewer path
 - unified YAML path、SHA256、backup path
 - 是否更新 `current_calibration`
 

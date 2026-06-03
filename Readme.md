@@ -1,6 +1,7 @@
 ## Accurate geometric camera calibration ##
 
 * [Overview](#overview)
+* [Studio 32-camera calibration extension](#studio-32-camera-calibration-extension)
 * [About](#about)
 * [Building](#building)
 * [How to use](#how-to-use)
@@ -43,6 +44,57 @@ The requirements on the camera are:
 For depth estimation and live feature detection, a CUDA-capable graphics card is required.
 
 The application has been tested on Ubuntu Linux only.
+
+
+
+## Studio 32-camera calibration extension ##
+
+This fork also contains a studio-scale calibration system built on top of the
+original calibration application. The target setup is a 32-camera hand-object
+interaction studio with:
+
+* an outer fixed ring of 24 cameras mounted on the studio cage,
+* an inner near-field ring of 8 cameras around the tabletop workspace,
+* an 8-face AprilTag tower for outer-ring calibration,
+* two A4 calibration-board patterns for inner calibration and inner/outer
+  bridging.
+
+The detailed system overview is documented in:
+
+```text
+scripts/calib/README_studio_32_camera_system.md
+```
+
+In short, the original tool remains responsible for native calibration-board
+feature extraction, camera models, bundle adjustment, and calibration reports.
+This fork adds:
+
+* a native AprilTag tower detector and sparse tower dataset tools for the fixed
+  outer 24-camera ring,
+* distributed Windows-side tower QC and t0 staging for large synchronized
+  captures,
+* outer-ring refine from AprilTag tower observations without relying on an ideal
+  octagonal-prism `face_width_m`,
+* a low-density A4 board workflow (`large_marker`, pattern `_0`) for bridging
+  the outer ring, top-down cameras, and the movable inner ring,
+* a high-density A4 board workflow (`small_marker`, pattern `_3`) for inner
+  8-camera calibration and fixed-rig quality checks,
+* reproducible t0 pipeline wrappers, HTML reports, panel entry points, unified
+  3D rig viewers, and a final `studio_32_cameras.yaml` artifact.
+
+The three studio capture types have separate meanings:
+
+```text
+whole        -> AprilTag tower, mainly for outer 24-camera QC/refine
+large_marker -> low-density A4 board, mainly for inner-to-outer bridge
+small_marker -> high-density A4 board, mainly for inner 8-camera calibration
+```
+
+For the operational runbook, see:
+
+```text
+scripts/calib/README_studio_calibration_pipeline.md
+```
 
 
 
@@ -311,7 +363,17 @@ path is currently implemented for batch image folders, not the live GUI.
 The bundled `face_width_m` is `0.24`, based on the measured physical octagon
 face width. This differs from the 0.18 m occupied width of two 8 cm tags with
 one 2 cm gap; `face_width_m` controls the tower apothem and therefore the
-relative placement of the 8 faces.
+relative placement of the 8 faces when this rigid tower YAML is used directly
+as a metric 3D object.
+
+For the studio production outer-ring recalibration, the Python pipeline does not
+depend on the exact octagonal-prism `face_width_m`. It uses the verified tag
+size, tag spacing, face ID ranges, and corner ordering to build stable tag-corner
+correspondences, then estimates an independent pose for each observed
+frame-face. This avoids injecting manufacturing error from the physical tower
+seams into the final outer-ring bundle adjustment. See
+`scripts/calib/README_studio_32_camera_system.md` for the studio-specific
+modeling choice.
 
 After extraction, run calibration with `--dataset_files` as in the next section.
 
