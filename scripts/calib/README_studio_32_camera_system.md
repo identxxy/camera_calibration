@@ -203,25 +203,29 @@ top-down anchors 4-1, 4-2, 4-3: outer indices 9, 10, 11
 
 ## Three Data Types And Their Responsibilities
 
-每次完整 studio 标定围绕三类 capture：
+完整 studio 标定围绕四类 capture，其中 `outer_large_marker` 是外圈内参刷新，
+日常 inner move recalib 通常不需要重采：
 
 ```text
-whole        AprilTag tower moving through the studio
-large_marker low-density A4 board moving over tabletop/workspace
-small_marker high-density A4 board moving over tabletop/workspace
+outer_large_marker low-density A4 board captured by outer W3/W4 cameras
+whole              AprilTag tower moving through the studio
+large_marker       low-density A4 board moving over tabletop/workspace
+small_marker       high-density A4 board moving over tabletop/workspace
 ```
 
-推荐理解为三条 operation，而不是一个 monolithic command 的三个开关：
+推荐理解为几条 operation，而不是一个 monolithic command 的几个开关：
 
 ```text
-whole        -> outer tower QC / outer extrinsic refine
-large_marker -> inner-to-outer bridge / top-down camera binding
-small_marker -> inner8 calibration or fixed-rig quality probe
+outer_large_marker -> outer24 intrinsic initialization / refresh
+whole              -> outer tower QC / outer extrinsic refine
+large_marker       -> inner-to-outer bridge / top-down camera binding
+small_marker       -> inner8 calibration or fixed-rig quality probe
 ```
 
 最终统一 32-camera artifact 来自这些结果的组合：
 
 ```text
+outer intrinsics from outer_large_marker or trusted prior
 outer prior/refine from whole
 inner intrinsics/extrinsics from small_marker or trusted prior
 inner-to-outer bridge from large_marker
@@ -241,6 +245,9 @@ inner-to-outer bridge from large_marker
   - 复用内参。
   - 用 `large_marker` 更新 inner-to-outer bridge。
   - 用 `small_marker` 做 inner fixed-rig quality probe。
+- Outer lens/focus/resolution changed:
+  - 用 `outer_large_marker` 重新估计 outer24 intrinsics。
+  - 后续 `whole` refine / `large_marker` bridge 使用新的 outer intrinsics。
 - Inner lens/focus/resolution changed:
   - 用 `small_marker` 重新标 inner intrinsics / distortion。
   - 再用 `large_marker` bridge 到 outer frame。
@@ -287,15 +294,15 @@ OpenCV convention 只用于每台相机自己的 camera frame。最终发布的 
 
 ```text
 origin: mean center of non-4 *-2 cameras
-+Y: vertical down direction, oriented from *-3 layer toward *-1 layer
++Y: vertical down direction, oriented from *-1 layer toward *-3 layer
 +Z: forward direction, opposite the missing 4-2 side gap
 -Z: backward direction, toward the missing 4-2 side gap
 +X: right-handed completion, so X x Y = Z
 ```
 
-这里的 `*-1/*-2/*-3` 指同一侧钢架上的下/中/上三层 outer cameras。也就是说
-`+Y` 从 `*-3` 指向 `*-1`，若 `*-1` 是下层、`*-3` 是上层，则 `+Y` 是物理向下，
-与重力加速度方向一致。`4-2` 缺口方向定义为 backward，因此 `+Z forward` 是
+这里的 `*-1/*-2/*-3` 指同一侧钢架上的上/中/下三层 outer cameras。也就是说
+`+Y` 从上层 `*-1` 指向下层 `*-3`，与物理向下/重力加速度方向一致。
+`4-2` 缺口方向定义为 backward，因此 `+Z forward` 是
 `4-2` 缺口的反方向，`-Z` 才指向该缺口。`4-1`, `4-2`, `4-3` 是 top-down
 cameras，不参与该 canonical frame 的三层平面估计。
 

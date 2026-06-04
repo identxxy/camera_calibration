@@ -222,6 +222,102 @@ class DistributedAprilTagQualityFilterTest(unittest.TestCase):
             self.assertEqual(summary["selection"]["min_tags"], 4)
             self.assertEqual(summary["selected_passing_camera_count_histogram"], {"2": 1})
 
+    def test_aggregate_passing_images_mode_stages_only_passing_camera_images(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src_root = root / "source"
+            worker = root / "worker_w4"
+            out = root / "passing_only"
+            time_id = "T0"
+            cameras = ["1-1", "1-2"]
+
+            manifest_rows = []
+            metric_rows = []
+            tag_counts = {
+                ("1-1", 0): 4,
+                ("1-1", 1): 2,
+                ("1-1", 2): 5,
+                ("1-2", 0): 0,
+                ("1-2", 1): 6,
+                ("1-2", 2): 0,
+            }
+            for index, camera_id in enumerate(cameras):
+                src_dir = src_root / "w4_D/output/calib/outer_large_marker" / time_id / camera_id
+                src_dir.mkdir(parents=True)
+                for frame_id in range(3):
+                    filename = f"{camera_id}_{frame_id:04d}.jpg"
+                    (src_dir / filename).write_text(f"{camera_id} {frame_id}\n", encoding="utf-8")
+                    metric_rows.append({
+                        "worker_id": "w4",
+                        "time": time_id,
+                        "camera_id": camera_id,
+                        "frame_id": frame_id,
+                        "filename": filename,
+                        "image_path": str(src_dir / filename),
+                        "decode_ok": "1",
+                        "tag_count": tag_counts[(camera_id, frame_id)],
+                        "corner_count": tag_counts[(camera_id, frame_id)] * 4,
+                    })
+                manifest_rows.append({
+                    "camera_index": index,
+                    "stage_name": f"cam{index:02d}_w4_{camera_id}",
+                    "machine": "w4_D",
+                    "camera_id": camera_id,
+                    "source_dir": str(src_dir),
+                    "frame_count": 3,
+                })
+
+            worker.mkdir()
+            base_manifest = root / "manifest.tsv"
+            write_tsv(
+                base_manifest,
+                manifest_rows,
+                ["camera_index", "stage_name", "machine", "camera_id", "source_dir", "frame_count"],
+            )
+            write_tsv(
+                worker / "per_image_metrics.tsv",
+                metric_rows,
+                [
+                    "worker_id", "time", "camera_id", "frame_id", "filename",
+                    "image_path", "decode_ok", "tag_count", "corner_count",
+                ],
+            )
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "aggregate",
+                    "--worker-output", str(worker),
+                    "--base-manifest", str(base_manifest),
+                    "--output-dir", str(out),
+                    "--time", time_id,
+                    "--marker", "outer_large_marker",
+                    "--min-tags", "4",
+                    "--min-cameras-per-frame", "1",
+                    "--stage-mode", "passing-images",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            filtered_manifest = read_tsv(out / "manifest.tsv")
+            self.assertEqual([row["frame_count"] for row in filtered_manifest], ["2", "1"])
+            image_dirs = (out / "image_directories.txt").read_text(encoding="utf-8").strip().split(",")
+            linked_text = [
+                [path.resolve().read_text(encoding="utf-8") for path in sorted(Path(image_dir).iterdir())]
+                for image_dir in image_dirs
+            ]
+            self.assertEqual(linked_text, [["1-1 0\n", "1-1 2\n"], ["1-2 1\n"]])
+            selected_images = read_tsv(out / "selected_images.tsv")
+            self.assertEqual(len(selected_images), 3)
+            summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["selection"]["stage_mode"], "passing-images")
+            self.assertEqual(summary["passing_image_count"], 3)
+
     def test_dry_run_detect_lists_camera_time_without_cv2(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

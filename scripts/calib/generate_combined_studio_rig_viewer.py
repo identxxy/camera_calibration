@@ -70,6 +70,10 @@ DEFAULT_INNER_REPROJECTION_METRICS_TSV = (
     CURRENT_INNER_BRIDGE_ROOT / "reports/inner_reprojection/"
     "camera_metrics.tsv"
 )
+DEFAULT_INNER_INTRINSIC_METRICS_TSV = (
+    CURRENT_INNER_BRIDGE_ROOT / "reports/inner8_intrinsic_feature_coverage_small_marker/"
+    "camera_metrics.tsv"
+)
 DEFAULT_INNER_INTRINSICS_DIR = (
     CURRENT_INNER_BRIDGE_ROOT / "planned_inputs/bridge_all32_fixed_intrinsics"
 )
@@ -79,6 +83,7 @@ DEFAULT_OUTER_REPROJECTION_TSV = (
 DEFAULT_OUTER_INTRINSICS_DIR = (
     CURRENT_OUTER_FRAME_FACE_ROOT / "intrinsics_refined"
 )
+DEFAULT_OUTER_INTRINSIC_METRICS_TSV = Path("")
 DEFAULT_LARGE_MARKER_BOARD_POSE_YAML = (
     CURRENT_INNER_BRIDGE_ROOT / "large_marker_inner8/"
     "fixed_intrinsic_large_marker_inner8_init_v1/rig_tr_global.yaml"
@@ -702,6 +707,81 @@ def load_outer_quality_by_label(residuals_tsv, intrinsics_tsv=None, intrinsics_d
         item.update({key: value for key, value in intrinsics.get(label, {}).items() if value is not None and value != ""})
         quality[label] = item
     return quality
+
+
+def load_inner_intrinsic_residuals_by_label(metrics_tsv):
+    residuals = {}
+    for row in read_tsv(metrics_tsv):
+        index = to_int(row.get("camera_index"), -1)
+        if not 0 <= index <= 7:
+            continue
+        label = f"inner{index}"
+        residuals[label] = {
+            "source": "inner_small_marker_intrinsic_report",
+            "stage": "inner intrinsic calibration",
+            "observation_count": to_int(row.get("residual_count")),
+            "residual_count": to_int(row.get("residual_count")),
+            "frame_count": to_int(row.get("frame_count")),
+            "median_error_px": finite_or_none(row.get("median_error_px")),
+            "p90_error_px": finite_or_none(row.get("p90_error_px")),
+            "max_error_px": finite_or_none(row.get("max_error_px")),
+        }
+    return residuals
+
+
+def load_outer_intrinsic_residuals_by_label(metrics_tsv):
+    residuals = {}
+    for row in read_tsv(metrics_tsv):
+        label = str(row.get("user_id") or row.get("camera_id") or row.get("camera_label") or "").strip()
+        if not label:
+            index = to_int(row.get("camera_index"), -1)
+            if 0 <= index < len(OUTER_CAMERA_LABELS):
+                label = OUTER_CAMERA_LABELS[index]
+        if not label:
+            continue
+        residuals[label] = {
+            "source": "outer_large_marker_intrinsic_report",
+            "stage": "outer intrinsic calibration",
+            "observation_count": to_int(row.get("residual_count"), to_int(row.get("usable_points"))),
+            "residual_count": to_int(row.get("residual_count"), to_int(row.get("usable_points"))),
+            "usable_views": to_int(row.get("usable_views")),
+            "usable_points": to_int(row.get("usable_points")),
+            "median_error_px": finite_or_none(row.get("median_error_px")),
+            "p90_error_px": finite_or_none(row.get("p90_error_px")),
+            "max_error_px": finite_or_none(row.get("max_error_px")),
+        }
+    return residuals
+
+
+def attach_intrinsic_residuals(cameras, args):
+    inner = load_inner_intrinsic_residuals_by_label(getattr(args, "inner_intrinsic_metrics_tsv", None))
+    outer = load_outer_intrinsic_residuals_by_label(getattr(args, "outer_intrinsic_metrics_tsv", None))
+    def source_path(value):
+        if not value:
+            return ""
+        path = Path(value)
+        if not path.is_file():
+            return ""
+        return str(path.resolve())
+
+    missing = {
+        "source": "missing",
+        "stage": "not available",
+        "observation_count": None,
+        "median_error_px": None,
+        "p90_error_px": None,
+        "max_error_px": None,
+    }
+    for camera in cameras:
+        label = str(camera.get("label") or "")
+        item = inner.get(label) if label.startswith("inner") else outer.get(label)
+        camera["intrinsic_residual"] = item or dict(missing)
+    return {
+        "inner_source": source_path(getattr(args, "inner_intrinsic_metrics_tsv", None)),
+        "outer_source": source_path(getattr(args, "outer_intrinsic_metrics_tsv", None)),
+        "inner_camera_count": sum(1 for camera in cameras if str(camera.get("label", "")).startswith("inner") and camera["intrinsic_residual"].get("source") != "missing"),
+        "outer_camera_count": sum(1 for camera in cameras if not str(camera.get("label", "")).startswith("inner") and camera["intrinsic_residual"].get("source") != "missing"),
+    }
 
 
 def intrinsic_image_size(item):
@@ -1583,6 +1663,7 @@ def build_viewer_data(args):
     canonical_frame = apply_canonical_frame_to_cameras(cameras)
     dataset_coverage = attach_dataset_coverage(cameras, args)
     calibration_quality = attach_calibration_quality(cameras, args)
+    intrinsic_residuals = attach_intrinsic_residuals(cameras, args)
     first_frame_count, texture_metrics = attach_first_frame_images(cameras, args)
     bounds = compute_bounds([camera["center"] for camera in cameras])
     if aligned_outer_bridge_pose_ready:
@@ -1608,6 +1689,7 @@ def build_viewer_data(args):
     board_orientation_alignment = estimate_board_orientation_alignment(args, viewer_up_alignment)
     metrics["calibration_quality"] = calibration_quality
     metrics["intrinsic_sanity"] = calibration_quality.get("intrinsic_sanity", {})
+    metrics["intrinsic_residuals"] = intrinsic_residuals
     metrics["viewer_default_up_alignment"] = viewer_up_alignment
     metrics["outer_column_gravity_alignment"] = outer_column_up_alignment
     metrics["tower_up_alignment"] = tower_up_alignment
@@ -1726,14 +1808,20 @@ def patch_combined_viewer_html(path):
     )
     text = replace_required(
         text,
+        "    <h2 class=\"section-title\">Camera Intrinsics / Final Residuals</h2>",
+        "    <h2 class=\"section-title\">Camera Intrinsic Residuals / Dataset Residuals</h2>",
+        "camera table title",
+    )
+    text = replace_required(
+        text,
         "          <tr><th>Cam</th><th>Set</th><th>Coverage</th><th>Raw obs</th><th>Solve obs</th><th>Median px</th><th>P90 px</th><th>Max px</th><th>fx</th><th>fy</th><th>Decision</th></tr>",
-        "          <tr><th>Cam</th><th>Set</th><th>Coverage</th><th>Raw obs</th><th>Solve obs</th><th>Median px</th><th>P90 px</th><th>Max px</th><th>fx</th><th>fy</th><th>cx</th><th>cy</th><th>Intrinsics</th><th>Decision</th></tr>",
+        "          <tr><th>Cam</th><th>Set</th><th>Coverage</th><th>Raw obs</th><th>Intrinsic obs</th><th>Intrinsic med px</th><th>Intrinsic p90 px</th><th>Dataset obs</th><th>Dataset med px</th><th>Dataset p90 px</th><th>fx</th><th>fy</th><th>cx</th><th>cy</th><th>Intrinsics</th><th>Dataset source</th></tr>",
         "camera table intrinsic columns",
     )
     text = replace_required(
         text,
         "      min-width: 760px;",
-        "      min-width: 1140px;",
+        "      min-width: 1420px;",
         "camera table minimum width",
     )
     text = replace_required(
@@ -1781,6 +1869,54 @@ def patch_combined_viewer_html(path):
     )
     text = replace_required(
         text,
+        """function displayResidualQuality(cam) {
+  const q = calibrationQuality(cam);
+  const c = coverageForCamera(cam);
+  if ((coverageMode === "large_marker" || coverageMode === "small_marker") && c.active !== false) {
+    return {
+      source: coverageMode + "_pnp",
+      decision: c.status || c.quality || coverageMode,
+      observation_count: c.total_inliers ?? c.observation_count ?? null,
+      median_error_px: c.median_view_error_px ?? null,
+      p90_error_px: null,
+      max_error_px: null,
+    };
+  }
+  return q;
+}
+""",
+        """function displayResidualQuality(cam) {
+  const q = calibrationQuality(cam);
+  const c = coverageForCamera(cam);
+  if ((coverageMode === "large_marker" || coverageMode === "small_marker") && c.active !== false) {
+    return {
+      source: coverageMode + "_pnp",
+      decision: c.status || c.quality || coverageMode,
+      observation_count: c.total_inliers ?? c.observation_count ?? null,
+      median_error_px: c.median_view_error_px ?? null,
+      p90_error_px: null,
+      max_error_px: null,
+    };
+  }
+  return q;
+}
+
+function intrinsicResidualQuality(cam) {
+  return cam.intrinsic_residual || {
+    source: "missing",
+    stage: "not available",
+    observation_count: null,
+    residual_count: null,
+    median_error_px: null,
+    p90_error_px: null,
+    max_error_px: null,
+  };
+}
+""",
+        "intrinsic residual quality helper",
+    )
+    text = replace_required(
+        text,
         """function buildTable() {
   const body = document.getElementById("camera-table");
   body.innerHTML = "";
@@ -1825,6 +1961,7 @@ function buildTable() {
     const c = coverageForCamera(cam);
     const q = calibrationQuality(cam);
     const residual = displayResidualQuality(cam);
+    const intrinsicResidual = intrinsicResidualQuality(cam);
     const status = q.intrinsics_status || "missing";
     const statusClass = intrinsicStatusClass(status);
     const flags = Array.isArray(q.intrinsics_flags) ? q.intrinsics_flags : [];
@@ -1835,10 +1972,12 @@ function buildTable() {
       + "<td>" + cameraCategory(cam).replace("outer_final", "outer") + "</td>"
       + "<td>" + (c.active === false ? "inactive" : "active") + "</td>"
       + "<td>" + fmt(c.observation_count, 0) + "</td>"
+      + "<td>" + fmt(intrinsicResidual.observation_count ?? intrinsicResidual.residual_count, 0) + "</td>"
+      + "<td>" + fmt(intrinsicResidual.median_error_px, 3) + "</td>"
+      + "<td>" + fmt(intrinsicResidual.p90_error_px, 3) + "</td>"
       + "<td>" + fmt(residual.observation_count ?? residual.residual_count, 0) + "</td>"
       + "<td>" + fmt(residual.median_error_px, 3) + "</td>"
       + "<td>" + fmt(residual.p90_error_px, 3) + "</td>"
-      + "<td>" + fmt(residual.max_error_px, 3) + "</td>"
       + "<td>" + fmt(q.fx, 1) + "</td>"
       + "<td>" + fmt(q.fy, 1) + "</td>"
       + "<td>" + fmt(q.cx, 1) + "</td>"
@@ -1868,6 +2007,39 @@ function buildTable() {
         "  }\n"
         "}",
         "summary intrinsic sanity metric",
+    )
+    text = replace_required(
+        text,
+        "  const q = calibrationQuality(cam);\n"
+        "  const residual = displayResidualQuality(cam);\n"
+        "  const coverageLabel = ((RIG_DATA.dataset_coverage || {}).modes || {})[coverageMode] || {label: coverageMode};",
+        "  const q = calibrationQuality(cam);\n"
+        "  const residual = displayResidualQuality(cam);\n"
+        "  const intrinsicResidual = intrinsicResidualQuality(cam);\n"
+        "  const coverageLabel = ((RIG_DATA.dataset_coverage || {}).modes || {})[coverageMode] || {label: coverageMode};",
+        "selected camera intrinsic residual variable",
+    )
+    text = replace_required(
+        text,
+        "    + \"raw coverage obs: \" + fmt(c.observation_count, 0) + \"<br>\"\n"
+        "    + \"final residual: \"\n"
+        "    + fmt(residual.median_error_px, 3) + \" med, \"\n"
+        "    + fmt(residual.p90_error_px, 3) + \" p90, \"\n"
+        "    + fmt(residual.max_error_px, 3) + \" max px; \"\n"
+        "    + fmt(residual.observation_count ?? residual.residual_count, 0) + \" accepted obs<br>\"",
+        "    + \"raw coverage obs: \" + fmt(c.observation_count, 0) + \"<br>\"\n"
+        "    + \"intrinsic residual: \"\n"
+        "    + fmt(intrinsicResidual.median_error_px, 3) + \" med, \"\n"
+        "    + fmt(intrinsicResidual.p90_error_px, 3) + \" p90, \"\n"
+        "    + fmt(intrinsicResidual.max_error_px, 3) + \" max px; \"\n"
+        "    + fmt(intrinsicResidual.observation_count ?? intrinsicResidual.residual_count, 0) + \" obs; \"\n"
+        "    + (intrinsicResidual.stage || intrinsicResidual.source || \"-\") + \"<br>\"\n"
+        "    + \"dataset/extrinsic residual: \"\n"
+        "    + fmt(residual.median_error_px, 3) + \" med, \"\n"
+        "    + fmt(residual.p90_error_px, 3) + \" p90, \"\n"
+        "    + fmt(residual.max_error_px, 3) + \" max px; \"\n"
+        "    + fmt(residual.observation_count ?? residual.residual_count, 0) + \" accepted obs<br>\"",
+        "selected camera split residual detail",
     )
     text = replace_required(
         text,
@@ -2476,6 +2648,7 @@ def main():
     parser.add_argument("--large_marker_pnp_summary_tsv", type=Path, default=DEFAULT_LARGE_MARKER_PNP_SUMMARY_TSV)
     parser.add_argument("--small_marker_pnp_summary_tsv", type=Path, default=DEFAULT_SMALL_MARKER_PNP_SUMMARY_TSV)
     parser.add_argument("--inner_reprojection_metrics_tsv", type=Path, default=DEFAULT_INNER_REPROJECTION_METRICS_TSV)
+    parser.add_argument("--inner_intrinsic_metrics_tsv", type=Path, default=DEFAULT_INNER_INTRINSIC_METRICS_TSV)
     parser.add_argument("--inner_intrinsics_dir", type=Path, default=DEFAULT_INNER_INTRINSICS_DIR)
     parser.add_argument(
         "--inner_intrinsics_index_offset",
@@ -2487,6 +2660,7 @@ def main():
         ),
     )
     parser.add_argument("--outer_reprojection_tsv", type=Path, default=DEFAULT_OUTER_REPROJECTION_TSV)
+    parser.add_argument("--outer_intrinsic_metrics_tsv", type=Path, default=DEFAULT_OUTER_INTRINSIC_METRICS_TSV)
     parser.add_argument("--outer_intrinsics_tsv", type=Path, default=None)
     parser.add_argument("--outer_intrinsics_dir", type=Path, default=DEFAULT_OUTER_INTRINSICS_DIR)
     parser.add_argument("--large_marker_board_pose_yaml", type=Path, default=DEFAULT_LARGE_MARKER_BOARD_POSE_YAML)

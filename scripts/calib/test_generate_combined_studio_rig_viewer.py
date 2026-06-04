@@ -38,7 +38,7 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
                 cameras.append({
                     "label": f"{side}-{level}",
                     "kind": "outer_final",
-                    "center": center,
+                    "center_metric": center,
                 })
 
         alignment = combined_viewer.estimate_outer_column_gravity_alignment(cameras)
@@ -108,6 +108,37 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
             self.assertEqual(summary["intrinsic_sanity"]["warning_camera_count"], 1)
             self.assertEqual(summary["intrinsic_sanity"]["ok_camera_count"], 2)
 
+    def test_attach_intrinsic_residuals_keeps_intrinsic_metrics_separate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inner_metrics = root / "inner_metrics.tsv"
+            inner_metrics.write_text(
+                "camera_index\tresidual_count\tframe_count\tmedian_error_px\tp90_error_px\tmax_error_px\n"
+                "0\t240\t20\t0.05\t0.14\t0.40\n",
+                encoding="utf-8",
+            )
+            outer_metrics = root / "outer_metrics.tsv"
+            outer_metrics.write_text(
+                "user_id\tresidual_count\tusable_views\tusable_points\tmedian_error_px\tp90_error_px\tmax_error_px\n"
+                "1-1\t1200\t80\t1200\t0.07\t0.19\t0.60\n",
+                encoding="utf-8",
+            )
+            args = type("Args", (), {
+                "inner_intrinsic_metrics_tsv": inner_metrics,
+                "outer_intrinsic_metrics_tsv": outer_metrics,
+            })()
+            cameras = [{"label": "inner0"}, {"label": "1-1"}, {"label": "2-1"}]
+
+            summary = combined_viewer.attach_intrinsic_residuals(cameras, args)
+
+            self.assertEqual(summary["inner_camera_count"], 1)
+            self.assertEqual(summary["outer_camera_count"], 1)
+            self.assertEqual(cameras[0]["intrinsic_residual"]["stage"], "inner intrinsic calibration")
+            self.assertAlmostEqual(cameras[0]["intrinsic_residual"]["median_error_px"], 0.05)
+            self.assertEqual(cameras[1]["intrinsic_residual"]["stage"], "outer intrinsic calibration")
+            self.assertAlmostEqual(cameras[1]["intrinsic_residual"]["p90_error_px"], 0.19)
+            self.assertEqual(cameras[2]["intrinsic_residual"]["source"], "missing")
+
     def test_write_html_adds_intrinsic_sanity_table_columns_and_metric(self):
         with tempfile.TemporaryDirectory() as tmp:
             output_html = Path(tmp) / "viewer/index.html"
@@ -160,14 +191,20 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
             combined_viewer.write_html(output_html, data)
 
             html = output_html.read_text(encoding="utf-8")
-            self.assertIn("<th>cx</th><th>cy</th><th>Intrinsics</th>", html)
+            self.assertIn("Camera Intrinsic Residuals / Dataset Residuals", html)
+            self.assertIn("<th>Intrinsic obs</th><th>Intrinsic med px</th><th>Intrinsic p90 px</th>", html)
+            self.assertIn("<th>Dataset obs</th><th>Dataset med px</th><th>Dataset p90 px</th>", html)
+            self.assertIn("<th>fx</th><th>fy</th><th>cx</th><th>cy</th><th>Intrinsics</th>", html)
             self.assertIn("metric-intrinsics-sanity", html)
             self.assertIn("intrinsics-status", html)
+            self.assertIn("function intrinsicResidualQuality(cam)", html)
+            self.assertIn("intrinsic residual:", html)
+            self.assertIn("dataset/extrinsic residual:", html)
             self.assertIn("function gravityAlignedAxis(localAxis)", html)
             self.assertIn("function horizontalRigForward()", html)
             self.assertIn("const gravityUp = WORLD_UP.clone();", html)
-            self.assertIn("const controlsUp = gravityUp.clone().negate();", html)
-            self.assertIn("multiplyScalar(-radius * 2.85 * zoom)", html)
+            self.assertIn("const controlsUp = gravityUp.clone();", html)
+            self.assertIn("multiplyScalar(radius * 2.85 * zoom)", html)
             self.assertIn("offset = rigForward.clone().multiplyScalar(radius * 2.65 * zoom);", html)
             self.assertIn("rebuildOrbitControlsForCurrentUp(true, controlsUp);", html)
             self.assertIn("Load Corr", html)

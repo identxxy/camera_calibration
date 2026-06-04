@@ -94,6 +94,43 @@ class CalibrateTowerIntrinsicsOpenCVTest(unittest.TestCase):
         self.assertEqual(result["usable_points"], 8)
         self.assertEqual(result["output_source"], "initial_guess")
 
+    def test_residual_rows_include_observed_projected_and_error(self):
+        class FakeCV2:
+            @staticmethod
+            def projectPoints(obj, rvec, tvec, camera_matrix, dist_coeffs):
+                points = np.asarray(
+                    [
+                        [[11.0, 22.0]],
+                        [[31.0, 42.0]],
+                    ],
+                    dtype=np.float32)
+                return points, None
+
+        views = [
+            {
+                "frame_index": 7,
+                "filename": "000007.jpg",
+                "object_points": np.zeros((2, 3), dtype=np.float32),
+                "image_points": np.asarray([[10.0, 20.0], [30.0, 40.0]], dtype=np.float32),
+            }
+        ]
+
+        rows = calib.residual_rows(
+            FakeCV2,
+            views,
+            [np.zeros((3, 1), dtype=np.float64)],
+            [np.zeros((3, 1), dtype=np.float64)],
+            np.eye(3, dtype=np.float64),
+            np.zeros((5, 1), dtype=np.float64))
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["frame_index"], 7)
+        self.assertEqual(rows[0]["filename"], "000007.jpg")
+        self.assertEqual(rows[0]["observed_x"], 10.0)
+        self.assertEqual(rows[0]["projected_y"], 22.0)
+        self.assertEqual(rows[0]["error_x"], 1.0)
+        self.assertEqual(rows[0]["error_y"], 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

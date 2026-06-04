@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 
 CALIBRATION_MODES = (
@@ -272,6 +273,35 @@ def residual_stats(cv2, object_points, image_points, rvecs, tvecs, camera_matrix
     }
 
 
+def residual_rows(cv2, views, rvecs, tvecs, camera_matrix, dist_coeffs):
+    rows = []
+    for view, rvec, tvec in zip(views, rvecs, tvecs):
+        object_points = np.asarray(view["object_points"], dtype=np.float32)
+        image_points = np.asarray(view["image_points"], dtype=np.float32).reshape(-1, 2)
+        projected, _ = cv2.projectPoints(
+            object_points,
+            rvec,
+            tvec,
+            camera_matrix,
+            dist_coeffs)
+        projected = projected.reshape(-1, 2)
+        for point_index, (observed, predicted) in enumerate(zip(image_points, projected)):
+            error = predicted - observed
+            rows.append({
+                "frame_index": int(view["frame_index"]),
+                "filename": view["filename"],
+                "point_index": int(point_index),
+                "observed_x": float(observed[0]),
+                "observed_y": float(observed[1]),
+                "projected_x": float(predicted[0]),
+                "projected_y": float(predicted[1]),
+                "error_x": float(error[0]),
+                "error_y": float(error[1]),
+                "error_px": float(np.linalg.norm(error)),
+            })
+    return rows
+
+
 def result_row(job, status, reason, intrinsic, output_source, metrics=None):
     width, height = job["image_size"]
     params = padded_params(intrinsic["params"])
@@ -417,7 +447,15 @@ def calibrate_camera_job(job):
     stats = residual_stats(cv2, object_points, image_points, rvecs, tvecs, camera_matrix, dist_coeffs)
     stats["rms"] = finite_float(rms)
     row = result_row(job, "solved", "", intrinsic, "opencv_calibration", stats)
-    return camera_result(job, intrinsic, row)
+    result = camera_result(job, intrinsic, row)
+    result["residual_rows"] = residual_rows(
+        cv2,
+        job["views"],
+        rvecs,
+        tvecs,
+        camera_matrix,
+        dist_coeffs)
+    return result
 
 
 def ensure_cv2_available():
@@ -443,6 +481,15 @@ def collect_initial_intrinsics(refine, args, manifest, image_sizes):
     return intrinsics, ["initial_guess"] * len(intrinsics)
 
 
+def known_points_from_points_yaml(path):
+    node = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    points = np.asarray(node["points"], dtype=np.float64).reshape((-1, 3))
+    result = {}
+    for item in node["feature_id_to_point_index"]:
+        result[int(item["feature_id"])] = points[int(item["point_index"])]
+    return result
+
+
 def format_tsv_value(value):
     if value is None:
         return ""
@@ -459,6 +506,26 @@ def write_summary_tsv(path, rows):
         writer.writeheader()
         for row in rows:
             writer.writerow({field: format_tsv_value(row.get(field)) for field in SUMMARY_FIELDS})
+
+
+def write_residuals_tsv(path, rows):
+    fields = [
+        "frame_index",
+        "filename",
+        "point_index",
+        "observed_x",
+        "observed_y",
+        "projected_x",
+        "projected_y",
+        "error_x",
+        "error_y",
+        "error_px",
+    ]
+    with Path(path).open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields, delimiter="\t", extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: format_tsv_value(row.get(field)) for field in fields})
 
 
 def json_safe(value):
@@ -516,6 +583,10 @@ def write_outputs(refine, output_dir, results, write_opencv_yaml):
             opencv_path = output_dir / f"opencv_intrinsics{row['camera_index']}_{label}.yaml"
             write_opencv_intrinsics_yaml(opencv_path, result["intrinsic"])
             row["opencv_intrinsics_yaml"] = str(opencv_path)
+        if result.get("residual_rows"):
+            write_residuals_tsv(
+                output_dir / f"residuals_camera{row['camera_index']}_{label}.tsv",
+                result["residual_rows"])
         rows.append(row)
     write_summary_tsv(output_dir / "intrinsics_summary.tsv", rows)
     return rows
@@ -525,6 +596,8 @@ def run(args):
     start = time.time()
     refine = load_refine_module()
     dataset = refine.read_dataset(args.dataset)
+    if args.points_yaml:
+        dataset["known_points"] = known_points_from_points_yaml(args.points_yaml)
     manifest = refine.read_manifest(args.manifest, dataset["camera_count"])
     initial_intrinsics, prior_sources = collect_initial_intrinsics(
         refine,
@@ -580,6 +653,15 @@ def build_arg_parser():
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--prior-intrinsics-dir", type=Path)
+    parser.add_argument(
+        "--points-yaml",
+        type=Path,
+        help=(
+            "Optional feature_id-to-3D point mapping exported by a fixed-rig state. "
+            "Use this for repo board datasets whose binary dataset does not carry "
+            "known 3D geometry in the tower-specific reader."
+        ),
+    )
     parser.add_argument(
         "--intrinsics-mode",
         choices=("central_opencv", "colmap_fixed"),

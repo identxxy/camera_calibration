@@ -215,7 +215,7 @@ class ExportCombinedStudioExtrinsicsTest(unittest.TestCase):
         origin = export_extrinsics.np.mean(export_extrinsics.np.asarray(level2), axis=0)
         self.assertLess(float(export_extrinsics.np.linalg.norm(origin)), 1e-9)
         for side in (1, 2, 3, 5, 6, 7, 8):
-            self.assertLess(float(centers[f"{side}-3"][1] - centers[f"{side}-1"][1]), 0.0)
+            self.assertGreater(float(centers[f"{side}-3"][1] - centers[f"{side}-1"][1]), 0.0)
         gap_mid = 0.5 * (centers["3-2"] + centers["5-2"])
         self.assertLess(float(gap_mid[2]), -0.1)
 

@@ -71,11 +71,18 @@ outer frame-face delta prior/intrinsics 使用 2026-05-31 fullres raw gate6
 数据，就进入哪一类处理入口；只有做 full regression 时才把多个入口串起来。
 
 ```text
-whole        -> http://192.168.2.0:9898/?mode=operate_whole_outer_cage
-large_marker -> http://192.168.2.0:9898/?mode=operate_large_marker_bridge
-small_marker -> http://192.168.2.0:9898/?mode=operate_small_marker_inner
+outer_large_marker -> W3/W4 distributed QC + passing-images staging
+whole              -> http://192.168.2.0:9898/?mode=operate_whole_outer_cage
+large_marker       -> http://192.168.2.0:9898/?mode=operate_large_marker_bridge
+small_marker       -> http://192.168.2.0:9898/?mode=operate_small_marker_inner
 ```
 
+- `outer_large_marker`: low-density board capture for fixed outer24 intrinsics.
+  Run W3/W4 local QC first, then aggregate on t0 with
+  `distributed_apriltag_quality_filter.py aggregate --stage-mode passing-images`
+  so only per-camera tag-positive images are staged for the expensive C++ board
+  detector. The resulting per-camera rough intrinsics are stored and reused by
+  the outer tower / bridge pipeline.
 - `whole`: AprilTag tower / whole-studio capture。产品目标是 fixed outer24 /
   studio cage 的 outer extrinsics refine 和 outer report。它主要约束水平向内看的
   outer cameras；`4-1`,`4-2`,`4-3` top-down cameras 通常要靠
@@ -91,9 +98,23 @@ small_marker -> http://192.168.2.0:9898/?mode=operate_small_marker_inner
 
 ## Full Regression Order
 
-2026-05-31 晚间回归测试按下面顺序执行。前两步是数据质量和 staging，后四步是
-solve/report/export。`run_studio_calibration_pipeline.py` 只覆盖第 3-6 步，所以
-不要跳过第 1-2 步直接宣称新数据可复现。
+Production-capable regression should run in this order. Data QC/staging and
+outer-intrinsic initialization are deliberately separate from the all32 solve;
+do not skip them and then claim the run is reproducible.
+
+0. Optional / infrequent `outer_large_marker` intrinsic refresh
+   - Needed when outer lens/focus/resolution changes, or when old outer
+     intrinsics are known bad. It is not required for routine inner-camera
+     movement recalib.
+   - Run Windows distributed QC on W3/W4 first.
+   - Aggregate on t0 with `--stage-mode passing-images`; this stages only
+     per-camera tag-positive images for per-camera intrinsic initialization.
+   - Run `parallel_extract_features.py --pattern-files
+     applications/camera_calibration/patterns/pattern_resolution_17x24_segments_16_apriltag_0.yaml`
+     on the passing-images staging, then
+     `calibrate_tower_intrinsics_opencv.py --points-yaml <large_marker points.yaml>`.
+   - Store the resulting per-camera `intrinsics*.yaml` directory and pass it to
+     `run_studio_calibration_pipeline.py --outer-frame-face-intrinsics-dir`.
 
 1. Distributed QC/filter for `whole`
    - 推荐 config:
@@ -252,22 +273,28 @@ http://192.168.2.0:9899/studio_calibration_runs/recalib_20260531_193215_v2_outer
 http://192.168.2.0:9899/studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50/index.html
 ```
 
-Outer tower accepted residuals for the current promoted fullres raw gate6 run are
-median/p90 `2.54 / 5.02 px` with `4884` accepted tag-corner observations and
-`21/24` cameras receiving SE(3) deltas. Remaining prior-only cameras are the
-top-down `4-1,4-2,4-3`, which are expected to come from the large-marker bridge.
+The 2026-06-04 run with outer intrinsics from `outer_large_marker` is the current
+reference:
 
-The large-marker bridge is connected but narrowly fails the strict metric gate:
-center residual p90 passes (`0.159 m`), vote count passes, but top-down anchor
-rotation residual p90 is `5.52 deg` against a `5 deg` threshold. Treat the
-current unified YAML as a usable candidate with a weak top-down bridge warning,
-not as a final high-confidence production baseline.
+```text
+/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260604_outer_large_intrinsics_v1
+http://192.168.2.0:9899/studio_calibration_runs/recalib_20260604_outer_large_intrinsics_v1/final_deliverables/index.html
+```
+
+Key metrics from that run:
+
+- outer24 intrinsic solve: `24/24` cameras, fx range `3628.51 - 3659.18 px`;
+- outer whole residual median/p90: `2.264 / 4.956 px`;
+- bridge metric gate: pass, top-down max center p90 `0.0339 m`, max rotation
+  p90 `1.569 deg`;
+- small-marker inner residual median/p90: `0.488 / 1.232 px`.
 
 ## Fast vs Full Recalib Policy
 
 - Fast recalib: lenses/resolution/distortion convention 不变，复用 inner/outer
   intrinsics。outer cage 未动时只跑 `large_marker` bridge 和 small-marker quality；
   outer cage 轻微变化时从 existing outer extrinsics 做 frame-face delta refine。
+  不需要重新采 `outer_large_marker`。
 - Full outer recalib: outer cage 被动过、塔重新采集并且旧 prior 视觉上不可信、
   或 topological/camera-order 发生变化时，才回到 `whole` 全流程。即便如此，
   COLMAP first-frame / multi-frame voting 和 RANSAC rig voting 也只是 bootstrap

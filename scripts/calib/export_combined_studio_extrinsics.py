@@ -209,7 +209,7 @@ STUDIO_RIG_Y_DOWN_Z_FORWARD_COMMENTS = [
     "# - p_camera is in the OpenCV camera frame: +x image right, +y image down, +z optical forward.",
     "# - The published studio_rig is a physical studio/world frame, not an OpenCV camera frame.",
     "# - studio_rig origin: mean center of non-4 outer *-2 cameras.",
-    "# - studio_rig +Y: physical vertical down, oriented from the upper *-3 layer to the lower *-1 layer.",
+    "# - studio_rig +Y: physical vertical down, oriented from the upper *-1 layer to the lower *-3 layer.",
     "# - studio_rig +Z: physical forward, opposite the missing 4-2 side gap.",
     "# - studio_rig -Z: backward, toward the missing 4-2 side gap.",
     "# - studio_rig +X: right-handed completion, so +X cross +Y = +Z.",

@@ -133,6 +133,26 @@ class OuterTowerRecalibPipelineTest(unittest.TestCase):
             self.assertEqual(summary["final"]["source"], "frame_face_refine_expected")
             self.assertEqual(summary["frame_face_refine"]["status"], "missing")
 
+            coverage_stage = stages["intrinsic_feature_coverage_report"]
+            coverage_command = coverage_stage["commands"][0]
+            self.assertTrue(coverage_stage["requested"])
+            self.assertIn("generate_intrinsic_feature_coverage_report.py", coverage_command)
+            self.assertIn(
+                f"--residuals-tsv {output_root / 'frame_face_refine_gate10/diagnostics/observation_residuals.tsv'}",
+                coverage_command,
+            )
+            self.assertIn(
+                f"--intrinsics-dir {output_root / 'frame_face_refine_gate10/intrinsics_refined'}",
+                coverage_command,
+            )
+            self.assertEqual(summary["intrinsic_feature_coverage"]["status"], "missing")
+            self.assertIn(
+                "intrinsic_feature_coverage_report/index.html",
+                summary["final"]["intrinsic_feature_coverage_index"],
+            )
+            final_html = (output_root / "final_report/index.html").read_text(encoding="utf-8")
+            self.assertIn("Intrinsic feature coverage report", final_html)
+
     def test_tag_intrinsics_refine_mode_is_planned_for_tag_refine(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

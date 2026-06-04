@@ -1351,6 +1351,88 @@ def write_filtered_dataset(args, output_dir, manifest_rows, by_camera_frame, sel
     return image_dirs, output_manifest, selected_rows, missing_sources
 
 
+def metric_passes(row, min_tags):
+    return row.get("decode_ok_bool") and row.get("tag_count_int", 0) >= min_tags
+
+
+def write_passing_image_dataset(args, output_dir, manifest_rows, chosen_metrics, time_ids):
+    image_dirs = []
+    output_manifest = []
+    selected_rows = []
+    missing_sources = []
+    images_root = output_dir / "images"
+    time_set = set(time_ids)
+    metrics_by_camera = {}
+    for row in chosen_metrics:
+        if row.get("time") not in time_set:
+            continue
+        if not metric_passes(row, args.min_tags):
+            continue
+        metrics_by_camera.setdefault(row.get("camera_id", ""), []).append(row)
+
+    for new_index, row in enumerate(manifest_rows):
+        camera_id = row.get("camera_id", row.get("user_id", ""))
+        stage_name = row.get("stage_name") or f"cam{new_index:02d}_{camera_id}"
+        dst_dir = images_root / stage_name
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        image_dirs.append(str(dst_dir))
+        original_source_dir = row.get("source_dir", "")
+        camera_metrics = sorted(
+            metrics_by_camera.get(camera_id, []),
+            key=lambda item: (
+                natural_key(item.get("time", "")),
+                frame_key(item.get("frame_id_text", item.get("frame_id", ""))),
+            ))
+        staged_count = 0
+        for metric in camera_metrics:
+            src = resolve_source(args, row, metric)
+            if not src:
+                missing_sources.append({
+                    "camera_id": camera_id,
+                    "time": metric.get("time", ""),
+                    "frame_id": metric.get("frame_id_text", metric.get("frame_id", "")),
+                    "filename": metric.get("filename", ""),
+                    "reason": "source_not_found",
+                    "candidates": ";".join(str(path) for path in source_candidates(args, row, metric)),
+                })
+                continue
+            dst = dst_dir / f"{staged_count:06d}{args.output_extension}"
+            link_image(src, dst, args.link_mode)
+            selected_rows.append({
+                "out_frame": staged_count,
+                "time": metric.get("time", ""),
+                "frame_id": metric.get("frame_id_text", metric.get("frame_id", "")),
+                "frame_key": frame_item_id({
+                    "time": metric.get("time", ""),
+                    "frame_id": metric.get("frame_id_text", metric.get("frame_id", "")),
+                }),
+                "camera_index": new_index,
+                "camera_id": camera_id,
+                "tag_count": metric.get("tag_count", ""),
+                "corner_count": metric.get("corner_count", ""),
+                "source": str(src),
+                "filtered_image": str(dst),
+            })
+            staged_count += 1
+        output_row = dict(row)
+        output_row["camera_index"] = new_index
+        output_row["stage_name"] = stage_name
+        output_row["source_dir"] = str(dst_dir)
+        output_row["frame_count"] = staged_count
+        output_row["original_camera_index"] = row.get("_original_camera_index", row.get("camera_index", new_index))
+        output_row["original_source_dir"] = original_source_dir
+        output_manifest.append(output_row)
+
+    if missing_sources and not args.allow_missing_source:
+        write_tsv(
+            output_dir / "missing_sources.tsv",
+            missing_sources,
+            sorted({key for row in missing_sources for key in row.keys()}))
+        raise SystemExit(
+            f"Missing {len(missing_sources)} source images. See {output_dir / 'missing_sources.tsv'}")
+    return image_dirs, output_manifest, selected_rows, missing_sources
+
+
 def chosen_metric_rows(by_camera_frame, camera_ids, time_ids):
     camera_set = set(camera_ids)
     time_set = set(time_ids)
@@ -1427,12 +1509,20 @@ def run_aggregate(args):
         raise SystemExit(
             f"No frames passed the aggregate gate. See {output_dir / 'frame_selection.tsv'}")
 
-    image_dirs, output_manifest, selected_image_rows, missing_sources = write_filtered_dataset(
-        args,
-        output_dir,
-        manifest_rows,
-        by_camera_frame,
-        selected_frames)
+    if args.stage_mode == "passing-images":
+        image_dirs, output_manifest, selected_image_rows, missing_sources = write_passing_image_dataset(
+            args,
+            output_dir,
+            manifest_rows,
+            chosen_metrics,
+            time_ids)
+    else:
+        image_dirs, output_manifest, selected_image_rows, missing_sources = write_filtered_dataset(
+            args,
+            output_dir,
+            manifest_rows,
+            by_camera_frame,
+            selected_frames)
 
     manifest_fields = [
         "camera_index", "stage_name", "machine", "camera_id", "source_dir",
@@ -1550,6 +1640,7 @@ def run_aggregate(args):
         "missing_base_manifest_cameras": missing_manifest_cameras,
         "missing_source_count": len(missing_sources),
         "selection": {
+            "stage_mode": args.stage_mode,
             "min_tags": args.min_tags,
             "min_cameras_per_frame": args.min_cameras_per_frame,
             "require_all_camera_metrics": not args.allow_missing_camera_metrics,
@@ -1567,9 +1658,11 @@ def run_aggregate(args):
             "index_html": str(output_dir / "index.html"),
         },
         "next_step_hint": (
-            "Use image_directories.txt with parallel_extract_features.py and "
-            "--apriltag-tower-config before pointing run_outer_tower_recalib_pipeline.py "
-            "at this filtered whole directory."
+            "Use image_directories.txt with parallel_extract_features.py. "
+            "For repo calibration-board data, pass --pattern-files. "
+            "For tower data, pass --apriltag-tower-config. "
+            "Use --stage-mode passing-images for per-camera intrinsic initialization, "
+            "and the default synchronized frame staging for multi-camera rig calibration."
         ),
     }
     (output_dir / "summary.json").write_text(
@@ -1582,7 +1675,9 @@ def run_aggregate(args):
         {
             "metrics": [
                 ("cameras", len(manifest_rows)),
+                ("stage mode", args.stage_mode),
                 ("selected frames", len(selected_frames)),
+                ("staged images", len(selected_image_rows)),
                 (f"images >= {args.min_tags} tags", len(passing_rows)),
                 ("candidate frames", len(frame_rows)),
             ],
@@ -1680,6 +1775,15 @@ def add_aggregate_parser(subparsers):
     parser.add_argument("--allow-empty", action="store_true")
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--stride", type=int, default=1)
+    parser.add_argument(
+        "--stage-mode",
+        choices=["frames", "passing-images"],
+        default="frames",
+        help=(
+            "frames keeps synchronized selected frames across all cameras. "
+            "passing-images stages only per-camera images that pass --min-tags; "
+            "use it for fast per-camera intrinsic initialization."
+        ))
     parser.add_argument("--link-mode", choices=["symlink", "hardlink", "copy"], default="symlink")
     parser.add_argument("--output-extension", default=".jpg")
     parser.add_argument("--overwrite", action="store_true")

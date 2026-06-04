@@ -81,10 +81,17 @@ cameras are roughly horizontal inward-looking cameras. Use this as a hardware
 prior when judging visualizations, COLMAP bootstrap results, bridge consistency,
 and gravity/world-frame alignment.
 
-There are three capture/data modes:
+There are four capture/data modes:
 
+- `outer_large_marker`: low-density A4 board, pattern `_0`, captured by W3/W4
+  outer cameras. This is the production way to initialize/refresh outer24
+  intrinsics. Run Windows distributed QC first, aggregate on t0 with
+  `distributed_apriltag_quality_filter.py aggregate --stage-mode passing-images`,
+  then run the repo C++ board detector and OpenCV per-camera intrinsic solve.
+  These intrinsics are relatively fixed and should normally be reused.
 - `whole`: move the AprilTag tower through the studio. This is for outer-ring
-  calibration/refinement and broad inner/outer co-visibility. The production
+  extrinsic refinement and broad inner/outer co-visibility. It should start
+  from trusted outer intrinsics and a trusted coarse outer rig. The production
   tower path uses independent frame/face poses and does not depend on an ideal
   octagonal-prism `face_width_m`.
 - `large_marker`: low-density A4 board, pattern `_0`. This is the production
@@ -137,10 +144,12 @@ Final YAML extrinsics are `camera_tr_studio_rig`: rig/world points transform int
 OpenCV camera coordinates. OpenCV `+x right, +y down, +z forward` applies only to
 the camera frame. The published `studio_rig` is a physical studio/world frame,
 not cam0 and not an OpenCV camera frame. Its origin is the mean center of non-4
-`*-2` outer cameras, `+Y` is vertical down from `*-3` to `*-1`, `+Z` is forward
+`*-2` outer cameras, `+Y` is vertical down from `*-1` to `*-3`, `+Z` is forward
 opposite the missing `4-2` side gap, `-Z` points toward that backward gap, and
 `+X` completes a right-handed frame. The YAML also stores the
 `coordinate_transform` block that maps from the pre-alignment source rig.
+For non-4 outer side columns, the physical layer order is `*-1` top, `*-2`
+middle, `*-3` bottom.
 
 When importing the YAML elsewhere, keep the transform direction explicit:
 `p_camera = T_camera_studio * p_studio`. For camera centers, invert it:

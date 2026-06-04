@@ -394,6 +394,7 @@ def build_paths(args):
         "pnp_consensus_dir": output_root / "pnp_pose_consensus",
         "tag_refine_dir": output_root / "tag_refine_robust",
         "residual_tail_dir": output_root / "residual_tail_report",
+        "intrinsic_feature_coverage_dir": output_root / "intrinsic_feature_coverage_report",
         "viewer_dir": output_root / "viewer",
         "quality_report_dir": output_root / "quality_report",
         "final_report_dir": output_root / "final_report",
@@ -655,6 +656,31 @@ def summarize_residual_tail(report_dir):
     }
 
 
+def summarize_intrinsic_feature_coverage(report_dir):
+    report_dir = Path(report_dir)
+    summary_path = report_dir / "summary.json"
+    index_html = report_dir / "index.html"
+    metrics_tsv = report_dir / "camera_metrics.tsv"
+    data = read_json(summary_path) or {}
+    summary = data.get("summary", {}) if isinstance(data, dict) else {}
+    cameras = data.get("cameras", []) if isinstance(data, dict) else []
+    plot_count = sum(1 for row in cameras if Path(row.get("plot_path", "")).is_file())
+    return {
+        "status": "present" if summary_path.is_file() and index_html.is_file() else "missing",
+        "index_html": str(index_html),
+        "index_html_exists": index_html.is_file(),
+        "index_url": report_url(index_html),
+        "summary_json": str(summary_path),
+        "summary_json_exists": summary_path.is_file(),
+        "metrics_tsv": str(metrics_tsv),
+        "metrics_tsv_exists": metrics_tsv.is_file(),
+        "source_type": summary.get("source_type", ""),
+        "source": summary.get("source", ""),
+        "camera_count": summary.get("camera_count", len(cameras)),
+        "plot_count": plot_count,
+    }
+
+
 def summarize_frame_face_refine(refine_dir):
     refine_dir = Path(refine_dir)
     summary_path = refine_dir / "summary.json"
@@ -781,6 +807,32 @@ def final_metrics_candidate(paths, final_source):
     metrics = paths["colmap_ransac_dir"] / "camera_ransac_summary.tsv"
     existing_metrics = paths["existing_ransac_dir"] / "camera_ransac_summary.tsv"
     return metrics if metrics.exists() else existing_metrics
+
+
+def final_observation_residuals_candidate(paths, final_source):
+    if final_source == "frame_face_refine_expected":
+        return paths["frame_face_refine_dir"] / "diagnostics" / "observation_residuals.tsv"
+    if final_source == "tag_refine_expected":
+        return paths["tag_refine_dir"] / "diagnostics" / "observation_residuals.tsv"
+    if "tag_refine" in final_source:
+        tag_residuals = paths["tag_refine_dir"] / "diagnostics" / "observation_residuals.tsv"
+        existing_tag_residuals = paths["existing_tag_dir"] / "diagnostics" / "observation_residuals.tsv"
+        return tag_residuals if tag_residuals.exists() else existing_tag_residuals
+    return Path("__missing_observation_residuals__.tsv")
+
+
+def final_intrinsics_dir_candidate(paths, final_source):
+    if final_source == "frame_face_refine_expected":
+        return paths["frame_face_refine_dir"] / "intrinsics_refined"
+    if final_source == "tag_refine_expected":
+        return paths["tag_refine_dir"] / "intrinsics_refined_accepted"
+    if "tag_refine" in final_source:
+        tag_intrinsics = paths["tag_refine_dir"] / "intrinsics_refined_accepted"
+        existing_tag_intrinsics = paths["existing_tag_dir"] / "intrinsics_refined_accepted"
+        return tag_intrinsics if tag_intrinsics.exists() else existing_tag_intrinsics
+    if "frame_face" in final_source:
+        return paths["frame_face_refine_dir"] / "intrinsics_refined"
+    return paths["previous_intrinsics_dir"]
 
 
 def prefer_existing_path(primary, fallback):
@@ -1024,6 +1076,8 @@ def build_stage_plan(args, paths):
 
     final_pose, final_source = final_pose_candidate(paths, args)
     final_metrics = final_metrics_candidate(paths, final_source)
+    final_observation_residuals = final_observation_residuals_candidate(paths, final_source)
+    final_intrinsics_dir = final_intrinsics_dir_candidate(paths, final_source)
     runs_root_for_viewer = (
         paths["colmap_frame_dir"]
         if run_colmap_vote
@@ -1062,6 +1116,19 @@ def build_stage_plan(args, paths):
         run_tag_refine
         or ((run_quality or args.run_reports) and not run_frame_face_refine)
         or (paths["tag_refine_dir"] / "diagnostics" / "camera_reprojection.tsv").is_file()
+    )
+    intrinsic_feature_coverage_cmd = make_command(
+        "generate_intrinsic_feature_coverage_report.py",
+        "--residuals-tsv", final_observation_residuals,
+        "--intrinsics-dir", final_intrinsics_dir,
+        "--output-dir", paths["intrinsic_feature_coverage_dir"],
+        "--title", "Outer Intrinsic Feature Coverage Report",
+    )
+    intrinsic_feature_coverage_requested = (
+        run_quality
+        or run_frame_face_refine
+        or run_tag_refine
+        or final_observation_residuals.is_file()
     )
 
     return [
@@ -1151,6 +1218,17 @@ def build_stage_plan(args, paths):
             "outputs": [
                 paths["residual_tail_dir"] / "residual_tail_summary.json",
                 paths["residual_tail_dir"] / "residual_tail_report.html",
+            ],
+        },
+        {
+            "name": "intrinsic_feature_coverage_report",
+            "requested": intrinsic_feature_coverage_requested,
+            "commands": [intrinsic_feature_coverage_cmd],
+            "inputs": [final_observation_residuals, final_intrinsics_dir],
+            "outputs": [
+                paths["intrinsic_feature_coverage_dir"] / "index.html",
+                paths["intrinsic_feature_coverage_dir"] / "summary.json",
+                paths["intrinsic_feature_coverage_dir"] / "camera_metrics.tsv",
             ],
         },
         {
@@ -1340,6 +1418,9 @@ def collect_summary(args, paths, stage_results, run_started_at="", run_finished_
         "tag_refine": tag_refine_summary,
         "frame_face_refine": summarize_frame_face_refine(paths["frame_face_refine_dir"]),
         "residual_tail": summarize_residual_tail(paths["residual_tail_dir"]),
+        "intrinsic_feature_coverage": summarize_intrinsic_feature_coverage(
+            paths["intrinsic_feature_coverage_dir"]
+        ),
         "final": {
             "pose_yaml": str(final_pose),
             "pose_yaml_exists": final_pose.is_file(),
@@ -1349,6 +1430,8 @@ def collect_summary(args, paths, stage_results, run_started_at="", run_finished_
             "viewer_index": str(viewer_index),
             "viewer_index_exists": viewer_index.is_file(),
             "viewer_url": report_url(viewer_index),
+            "intrinsic_feature_coverage_index": str(paths["intrinsic_feature_coverage_dir"] / "index.html"),
+            "intrinsic_feature_coverage_url": report_url(paths["intrinsic_feature_coverage_dir"] / "index.html"),
             "quality_report_index": str(paths["quality_report_dir"] / "index.html"),
             "quality_report_url": report_url(paths["quality_report_dir"] / "index.html"),
             "final_report_index": str(paths["final_report_dir"] / "index.html"),
@@ -1494,6 +1577,7 @@ def write_index(summary, path, report_kind="final"):
     tag = summary["tag_refine"]
     frame_face = summary.get("frame_face_refine", {})
     residual_tail = summary.get("residual_tail", {})
+    intrinsic_feature_coverage = summary.get("intrinsic_feature_coverage", {})
     bridge_override = summary.get("bridge_prior_override", {})
     bridge_override_rows = tag.get("bridge_prior_overrides", [])
     bridge_override_text = "; ".join(
@@ -1623,6 +1707,7 @@ def write_index(summary, path, report_kind="final"):
     <tr><th>Final source</th><td>{html.escape(final['source'])}</td></tr>
     <tr><th>Metrics TSV</th><td>{html_path(final['metrics_tsv'], final['metrics_tsv_exists'])}</td></tr>
     <tr><th>Viewer</th><td>{html_path(final['viewer_index'], final['viewer_index_exists'])}<br><code>{html.escape(final['viewer_url'])}</code></td></tr>
+    <tr><th>Intrinsic feature coverage report</th><td>{html_path(intrinsic_feature_coverage.get('index_html'), intrinsic_feature_coverage.get('index_html_exists'))}<br><code>{html.escape(intrinsic_feature_coverage.get('index_url', ''))}</code></td></tr>
     <tr><th>Residual-tail report</th><td>{html_path(residual_tail.get('report_html'), residual_tail.get('report_html_exists'))}<br><code>{html.escape(residual_tail.get('report_url', ''))}</code></td></tr>
     <tr><th>Summary JSON</th><td>{html_path(Path(summary['output_root']) / 'summary.json', True)}</td></tr>
   </table>
@@ -1641,6 +1726,7 @@ def write_index(summary, path, report_kind="final"):
     <tr><th>Post-refine observation trim</th><td>enabled {html.escape(str(post_gate.get('enabled', False)))}; threshold {fmt(post_gate.get('threshold_px'))} px; kept {fmt(post_gate.get('kept_observations'))}/{fmt(post_gate.get('input_observations'))}; removed {fmt(post_gate.get('removed_observations'))}; second-pass iterations {fmt(post_gate.get('outer_iterations'))}</td></tr>
     <tr><th>Tag intrinsic refine</th><td>mode {html.escape(tag_intrinsics.get('refine_mode', ''))}; accepted {fmt(tag_intrinsics.get('accepted_refined_count'))}; max focal delta {fmt(tag_intrinsics.get('max_abs_focal_delta_frac'))}; max principal delta {fmt(tag_intrinsics.get('max_principal_delta_px'))} px</td></tr>
     <tr><th>Frame-face high-quality refine</th><td>{html.escape(frame_face.get('status', ''))}; active {fmt(frame_face.get('active_delta'))}/{fmt(frame_face.get('camera_count'))}; observations {fmt(frame_face.get('used_observations'))}; median/p90 {fmt(frame_face.get('median_px'))}/{fmt(frame_face.get('p90_px'))} px; inactive {html.escape(', '.join(frame_face.get('inactive_delta', [])))}</td></tr>
+    <tr><th>Intrinsic feature coverage</th><td>{html.escape(intrinsic_feature_coverage.get('status', ''))}; cameras {fmt(intrinsic_feature_coverage.get('camera_count'))}; plots {fmt(intrinsic_feature_coverage.get('plot_count'))}; source {html.escape(intrinsic_feature_coverage.get('source_type', ''))}</td></tr>
     <tr><th>Gated residuals</th><td>before median/p90 {fmt(tag.get('residual_before', {}).get('median_px'))}/{fmt(tag.get('residual_before', {}).get('p90_px'))} px; after median/p90 {fmt(tag.get('residual_after', {}).get('median_px'))}/{fmt(tag.get('residual_after', {}).get('p90_px'))} px</td></tr>
     <tr><th>Raw residuals</th><td>before median/p90 {fmt(tag.get('raw_residual_before', {}).get('median_px'))}/{fmt(tag.get('raw_residual_before', {}).get('p90_px'))} px; after median/p90 {fmt(tag.get('raw_residual_after', {}).get('median_px'))}/{fmt(tag.get('raw_residual_after', {}).get('p90_px'))} px</td></tr>
     <tr><th>Final accepted-output residuals</th><td>gated median/p90 {fmt(tag.get('residual_after_output_accepted', {}).get('median_px'))}/{fmt(tag.get('residual_after_output_accepted', {}).get('p90_px'))} px; raw median/p90 {fmt(tag.get('raw_residual_after_output_accepted', {}).get('median_px'))}/{fmt(tag.get('raw_residual_after_output_accepted', {}).get('p90_px'))} px</td></tr>

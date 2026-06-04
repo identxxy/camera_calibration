@@ -2630,11 +2630,10 @@ function frameRig(mode) {
   // Top/front view buttons are therefore defined in the display gravity frame, not in
   // the original rig local-Y frame.
   const gravityUp = WORLD_UP.clone();
-  const controlsUp = gravityUp.clone().negate();
   const rigForward = horizontalRigForward();
   let offset;
   if (mode === "top") {
-    offset = gravityUp.clone().multiplyScalar(-radius * 2.85 * zoom)
+    offset = gravityUp.clone().multiplyScalar(radius * 2.85 * zoom)
       .addScaledVector(rigForward, radius * 0.002);
   } else if (mode === "front") {
     offset = rigForward.clone().multiplyScalar(radius * 2.65 * zoom);
@@ -2648,6 +2647,7 @@ function frameRig(mode) {
   camera.near = 0.005;
   camera.far = Math.max(20, radius * 20);
   camera.updateProjectionMatrix();
+  const controlsUp = gravityUp.clone();
   rebuildOrbitControlsForCurrentUp(true, controlsUp);
 }
 

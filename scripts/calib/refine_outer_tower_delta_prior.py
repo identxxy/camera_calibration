@@ -504,7 +504,7 @@ def copy_intrinsics(intrinsics):
 def write_intrinsics_yaml(path, intrinsic):
     params = (list(intrinsic["params"]) + [0.0] * 12)[:12]
     text = "\n".join([
-        "type: CentralOpenCV",
+        "type: CentralOpenCVModel",
         f"width: {int(intrinsic['width'])}",
         f"height: {int(intrinsic['height'])}",
         "parameters: [" + ", ".join(f"{float(value):.14g}" for value in params) + "]",

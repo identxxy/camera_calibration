@@ -989,6 +989,22 @@ def infer_outer_intrinsics(data_root):
     return candidates[0].resolve(strict=False)
 
 
+def infer_outer_intrinsic_metrics_tsv(outer_intrinsics):
+    if not outer_intrinsics:
+        return Path("")
+    outer_intrinsics = Path(outer_intrinsics)
+    candidates = [
+        outer_intrinsics / "camera_metrics.tsv",
+        outer_intrinsics.parent / "camera_metrics.tsv",
+        outer_intrinsics.parent / "outer24_intrinsic_report_large_marker_v1/camera_metrics.tsv",
+        outer_intrinsics.parent.parent / "outer24_intrinsic_report_large_marker_v1/camera_metrics.tsv",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve(strict=False)
+    return Path("")
+
+
 def intrinsic_path_candidates(intrinsics_dir, camera_index, camera_id=""):
     intrinsics_dir = Path(intrinsics_dir)
     candidates = [intrinsics_dir / f"intrinsics{camera_index}.yaml"]
@@ -1460,6 +1476,7 @@ def build_pipeline_stages(
     large_out = output_root / safe_name(args.large_marker_sequence, "large_marker_bridge_all32")
     reports_out = output_root / "reports"
     bridge_out = output_root / "bridge_colmap_inner_refined_v1"
+    outer_intrinsic_metrics_tsv = priors.get("outer_intrinsic_metrics_tsv", "")
     combined_viewer_html = output_root / "combined_studio_rig_viewer_v1/index.html"
 
     small_features = small_out / "features_parallel_pattern3_fast_v1.bin"
@@ -1583,6 +1600,8 @@ def build_pipeline_stages(
         "whole_coverage_tsv": str(data_root / "whole_outer24_filtered_min4_hybrid_min4cam" / "per_camera_stats.tsv"),
         "large_marker_pnp_summary_tsv": str(large_bridge_pnp / "camera_pnp_summary.tsv"),
         "small_marker_pnp_summary_tsv": str(small_fixed_rig_quality / "camera_pnp_summary.tsv"),
+        "inner_intrinsic_metrics_tsv": str(inner_reproj / "camera_metrics.tsv"),
+        "outer_intrinsic_metrics_tsv": str(outer_intrinsic_metrics_tsv) if outer_intrinsic_metrics_tsv else "",
         "large_marker_board_pose_yaml": str(large_inner_init_state / "rig_tr_global.yaml"),
         "small_marker_board_pose_yaml": str(small_fixed_rig_quality / "rig_tr_global.yaml"),
         "bridge_marker_board_pose_yaml": str(large_bridge_pnp / "rig_tr_global.yaml"),
@@ -1603,6 +1622,7 @@ def build_pipeline_stages(
         "--title", "Fast Inner/Outer Bridge Viewer",
         "--correspondence_data_url", "../../advanced_correspondence_viewer_v1/correspondence_data.json",
         "--inner_reprojection_metrics_tsv", str(inner_reproj / "camera_metrics.tsv"),
+        "--inner_intrinsic_metrics_tsv", str(inner_reproj / "camera_metrics.tsv"),
         "--whole_coverage_tsv", str(data_root / "whole_outer24_filtered_min4_hybrid_min4cam" / "per_camera_stats.tsv"),
         "--large_marker_pnp_summary_tsv", str(large_bridge_pnp / "camera_pnp_summary.tsv"),
         "--small_marker_pnp_summary_tsv", str(small_fixed_rig_quality / "camera_pnp_summary.tsv"),
@@ -1610,6 +1630,8 @@ def build_pipeline_stages(
         "--small_marker_board_pose_yaml", str(small_fixed_rig_quality / "rig_tr_global.yaml"),
         "--bridge_marker_board_pose_yaml", str(large_bridge_pnp / "rig_tr_global.yaml"),
     ]
+    if outer_intrinsic_metrics_tsv and Path(outer_intrinsic_metrics_tsv).is_file():
+        combined_viewer_argv.extend(["--outer_intrinsic_metrics_tsv", str(outer_intrinsic_metrics_tsv)])
     bridge_intrinsics_dir = Path(bridge_intrinsics["output_dir"])
     if bridge_intrinsics_dir.is_dir():
         combined_viewer_argv.extend([
@@ -2230,6 +2252,7 @@ def build_pipeline_stages(
         "inner_joint_camera_tr_rig_yaml": str(inner_joint_refine / "camera_tr_rig.yaml"),
         "inner_joint_state_dir": str(inner_joint_refine),
         "inner_reprojection_report": str(inner_reproj / "index.html"),
+        "inner_intrinsic_feature_coverage_report": str(inner_reproj / "index.html"),
         "inner_reprojection_correspondence_residuals_tsv": str(inner_reprojection_correspondence),
         "inner_interactive_viewer": str(inner_viewer / "index.html"),
         "bridge_pose_yaml": str(bridge_out / "camera_tr_inner_refined_plus_outer_topdown.yaml"),
@@ -2650,6 +2673,7 @@ def write_report_entrypoints(output_root, summary):
     {stage_timing_rows}
   </table>
   <p>The final inner extrinsic baseline is <code>{html.escape(summary["final_yaml_candidates"]["inner_final_baseline_camera_tr_rig_yaml"])}</code>. Small-marker fixed-rig output is reported only as a quality probe and does not replace this baseline.</p>
+  <p>Inner intrinsic feature coverage is the same product as <code>inner_reprojection_report</code>: one plot per inner camera with accumulated detected board corners and reprojection-error arrows.</p>
   <p>Small-marker joint intrinsic/extrinsic output is diagnostic unless its intrinsics sanity gate passes. Current joint sanity status: <strong>{html.escape(str(joint_quality.get("status", "missing_joint_output")))}</strong>; accepted: <strong>{html.escape(str(joint_quality.get("accepted_by_sanity_gate", False)))}</strong>.</p>
   <p>Bridge all32 uses outer indices <code>0..23</code>, inner indices <code>24..31</code>, and top-down anchors <code>4-1/4-2/4-3</code> at indices <code>9/10/11</code>. The current bridge product is fixed-intrinsic PnP plus top-down evaluation; combined BA/refine remains a follow-up.</p>
   <p>Combined 24+8 viewer outer pose source: <strong>{html.escape(str(outer_pose_source))}</strong>. Outer final pose YAML: <code>{html.escape(str(outer_final_pose))}</code>. If this source is <code>outer_final_pose_yaml</code>, the 24 outer camera frustums come from the latest outer tower accepted rig instead of the old first-frame COLMAP Sim(3) diagnostic.</p>
@@ -2754,6 +2778,12 @@ def parse_args():
         type=Path,
         default=None,
         help="Outer fixed intrinsics directory for all32 bridge PnP. Defaults to whole_outer_tower/fixed_intrinsic_pnp_colmap_fallback_v1 under --data-root.",
+    )
+    parser.add_argument(
+        "--outer-intrinsic-metrics-tsv",
+        type=Path,
+        default=None,
+        help="Optional outer intrinsic report camera_metrics.tsv, usually from the outer-large-marker intrinsic calibration report.",
     )
     parser.add_argument(
         "--dry-run",
@@ -2946,6 +2976,10 @@ def main():
         args.outer_intrinsics,
         data_root,
     ) if args.outer_intrinsics else infer_outer_intrinsics(data_root)
+    outer_intrinsic_metrics_tsv = resolve_user_path(
+        args.outer_intrinsic_metrics_tsv,
+        data_root,
+    ) if args.outer_intrinsic_metrics_tsv else infer_outer_intrinsic_metrics_tsv(outer_intrinsics)
     bridge_layout = bridge_all32_layout(large_scan)
     bridge_intrinsics_started_at = utc_now()
     bridge_intrinsics_started_perf = time.time()
@@ -2961,6 +2995,7 @@ def main():
         "inner_prior": str(inner_prior.resolve(strict=False)),
         "inner_intrinsics": str(inner_intrinsics),
         "outer_intrinsics": str(outer_intrinsics),
+        "outer_intrinsic_metrics_tsv": str(outer_intrinsic_metrics_tsv) if outer_intrinsic_metrics_tsv else "",
         "bridge_intrinsics": bridge_intrinsics["output_dir"],
         "outer_prior": str(outer_prior.resolve(strict=False)),
         "outer_final_pose_yaml": str(outer_final_pose_yaml.resolve(strict=False)) if outer_final_pose_yaml else "",
