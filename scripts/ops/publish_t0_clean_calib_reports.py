@@ -16,6 +16,7 @@ RUN_TAG = "recalib_20260604_outer_large_intrinsics_v1"
 RUN = ROOT / "studio_calibration_runs" / RUN_TAG
 CURRENT = ROOT / "current_calibration"
 REPORTS = CURRENT / "reports"
+FINAL_YAML = RUN / "calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml"
 
 
 def rel_url(path):
@@ -623,6 +624,15 @@ def publish_reports():
             f"<a class='card' href='{esc(rel_url(path))}'><strong>{esc(number)}. {esc(title)}</strong>"
             f"<span>{esc(description)}</span></a>"
         )
+    final_yaml_url = rel_url(FINAL_YAML)
+    artifact_card = (
+        f"<a class='artifact-card' href='{esc(final_yaml_url)}'>"
+        "<strong>Final 32-camera YAML</strong>"
+        "<span>Machine-readable intrinsics, distortion, and "
+        "T_camera_studio extrinsics for all 24 outer + 8 inner cameras.</span>"
+        f"<code>{esc(str(FINAL_YAML))}</code>"
+        "</a>"
+    )
     index_style = """
 :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #222; background: #f6f6f2; }
 body { margin: 0; }
@@ -635,6 +645,11 @@ p { color: #62666b; line-height: 1.45; }
 .card:hover { border-color: #8aa0b7; }
 .card strong { font-size: 17px; }
 .card span { color: #62666b; font-size: 13px; line-height: 1.35; }
+.artifact-card { display: flex; flex-direction: column; gap: 8px; padding: 16px; margin-bottom: 18px; border: 1px solid #b9c6d4; border-radius: 8px; background: #f7fbff; color: #222; text-decoration: none; }
+.artifact-card:hover { border-color: #5f83a9; }
+.artifact-card strong { font-size: 18px; }
+.artifact-card span { color: #46515c; font-size: 13px; line-height: 1.35; }
+.artifact-card code { overflow-wrap: anywhere; }
 code { background: #eeece5; padding: 1px 4px; border-radius: 4px; }
 @media (max-width: 760px) { header, main { padding-left: 18px; padding-right: 18px; } }
 """
@@ -652,7 +667,7 @@ code { background: #eeece5; padding: 1px 4px; border-radius: 4px; }
 <p>当前 32-camera 标定只保留 9 个 canonical report 入口。历史探索报告、advanced/debug/audit 页面已从 9899 公开入口清理。</p>
 <p>Current run: <code>{esc(RUN_TAG)}</code></p>
 </header>
-<main><div class="grid">{''.join(cards)}</div></main>
+<main>{artifact_card}<div class="grid">{''.join(cards)}</div></main>
 </body>
 </html>
 """
@@ -670,6 +685,7 @@ code { background: #eeece5; padding: 1px 4px; border-radius: 4px; }
     manifest = {
         "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "root_url": BASE_URL + "/",
+        "final_yaml": {"path": str(FINAL_YAML), "url": final_yaml_url},
         "allowed_reports": [
             {"number": n, "title": t, "path": str(p), "url": rel_url(p)} for n, t, p, _d in reports
         ],
@@ -690,6 +706,7 @@ def main():
         json.dumps(
             {
                 "root_url": BASE_URL + "/",
+                "final_yaml_url": manifest["final_yaml"]["url"],
                 "allowed_report_count": len(manifest["allowed_reports"]),
                 "removed_html_count": manifest["removed_html_count"],
                 "manifest": str(CURRENT / "report_cleanup_manifest_20260604.json"),
