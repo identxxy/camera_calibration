@@ -278,7 +278,8 @@ reference:
 
 ```text
 /home/ubuntu/calib_data/studio_calibration_runs/recalib_20260604_outer_large_intrinsics_v1
-http://192.168.2.0:9899/studio_calibration_runs/recalib_20260604_outer_large_intrinsics_v1/final_deliverables/index.html
+http://192.168.2.0:9899/
+http://192.168.2.0:9899/studio_calibration_runs/recalib_20260604_outer_large_intrinsics_v1/calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml
 ```
 
 Key metrics from that run:
@@ -315,6 +316,61 @@ Key metrics from that run:
 - large/small correspondence TSV summary 和 advanced correspondence viewer path
 - unified YAML path、SHA256、backup path
 - 是否更新 `current_calibration`
+
+## Calibration Validation Beyond BA Residual
+
+3DGS reconstruction quality is an end-to-end sanity check, but it is not a pure
+calibration metric. It mixes calibration, image undistortion, coordinate
+conventions, scene texture, FOV overlap, exposure, masks, synchronization, and
+training hyperparameters. Use the following validation ladder before blaming the
+YAML.
+
+1. Target holdout reprojection
+   - Keep some `whole`, `large_marker`, or `small_marker` frames out of bundle
+     adjustment.
+   - Project known AprilTag / board corners with the final YAML.
+   - Report per-camera median/p90/max pixel residual and overlay images.
+   - This validates intrinsics, distortion, extrinsics, and target geometry
+     without involving 3DGS.
+
+2. Natural-feature epipolar validation
+   - On synchronized non-calibration frames, match SIFT/SuperPoint features.
+   - Undistort points with the same model used by the downstream pipeline.
+   - Compute Sampson or point-to-epipolar-line distance for every camera pair.
+   - A few-pixel median is plausible; tens or hundreds of pixels usually means
+     import convention, undistortion, resize/crop/flip, or sync is wrong.
+
+3. Fixed-calibration triangulation validation
+   - Keep final `K`, distortion, and `T_camera_studio` fixed.
+   - Triangulate matched static scene points and reproject them to all observing
+     cameras.
+   - Report residual by camera and by pair, plus track length / triangulation
+     angle histograms.
+   - This separates multi-view geometric consistency from 3DGS optimization.
+
+4. COLMAP import parity test
+   - Export the YAML to a COLMAP model using the exact downstream convention.
+   - Run COLMAP point triangulation with cameras fixed.
+   - Compare against a COLMAP self-BA model on the same undistorted images.
+   - If COLMAP self-BA is good but YAML-fixed triangulation is bad, calibration
+     or import is suspect. If both are sparse/bad, the capture/FOV/texture is the
+     likely limit.
+
+5. Downstream convention smoke test
+   - Verify whether the downstream code expects world-to-camera or
+     camera-to-world.
+   - Current YAML stores `T_camera_studio` as world-to-camera:
+     `p_camera = R @ p_studio + t`.
+   - If the target system uses camera-to-world, invert every pose before use.
+   - If images are resized, scale `fx`, `fy`, `cx`, `cy`; if cropped, shift
+     `cx`, `cy`; if flipped/rotated, do not reuse K/extrinsics unchanged.
+
+6. 3DGS staged checks
+   - Run outer-only, inner-only, and all32 separately.
+   - Inspect sparse point count, track length, ray-angle coverage, and visual
+     quality before the full training run.
+   - Small-FOV outer cameras can be well calibrated and still weak for 3DGS if
+     the object occupies too few pixels or multi-view overlap is poor.
 
 更详细的实验日志放在 `studio/exp/`；持久结论更新到
 `studio/knowledge/studio_calibration_bootstrap_and_fast_recalib.md`。

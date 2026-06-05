@@ -17,6 +17,8 @@ RUN = ROOT / "studio_calibration_runs" / RUN_TAG
 CURRENT = ROOT / "current_calibration"
 REPORTS = CURRENT / "reports"
 FINAL_YAML = RUN / "calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml"
+CORRESPONDENCE_JSON = RUN / "advanced_correspondence_viewer_v1/correspondence_data.json"
+CURRENT_CORRESPONDENCE_JSON = CURRENT / "advanced_correspondence_viewer_v1/correspondence_data.json"
 
 
 def rel_url(path):
@@ -145,6 +147,20 @@ def copy_report(src, dst):
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(src, dst)
+
+
+def publish_correspondence_data():
+    if CORRESPONDENCE_JSON.is_file():
+        CURRENT_CORRESPONDENCE_JSON.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(CORRESPONDENCE_JSON, CURRENT_CORRESPONDENCE_JSON)
+    if not CURRENT_CORRESPONDENCE_JSON.is_file():
+        return {}
+    return {
+        "path": str(CURRENT_CORRESPONDENCE_JSON),
+        "url": rel_url(CURRENT_CORRESPONDENCE_JSON),
+        "size_bytes": CURRENT_CORRESPONDENCE_JSON.stat().st_size,
+        "source": str(CORRESPONDENCE_JSON),
+    }
 
 
 def image_grid(images, limit=None):
@@ -323,6 +339,7 @@ def publish_reports():
         REPORTS / "06_outer_intrinsics_outer_large_marker",
     )
     publish_outer_intrinsic_wrapper(REPORTS / "06_outer_intrinsics_outer_large_marker")
+    correspondence_data = publish_correspondence_data()
 
     small_manifest = read_tsv(RUN / "inner_bridge/planned_inputs/small_marker_usable_manifest.tsv")
     small_pnp = read_tsv(
@@ -686,6 +703,7 @@ code { background: #eeece5; padding: 1px 4px; border-radius: 4px; }
         "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "root_url": BASE_URL + "/",
         "final_yaml": {"path": str(FINAL_YAML), "url": final_yaml_url},
+        "correspondence_data": correspondence_data,
         "allowed_reports": [
             {"number": n, "title": t, "path": str(p), "url": rel_url(p)} for n, t, p, _d in reports
         ],
