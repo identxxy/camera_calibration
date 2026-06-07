@@ -22,6 +22,18 @@ T0_HTTP_BASE = "http://192.168.2.0:9899"
 DEFAULT_LEGACY_ANCHOR_LABEL_TO_POSE_INDEX = "4-1:8,4-2:9,4-3:10"
 DEFAULT_ALL32_ANCHOR_LABEL_TO_POSE_INDEX = "4-1:9,4-2:10,4-3:11"
 FRAME_FACE_REFINE_PRESETS = {
+    "wide50_then_gate4": {
+        "pnp_ransac_iterations": 1000,
+        "pnp_ransac_threshold_px": 4.0,
+        "max_pnp_median_error_px": 5.0,
+        "min_frame_face_observations": 8,
+        "initial_observation_residual_gate_px": 50.0,
+        "observation_residual_gate_px": 4.0,
+        "optimizer_residual_clip_px": 20.0,
+        "outer_iterations": 12,
+        "block_iterations": 8,
+        "min_camera_observations_for_delta": 8,
+    },
     "wide50_then_gate6": {
         "pnp_ransac_iterations": 1000,
         "pnp_ransac_threshold_px": 4.0,
@@ -1845,9 +1857,11 @@ def parse_args():
         default="wide50_then_gate6",
         help=(
             "Preset for refine_outer_tower_frame_face_planes.py. wide50_then_gate6 is "
-            "the current production candidate: fullres raw tag corners, a wide "
-            "support-recovery pass, 1000-iteration PnP RANSAC, then strict 6px "
-            "re-gating. wide50_then_gate10 keeps more observations for diagnostics."
+            "the current conservative production candidate: fullres raw tag corners, "
+            "a wide support-recovery pass, 1000-iteration PnP RANSAC, then strict "
+            "6px re-gating. wide50_then_gate4 is the stricter high-precision "
+            "candidate when full-resolution detections provide enough support; "
+            "wide50_then_gate10 keeps more observations for diagnostics."
         ),
     )
     parser.add_argument("--frame-face-dataset", type=Path, default=None)

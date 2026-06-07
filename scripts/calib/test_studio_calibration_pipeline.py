@@ -24,7 +24,10 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             outer_prior = root / "priors" / "outer_images.txt"
             outer_delta_prior = root / "priors" / "outer_delta.yaml"
             outer_intrinsics_prior = root / "priors" / "outer_intrinsics"
+            outer_intrinsic_metrics = root / "priors" / "outer_intrinsic_metrics.tsv"
             whole_data_report = whole_root / "whole_outer24_filtered_min4_hybrid_min4cam" / "index.html"
+            outer_intrinsic_metrics.parent.mkdir(parents=True)
+            outer_intrinsic_metrics.write_text("camera_index\tuser_id\tresidual_count\n", encoding="utf-8")
 
             completed = subprocess.run(
                 [
@@ -38,6 +41,7 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
                     "--outer-prior", str(outer_prior),
                     "--outer-frame-face-prior-pose-yaml", str(outer_delta_prior),
                     "--outer-frame-face-intrinsics-dir", str(outer_intrinsics_prior),
+                    "--outer-intrinsic-metrics-tsv", str(outer_intrinsic_metrics),
                     "--whole-data-report", str(whole_data_report),
                     "--run-small-quality",
                     "--dry-run",
@@ -84,6 +88,7 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             bridge_command = stages["inner_bridge"]["commands"][0]
             self.assertIn(f"--outer-final-pose-yaml {outer_pose}", bridge_command)
             self.assertIn(f"--outer-intrinsics {outer_intrinsics}", bridge_command)
+            self.assertIn(f"--outer-intrinsic-metrics-tsv {outer_intrinsic_metrics}", bridge_command)
             self.assertIn(f"--inner-prior {inner_prior}", bridge_command)
             self.assertIn(f"--outer-prior {outer_prior}", bridge_command)
             self.assertIn("--run-large-bridge", bridge_command)
@@ -92,15 +97,24 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
 
             export_command = stages["export_unified_cameras"]["commands"][0]
             unified_yaml = output_root / "calibration_artifacts" / "studio_32_cameras_current" / "studio_32_cameras.yaml"
+            large_ba_state = (
+                output_root
+                / "inner_bridge"
+                / "large_marker_bridge_all32"
+                / "fixed_points_joint_ba_stride1_dense_v1"
+            )
             self.assertIn("export_combined_studio_extrinsics.py", export_command)
             self.assertIn(f"--outer-final-pose-yaml {outer_pose}", export_command)
+            self.assertIn(f"--inner-bridge-pose-yaml {large_ba_state / 'camera_tr_rig.yaml'}", export_command)
             self.assertIn("--intrinsics-dir", export_command)
             self.assertEqual(summary["outputs"]["unified_camera_yaml"], str(unified_yaml))
+            self.assertEqual(summary["outputs"]["large_marker_state_dir"], str(large_ba_state))
             self.assertEqual(summary["report_urls"]["unified_camera_yaml"], unified_yaml.as_uri())
 
             large_corr_command = stages["export_large_marker_correspondences"]["commands"][0]
             self.assertIn("export_calibration_correspondence_residuals.py", large_corr_command)
             self.assertIn("--dataset-name large", large_corr_command)
+            self.assertIn(f"--state-dir {large_ba_state}", large_corr_command)
             self.assertIn("--camera-index-offset 0", large_corr_command)
             self.assertIn(f"--reference-studio32-yaml {unified_yaml}", large_corr_command)
 
@@ -193,6 +207,50 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             self.assertIn("final_inner8_calibration_v1", bridge_command)
             self.assertIn("colmap_outer24_firstframe_colmap404_v3", bridge_command)
             self.assertNotIn("--run-small-fixed-rig-quality", bridge_command)
+
+    def test_nondefault_large_frame_stride_updates_large_pnp_diagnostic_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_root = root / "studio_run"
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--whole-data-root", str(root / "whole_root"),
+                    "--inner-data-root", str(root / "inner_root"),
+                    "--output-root", str(output_root),
+                    "--large-frame-stride", "3",
+                    "--dry-run",
+                    "--bridge-only",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
+            stages = {stage["name"]: stage for stage in summary["stages"]}
+            advanced_command = stages["generate_advanced_correspondence_viewer"]["commands"][0]
+            expected_pnp_dir = (
+                output_root
+                / "inner_bridge"
+                / "large_marker_bridge_all32"
+                / "fixed_intrinsic_bridge_pnp_stride3_v1"
+            )
+            expected_ba_dir = (
+                output_root
+                / "inner_bridge"
+                / "large_marker_bridge_all32"
+                / "fixed_points_joint_ba_stride3_dense_v1"
+            )
+
+            self.assertEqual(summary["outputs"]["large_pnp_dir"], str(expected_pnp_dir))
+            self.assertEqual(summary["outputs"]["large_marker_state_dir"], str(expected_ba_dir))
+            self.assertIn(f"--large-pnp-dir {expected_pnp_dir}", advanced_command)
+            self.assertNotIn("fixed_intrinsic_bridge_pnp_stride1_v1", advanced_command)
 
 
 if __name__ == "__main__":

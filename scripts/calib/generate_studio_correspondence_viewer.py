@@ -612,13 +612,18 @@ def load_marker_correspondences(name, path, max_rows, cameras=None):
         "sampling_stride": int(stride),
         "source_tsv": str(path.resolve()),
     })
+    view_keys = {
+        (obs.get("frame_index"), obs.get("camera_id"))
+        for obs in observations
+        if obs.get("frame_index") is not None and obs.get("camera_id") not in (None, "")
+    }
     return {
         "name": name,
         "kind": "feature_correspondence",
         "note": "Feature-level observed/projected/world correspondences exported from calibration residuals.",
-        "point_count": 0,
-        "sample_points_three": [],
-        "view_count": 0,
+        "point_count": int(len(observations)),
+        "sample_points_three": [obs["three"] for obs in observations[:512]],
+        "view_count": int(len(view_keys)),
         "frames": frames,
         "top_frames": top_frames,
         "camera_ids": sorted(camera_ids),

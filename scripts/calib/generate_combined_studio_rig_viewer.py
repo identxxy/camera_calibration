@@ -159,6 +159,71 @@ def invert_pose(matrix):
     return inv
 
 
+def average_rotation(rotations):
+    if not rotations:
+        return np.eye(3, dtype=np.float64)
+    matrix = np.sum(np.asarray(rotations, dtype=np.float64), axis=0)
+    u, _s, vt = np.linalg.svd(matrix)
+    rotation = u @ vt
+    if np.linalg.det(rotation) < 0:
+        u[:, -1] *= -1.0
+        rotation = u @ vt
+    return rotation
+
+
+def align_bridge_poses_to_outer_reference(bridge_poses, outer_reference_poses):
+    if (
+        outer_reference_poses is None
+        or len(bridge_poses) < len(OUTER_CAMERA_LABELS)
+        or len(outer_reference_poses) < len(OUTER_CAMERA_LABELS)
+    ):
+        return bridge_poses, {
+            "available": False,
+            "camera_count": 0,
+            "center_rms_m": None,
+            "rotation_rms_deg": None,
+        }
+    transforms = []
+    for index in range(len(OUTER_CAMERA_LABELS)):
+        bridge_pose = bridge_poses[index]
+        reference_pose = outer_reference_poses[index]
+        if bridge_pose is None or reference_pose is None:
+            continue
+        transforms.append(invert_pose(reference_pose) @ bridge_pose)
+    if not transforms:
+        return bridge_poses, {
+            "available": False,
+            "camera_count": 0,
+            "center_rms_m": None,
+            "rotation_rms_deg": None,
+        }
+    reference_from_bridge = np.eye(4, dtype=np.float64)
+    reference_from_bridge[:3, :3] = average_rotation([transform[:3, :3] for transform in transforms])
+    reference_from_bridge[:3, 3] = np.mean([transform[:3, 3] for transform in transforms], axis=0)
+    bridge_from_reference = invert_pose(reference_from_bridge)
+    aligned = [pose @ bridge_from_reference if pose is not None else None for pose in bridge_poses]
+
+    center_residuals = []
+    rotation_residuals = []
+    for index in range(len(OUTER_CAMERA_LABELS)):
+        aligned_pose = aligned[index]
+        reference_pose = outer_reference_poses[index]
+        if aligned_pose is None or reference_pose is None:
+            continue
+        aligned_center = invert_pose(aligned_pose)[:3, 3]
+        reference_center = invert_pose(reference_pose)[:3, 3]
+        center_residuals.append(float(np.linalg.norm(aligned_center - reference_center)))
+        delta_r = aligned_pose[:3, :3] @ reference_pose[:3, :3].T
+        cos_angle = max(-1.0, min(1.0, (float(np.trace(delta_r)) - 1.0) * 0.5))
+        rotation_residuals.append(math.degrees(math.acos(cos_angle)))
+    return aligned, {
+        "available": True,
+        "camera_count": len(transforms),
+        "center_rms_m": float(np.sqrt(np.mean(np.square(center_residuals)))) if center_residuals else None,
+        "rotation_rms_deg": float(np.sqrt(np.mean(np.square(rotation_residuals)))) if rotation_residuals else None,
+    }
+
+
 def load_pose_yaml(path):
     pose_count = None
     poses_by_index = {}
@@ -546,10 +611,67 @@ def pnp_coverage_by_label(path, serial_to_inner=None, inner_offset=None):
     return coverage
 
 
+def correspondence_residual_coverage_by_label(path, serial_to_inner=None, inner_offset=None):
+    serial_to_inner = serial_to_inner or {}
+    path = Path(path) if path else Path("")
+    if not path.is_file():
+        return {}
+    residuals_by_label = {}
+    for row in read_tsv(path):
+        if str(row.get("projection_status") or "").strip() != "ok":
+            continue
+        residual = finite_or_none(row.get("residual_px"))
+        if residual is None:
+            continue
+        source_index = to_int(row.get("source_camera_index"), to_int(row.get("camera_index"), -1))
+        raw_label = (
+            row.get("camera_label")
+            or row.get("camera_id")
+            or row.get("user_id")
+            or ""
+        )
+        if inner_offset is not None and source_index >= inner_offset:
+            label = f"inner{source_index - inner_offset}"
+        else:
+            label = serial_to_inner.get(str(raw_label), str(raw_label))
+        if not label:
+            continue
+        residuals_by_label.setdefault(label, []).append(float(residual))
+
+    coverage = {}
+    for label, values in residuals_by_label.items():
+        values.sort()
+        count = len(values)
+        if count >= 1000:
+            quality = "strong"
+        elif count >= 100:
+            quality = "usable"
+        elif count > 0:
+            quality = "weak"
+        else:
+            quality = "inactive"
+        median = values[count // 2] if count else None
+        p90 = values[int(0.9 * (count - 1))] if count else None
+        maximum = values[-1] if count else None
+        coverage[label] = {
+            "active": count > 0,
+            "status": "all32_bridge_ba_residuals" if count > 0 else "not_observed",
+            "quality": quality,
+            "observation_count": count,
+            "residual_count": count,
+            "median_error_px": median,
+            "p90_error_px": p90,
+            "max_error_px": maximum,
+            "detail": f"{count} all32 bridge BA correspondence residuals; median/p90 {median} / {p90} px",
+        }
+    return coverage
+
+
 def attach_dataset_coverage(cameras, args):
     whole_path = getattr(args, "whole_coverage_tsv", None)
     outer_reprojection_path = getattr(args, "outer_reprojection_tsv", None)
     large_path = getattr(args, "large_marker_pnp_summary_tsv", None)
+    large_residual_path = getattr(args, "large_marker_correspondence_tsv", None)
     small_path = getattr(args, "small_marker_pnp_summary_tsv", None)
     large_rows = read_tsv(large_path)
     small_rows = read_tsv(small_path)
@@ -571,11 +693,17 @@ def attach_dataset_coverage(cameras, args):
                 f"passing images {raw_item.get('positive_views')}"
             )
         whole[label] = final_item
-    large = pnp_coverage_by_label(
+    large_pnp = pnp_coverage_by_label(
         large_path,
         serial_to_inner=serial_to_inner,
         inner_offset=24,
     )
+    large_ba = correspondence_residual_coverage_by_label(
+        large_residual_path,
+        serial_to_inner=serial_to_inner,
+        inner_offset=24,
+    )
+    large = large_ba or large_pnp
     small = pnp_coverage_by_label(
         small_path,
         serial_to_inner=serial_to_inner,
@@ -585,7 +713,8 @@ def attach_dataset_coverage(cameras, args):
     sources = {
         "whole": str(Path(whole_path).resolve()) if whole_path else "",
         "whole_final": str(Path(outer_reprojection_path).resolve()) if outer_reprojection_path else "",
-        "large_marker": str(Path(large_path).resolve()) if large_path else "",
+        "large_marker": str(Path(large_residual_path).resolve()) if large_ba and large_residual_path else str(Path(large_path).resolve()) if large_path else "",
+        "large_marker_initializer": str(Path(large_path).resolve()) if large_path else "",
         "small_marker": str(Path(small_path).resolve()) if small_path else "",
     }
     active_counts = {"whole": 0, "large_marker": 0, "small_marker": 0}
@@ -611,8 +740,9 @@ def attach_dataset_coverage(cameras, args):
             },
             "large_marker": {
                 "label": "Large Marker",
-                "description": "Large-marker all32 bridge PnP connectivity; active means this camera was connected in the fixed-intrinsic bridge solve.",
+                "description": "Large-marker all32 bridge BA residuals when available; otherwise PnP initializer connectivity.",
                 "source": sources["large_marker"],
+                "initializer_source": sources["large_marker_initializer"],
                 "active_camera_count": active_counts["large_marker"],
             },
             "small_marker": {
@@ -1541,6 +1671,17 @@ def build_viewer_data(args):
         ]
         if missing_outer:
             raise ValueError(f"Outer final pose YAML missing poses for labels: {missing_outer}")
+        bridge_poses, bridge_outer_alignment = align_bridge_poses_to_outer_reference(
+            bridge_poses,
+            outer_final_poses,
+        )
+    else:
+        bridge_outer_alignment = {
+            "available": False,
+            "camera_count": 0,
+            "center_rms_m": None,
+            "rotation_rms_deg": None,
+        }
 
     colmap_required = outer_final_poses is None
     if args.outer_colmap_images_txt and (colmap_required or Path(args.outer_colmap_images_txt).is_file()):
@@ -1587,24 +1728,14 @@ def build_viewer_data(args):
             next_index += 1
 
     topdown_by_label = dict(zip(topdown_labels, topdown_indices))
-    aligned_outer_bridge_pose_ready = False
     if outer_final_poses is not None:
-        aligned_outer_bridge_pose_ready = (
-            args.viewer_scope == "combined"
-            and len(bridge_poses) >= len(OUTER_CAMERA_LABELS)
-            and all(bridge_poses[index] is not None for index in range(len(OUTER_CAMERA_LABELS)))
-        )
         for outer_index, label in enumerate(OUTER_CAMERA_LABELS):
             bridge_index = topdown_by_label.get(label)
-            if aligned_outer_bridge_pose_ready:
-                camera_tr_scene_rig = bridge_poses[outer_index]
-                source = "outer_final_pose_yaml_bridge_aligned"
-            else:
-                camera_tr_scene_rig = outer_final_poses[outer_index]
-                source = "outer_final_pose_yaml"
+            camera_tr_scene_rig = outer_final_poses[outer_index]
+            source = "outer_final_pose_yaml"
             metrics = {
                 "outer_final_pose_index": outer_index,
-                "bridge_aligned_outer_pose": bool(aligned_outer_bridge_pose_ready),
+                "bridge_outer_alignment_available": bool(bridge_outer_alignment.get("available")),
             }
             if label in colmap_images:
                 metrics.update({
@@ -1666,10 +1797,7 @@ def build_viewer_data(args):
     intrinsic_residuals = attach_intrinsic_residuals(cameras, args)
     first_frame_count, texture_metrics = attach_first_frame_images(cameras, args)
     bounds = compute_bounds([camera["center"] for camera in cameras])
-    if aligned_outer_bridge_pose_ready:
-        outer_pose_source = "outer_final_pose_yaml_bridge_aligned"
-    else:
-        outer_pose_source = "outer_final_pose_yaml" if outer_final_poses is not None else "colmap_sim3_approx"
+    outer_pose_source = "outer_final_pose_yaml" if outer_final_poses is not None else "colmap_sim3_approx"
     metrics = build_metrics(
         bridge_summary,
         outer_summary,
@@ -1681,6 +1809,7 @@ def build_viewer_data(args):
         outer_final_pose_count=len(OUTER_CAMERA_LABELS) if outer_final_poses is not None else 0,
     )
     metrics["display_camera_count"] = len(cameras)
+    metrics["bridge_outer_alignment"] = bridge_outer_alignment
     metrics["first_frame_image_count"] = first_frame_count
     metrics.update(texture_metrics)
     tower_up_alignment = estimate_tower_up_from_pose_yaml(getattr(args, "tower_pose_yaml", None))
@@ -1703,17 +1832,18 @@ def build_viewer_data(args):
             "Scene coordinates map rig/OpenCV coordinates as x -> x, y -> -y, z -> -z. "
             "Non-topdown outer cameras are approximate COLMAP Sim(3)-aligned poses and are not final calibrated outer rig geometry."
         )
-    elif aligned_outer_bridge_pose_ready:
+    elif bridge_outer_alignment.get("available"):
         coordinate_note = (
             "Scene coordinates map rig/OpenCV coordinates as x -> x, y -> -y, z -> -z. "
-            "Outer ring cameras come from the outer tower final camera_tr_rig YAML after a large-marker "
-            "bridge SE3 alignment into the refined inner rig frame."
+            "Outer ring cameras come from the outer tower final camera_tr_rig YAML. "
+            "Inner cameras come from the all32 large-marker bridge BA state after aligning its outer 0..23 "
+            "poses to the outer final rig frame."
         )
     else:
         coordinate_note = (
             "Scene coordinates map rig/OpenCV coordinates as x -> x, y -> -y, z -> -z. "
             "Outer ring cameras come from the outer tower final camera_tr_rig YAML; "
-            "top-down bridge anchors use bridge metric poses when present."
+            "legacy top-down bridge poses are used only when no bridge-to-outer alignment is available."
         )
     return {
         "title": args.title,
@@ -1889,13 +2019,14 @@ def patch_combined_viewer_html(path):
   const q = calibrationQuality(cam);
   const c = coverageForCamera(cam);
   if ((coverageMode === "large_marker" || coverageMode === "small_marker") && c.active !== false) {
+    const isBridgeBa = c.status === "all32_bridge_ba_residuals";
     return {
-      source: coverageMode + "_pnp",
+      source: isBridgeBa ? coverageMode + "_ba" : coverageMode + "_pnp",
       decision: c.status || c.quality || coverageMode,
       observation_count: c.total_inliers ?? c.observation_count ?? null,
-      median_error_px: c.median_view_error_px ?? null,
-      p90_error_px: null,
-      max_error_px: null,
+      median_error_px: c.median_error_px ?? c.median_view_error_px ?? null,
+      p90_error_px: c.p90_error_px ?? null,
+      max_error_px: c.max_error_px ?? null,
     };
   }
   return q;
@@ -2071,6 +2202,7 @@ HTML_TEMPLATE = """<!doctype html>
       --inner: #39d0b2;
       --topdown: #ffb84d;
       --outer: #65a9ff;
+      --outer-final: #65a9ff;
       --danger: #c14632;
     }
     * { box-sizing: border-box; }
@@ -2277,10 +2409,11 @@ HTML_TEMPLATE = """<!doctype html>
     <p class="subtitle" id="subtitle"></p>
     <div class="legend">
       <span class="legend-item"><span class="swatch" style="background: var(--inner)"></span>inner bridge metric</span>
-      <span class="legend-item"><span class="swatch" style="background: var(--topdown)"></span>outer top-down bridge metric</span>
-      <span class="legend-item"><span class="swatch" style="background: var(--outer)"></span>outer COLMAP-aligned approximate</span>
+      <span class="legend-item"><span class="swatch" style="background: var(--outer-final)"></span>outer final rig</span>
+      <span class="legend-item legacy-colmap-ui"><span class="swatch" style="background: var(--topdown)"></span>legacy top-down bridge metric</span>
+      <span class="legend-item legacy-colmap-ui"><span class="swatch" style="background: var(--outer)"></span>legacy COLMAP-aligned approximate</span>
     </div>
-    <div class="warning">Only inner0..inner7 and 4-1/4-2/4-3 use bridge metric poses. The remaining outer ring cameras are approximate COLMAP poses transformed by a three-anchor Sim(3), suitable for layout smoke checks rather than final geometry.</div>
+    <div class="warning" id="pose-source-note"></div>
     <div class="metrics" id="metrics"></div>
     <div class="table-wrap">
       <table>
@@ -2294,8 +2427,9 @@ HTML_TEMPLATE = """<!doctype html>
   <section class="panel controls">
     <div class="control-section">
       <label class="check"><input id="show-inner" type="checkbox" checked> inner0..inner7</label>
-      <label class="check"><input id="show-topdown" type="checkbox" checked> 4-1/4-2/4-3 bridge top-down</label>
-      <label class="check"><input id="show-colmap" type="checkbox" checked> outer COLMAP-aligned</label>
+      <label class="check"><input id="show-outer-final" type="checkbox" checked> outer final rig</label>
+      <label class="check legacy-colmap-ui"><input id="show-topdown" type="checkbox" checked> legacy 4-* bridge top-down</label>
+      <label class="check legacy-colmap-ui"><input id="show-colmap" type="checkbox" checked> legacy COLMAP-aligned</label>
       <label class="check"><input id="show-labels" type="checkbox" checked> camera labels</label>
     </div>
     <div class="control-section">
@@ -2317,11 +2451,13 @@ HTML_TEMPLATE = """<!doctype html>
       inner: 0x39d0b2,
       outer_topdown: 0xffb84d,
       outer_colmap: 0x65a9ff,
+      outer_final: 0x65a9ff,
     };
     const KIND_LABEL = {
       inner: "inner",
-      outer_topdown: "bridge topdown",
-      outer_colmap: "COLMAP approx",
+      outer_topdown: "legacy bridge topdown",
+      outer_colmap: "legacy COLMAP approx",
+      outer_final: "outer final",
     };
 
     const root = document.getElementById("viewer");
@@ -2505,6 +2641,21 @@ HTML_TEMPLATE = """<!doctype html>
 
     function renderMetrics() {
       const m = RIG_DATA.metrics;
+      const alignment = m.bridge_outer_alignment || {};
+      if (m.outer_pose_source === "outer_final_pose_yaml") {
+        const rows = [
+          [m.display_camera_count, "displayed cameras"],
+          [m.outer_final_pose_count ?? "-", "outer final poses"],
+          [alignment.available ? formatNumber(alignment.center_rms_m, 4) + " m" : "-", "bridge→outer center RMS"],
+          [alignment.available ? formatNumber(alignment.rotation_rms_deg, 3) + " deg" : "-", "bridge→outer rotation RMS"],
+          [m.first_frame_image_count ?? "-", "camera preview images"],
+          [formatNumber(m.board_normal_p90_angle_from_horizontal_deg, 3) + " deg", "board normal p90 from horizontal"],
+        ];
+        document.getElementById("metrics").innerHTML = rows.map(([value, label]) =>
+          `<div class="metric"><strong>${value}</strong><span>${label}</span></div>`
+        ).join("");
+        return;
+      }
       const votes = Object.entries(m.bridge_topdown_votes || {})
         .map(([k, v]) => `${k}:${v}`)
         .join(" ");
@@ -2535,6 +2686,7 @@ HTML_TEMPLATE = """<!doctype html>
     function applyVisibility() {
       const visible = {
         inner: document.getElementById("show-inner").checked,
+        outer_final: document.getElementById("show-outer-final").checked,
         outer_topdown: document.getElementById("show-topdown").checked,
         outer_colmap: document.getElementById("show-colmap").checked,
       };
@@ -2563,7 +2715,16 @@ HTML_TEMPLATE = """<!doctype html>
     function initUi() {
       document.getElementById("title").textContent = RIG_DATA.title;
       document.getElementById("subtitle").textContent = `${RIG_DATA.generated_at} | ${RIG_DATA.coordinate_note}`;
-      document.getElementById("input-note").textContent = RIG_DATA.inputs.outer_colmap_images_txt;
+      const useOuterFinal = RIG_DATA.metrics.outer_pose_source === "outer_final_pose_yaml";
+      document.getElementById("pose-source-note").textContent = useOuterFinal
+        ? "Outer cameras are rendered from the final whole/tower rig. Inner cameras are rendered from all32 large-marker BA after aligning its outer poses to the outer final rig frame."
+        : "Legacy fallback: non-topdown outer cameras are approximate COLMAP Sim(3)-aligned poses, suitable for layout smoke checks rather than final geometry.";
+      for (const el of document.querySelectorAll(".legacy-colmap-ui")) {
+        el.style.display = useOuterFinal ? "none" : "";
+      }
+      document.getElementById("input-note").textContent = useOuterFinal
+        ? RIG_DATA.inputs.outer_final_pose_yaml
+        : RIG_DATA.inputs.outer_colmap_images_txt;
       const nearSlider = document.getElementById("near-slider");
       const farSlider = document.getElementById("far-slider");
       nearSlider.value = nearDistance;
@@ -2580,7 +2741,7 @@ HTML_TEMPLATE = """<!doctype html>
         updateSliderLabels();
         refreshFrustums();
       });
-      for (const id of ["show-inner", "show-topdown", "show-colmap", "show-labels"]) {
+      for (const id of ["show-inner", "show-outer-final", "show-topdown", "show-colmap", "show-labels"]) {
         document.getElementById(id).addEventListener("change", applyVisibility);
       }
       document.getElementById("reset-camera").addEventListener("click", resetView);
@@ -2636,16 +2797,17 @@ def write_html(path, data):
     (path.parent / "rig_data.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def main():
+def build_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--inner_bridge_pose_yaml", type=Path, default=DEFAULT_BRIDGE_POSE_YAML)
     parser.add_argument("--bridge_summary_json", type=Path, default=DEFAULT_BRIDGE_SUMMARY_JSON)
     parser.add_argument("--outer_colmap_images_txt", type=Path, default=DEFAULT_OUTER_IMAGES_TXT)
     parser.add_argument("--outer_colmap_summary_json", type=Path, default=DEFAULT_OUTER_SUMMARY_JSON)
-    parser.add_argument("--outer_final_pose_yaml", type=Path, default=DEFAULT_OUTER_FINAL_POSE_YAML)
+    parser.add_argument("--outer_final_pose_yaml", type=Path, default=None)
     parser.add_argument("--tower_pose_yaml", type=Path, default=DEFAULT_TOWER_POSE_YAML)
     parser.add_argument("--whole_coverage_tsv", type=Path, default=DEFAULT_WHOLE_COVERAGE_TSV)
     parser.add_argument("--large_marker_pnp_summary_tsv", type=Path, default=DEFAULT_LARGE_MARKER_PNP_SUMMARY_TSV)
+    parser.add_argument("--large_marker_correspondence_tsv", type=Path, default=Path(""))
     parser.add_argument("--small_marker_pnp_summary_tsv", type=Path, default=DEFAULT_SMALL_MARKER_PNP_SUMMARY_TSV)
     parser.add_argument("--inner_reprojection_metrics_tsv", type=Path, default=DEFAULT_INNER_REPROJECTION_METRICS_TSV)
     parser.add_argument("--inner_intrinsic_metrics_tsv", type=Path, default=DEFAULT_INNER_INTRINSIC_METRICS_TSV)
@@ -2684,6 +2846,11 @@ def main():
     parser.add_argument("--texture_jpeg_quality", type=int, default=82)
     parser.add_argument("--correspondence_data_url", default="")
     parser.add_argument("--title", default="Combined Studio Rig Viewer: inner8 + outer24")
+    return parser
+
+
+def main():
+    parser = build_arg_parser()
     args = parser.parse_args()
 
     data = build_viewer_data(args)

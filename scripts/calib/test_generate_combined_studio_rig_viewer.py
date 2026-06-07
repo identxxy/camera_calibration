@@ -26,6 +26,36 @@ def write_intrinsics_yaml(path, fx, fy, cx, cy, width=4096, height=3000):
     )
 
 
+def write_colmap_images_txt(path, labels):
+    lines = ["# minimal COLMAP images.txt fixture\n"]
+    for image_id, label in enumerate(labels, 1):
+        tx = -float(image_id)
+        ty = -0.2 * float(image_id % 3)
+        tz = -0.1 * float(image_id % 2)
+        lines.append(
+            f"{image_id} 1 0 0 0 {tx:.6f} {ty:.6f} {tz:.6f} "
+            f"{image_id} cam{image_id:02d}_{label}_f000000.jpg\n"
+        )
+        lines.append("0 0 -1 10 10 1\n")
+    path.write_text("".join(lines), encoding="utf-8")
+
+
+def write_pose_yaml(path, count):
+    lines = [f"pose_count: {count}", "poses:"]
+    for index in range(count):
+        lines.extend([
+            f"  - index: {index}",
+            "    qw: 1.0",
+            "    qx: 0.0",
+            "    qy: 0.0",
+            "    qz: 0.0",
+            f"    tx: {0.1 * index:.6f}",
+            f"    ty: {0.01 * index:.6f}",
+            f"    tz: {0.001 * index:.6f}",
+        ])
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 class CombinedStudioRigViewerTest(unittest.TestCase):
     def test_estimate_outer_column_gravity_alignment_excludes_topdown_side(self):
         cameras = []
@@ -198,6 +228,10 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
             self.assertIn("metric-intrinsics-sanity", html)
             self.assertIn("intrinsics-status", html)
             self.assertIn("function intrinsicResidualQuality(cam)", html)
+            self.assertIn('const isBridgeBa = c.status === "all32_bridge_ba_residuals";', html)
+            self.assertIn('source: isBridgeBa ? coverageMode + "_ba" : coverageMode + "_pnp"', html)
+            self.assertIn("median_error_px: c.median_error_px ?? c.median_view_error_px ?? null", html)
+            self.assertIn("p90_error_px: c.p90_error_px ?? null", html)
             self.assertIn("intrinsic residual:", html)
             self.assertIn("dataset/extrinsic residual:", html)
             self.assertIn("function gravityAlignedAxis(localAxis)", html)
@@ -210,19 +244,103 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
             self.assertIn("Load Corr", html)
             self.assertIn("id=\"correspondence-frame-slider\"", html)
             self.assertIn("id=\"correspondence-all-frames\"", html)
+            self.assertIn("id=\"correspondence-group-mode\"", html)
+            self.assertIn("Timeline", html)
+            self.assertIn("Face ID", html)
+            self.assertNotIn("By face in frame", html)
+            self.assertNotIn("By timestamp, all faces", html)
+            self.assertIn("Timeline trail", html)
+            self.assertIn("Face ID mode arranges the whole capture", html)
             self.assertIn("id=\"correspondence-point-group\"", html)
             self.assertIn("Max shown", html)
             self.assertIn("Residual <=", html)
+            self.assertIn("function correspondenceGroupModeName()", html)
+            self.assertIn("function correspondenceGroupKey(obs, includeFrame)", html)
+            self.assertIn("function buildRigidTowerContext(observations, frame, selectedGroupKey)", html)
+            self.assertIn("RIGID_TOWER_FACE_WIDTH_M = 0.25", html)
+            self.assertIn("function appendRigidTowerTimelineTrail(observations, currentFrame", html)
+            self.assertIn("Timeline mode shows one synchronized frame", html)
+            self.assertIn("Cyan outline is the current frame tower", html)
+            self.assertIn("Diagnostic only, not a BA constraint", html)
             self.assertIn("function populateCorrespondenceFrameControl()", html)
             self.assertIn("function populateCorrespondencePointGroupControl()", html)
             self.assertIn("All frames", html)
-            self.assertIn("All points (", html)
+            self.assertIn("All faces", html)
+            self.assertIn("All points", html)
             self.assertIn("function updateCorrespondenceOverlay()", html)
             self.assertIn("correspondenceObjectCount", html)
             self.assertEqual(
                 json.loads((output_html.parent / "rig_data.json").read_text(encoding="utf-8")),
                 data,
             )
+
+    def test_outer_final_pose_yaml_default_none_allows_colmap_fallback(self):
+        parser = combined_viewer.build_arg_parser()
+        parsed = parser.parse_args([])
+        self.assertIsNone(parsed.outer_final_pose_yaml)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bridge_yaml = root / "bridge.yaml"
+            colmap_images = root / "images.txt"
+            output_html = root / "viewer/index.html"
+
+            write_pose_yaml(bridge_yaml, 32)
+            write_colmap_images_txt(colmap_images, ["4-1", "4-2", "4-3", "1-1"])
+
+            args = type("Args", (), {
+                "inner_bridge_pose_yaml": bridge_yaml,
+                "bridge_summary_json": None,
+                "outer_colmap_images_txt": colmap_images,
+                "outer_colmap_summary_json": None,
+                "outer_final_pose_yaml": None,
+                "tower_pose_yaml": None,
+                "whole_coverage_tsv": None,
+                "large_marker_pnp_summary_tsv": None,
+                "large_marker_correspondence_tsv": None,
+                "small_marker_pnp_summary_tsv": None,
+                "inner_reprojection_metrics_tsv": None,
+                "inner_intrinsic_metrics_tsv": None,
+                "inner_intrinsics_dir": None,
+                "inner_intrinsics_index_offset": -1,
+                "outer_reprojection_tsv": None,
+                "outer_intrinsics_tsv": None,
+                "outer_intrinsics_dir": None,
+                "outer_intrinsic_metrics_tsv": None,
+                "large_marker_board_pose_yaml": None,
+                "small_marker_board_pose_yaml": None,
+                "bridge_marker_board_pose_yaml": None,
+                "output_html": output_html,
+                "viewer_scope": "combined",
+                "combined_image_directories_file": None,
+                "inner_image_directories_file": None,
+                "outer_image_directories_file": None,
+                "texture_max_width": 768,
+                "texture_jpeg_quality": 82,
+                "inner_bridge_indices": "24,25,26,27,28,29,30,31",
+                "topdown_bridge_indices": "9,10,11",
+                "topdown_labels": "4-1,4-2,4-3",
+                "default_near": 0.3,
+                "default_far": 0.7,
+                "frustum_half_width_over_depth": 0.45,
+                "frustum_half_height_over_depth": 0.32,
+                "frustum_fill_opacity": 0.11,
+                "title": "fallback viewer",
+                "correspondence_data_url": "",
+            })()
+
+            data = combined_viewer.build_viewer_data(args)
+
+            self.assertEqual(data["metrics"]["outer_pose_source"], "colmap_sim3_approx")
+            self.assertEqual(data["inputs"]["outer_final_pose_yaml"], "")
+            self.assertFalse(data["metrics"]["bridge_outer_alignment"]["available"])
+            outer_sources = [
+                camera["source"]
+                for camera in data["cameras"]
+                if not str(camera["label"]).startswith("inner")
+            ]
+            self.assertIn("colmap_sim3_approx", outer_sources)
+            self.assertNotIn("outer_final_pose_yaml", outer_sources)
 
 
 if __name__ == "__main__":

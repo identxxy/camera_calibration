@@ -161,7 +161,7 @@ feature density，而不是另一套 tower。
 ```text
 outer fixed cage + top-down cameras + inner near-field rig
   -> shared observations of the low-density board
-  -> inner-to-outer transform / top-down anchor bridge
+  -> all32 PnP initializer + all32 direct BA bridge
 ```
 
 选择低密度 board 的原因：
@@ -175,13 +175,13 @@ outer fixed cage + top-down cameras + inner near-field rig
 ```text
 outer cameras: indices 0..23
 inner cameras: indices 24..31
-top-down anchors 4-1, 4-2, 4-3: outer indices 9, 10, 11
+top-down cameras 4-1, 4-2, 4-3: outer indices 9, 10, 11
 ```
 
 `large_marker` 的主要目标：
 
 - 在内参固定的前提下求 inner-to-outer bridge。
-- 为 top-down outer cameras 提供比 tower 更可靠的约束。
+- 为 inner/outer 全部可见相机提供比 tower 更可靠的共享 board 约束。
 - 在内圈相机位置改变时，快速刷新内圈外参和整体 rig 对齐。
 
 ### High-Density A4 Board For `small_marker`
@@ -265,6 +265,19 @@ inner-to-outer bridge from large_marker
 
 ```text
 <run-root>/calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml
+```
+
+当前 t0 发布版固定复制到稳定路径：
+
+```text
+/home/ubuntu/calib_data/current_calibration/artifacts/studio_32_cameras.yaml
+http://192.168.2.0:9899/current_calibration/artifacts/studio_32_cameras.yaml
+```
+
+用户入口固定为：
+
+```text
+http://192.168.2.0:9899/
 ```
 
 该 YAML 应包含：

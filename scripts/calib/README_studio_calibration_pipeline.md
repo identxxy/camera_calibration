@@ -1,6 +1,6 @@
 # Studio 32-Camera Calibration Pipeline Runbook
 
-Last updated: 2026-06-01
+Last updated: 2026-06-07
 
 本文档固化 studio 32-camera calibration 的可复现操作路径。它覆盖三类
 capture data 的 Operation 入口、今晚回归测试的 stage 顺序、当前 integration
@@ -18,19 +18,19 @@ scripts/calib/README_studio_32_camera_system.md
 当前正式 machine-readable 32-camera YAML:
 
 ```text
-/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50/calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml
+/home/ubuntu/calib_data/current_calibration/artifacts/studio_32_cameras.yaml
 ```
 
-Backup:
+当前发布 run source:
 
 ```text
-/home/ubuntu/calib_data/calibration_backups/studio_32_cameras/studio_32_cameras_20260531_165339_recalib_20260531_193215_v2_outer_wide50.yaml
+/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260605_whole_fullres_probe_v1/calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml
 ```
 
 SHA256:
 
 ```text
-d806d5509750a8832ebfbb045398b36657db61c9d66a75a8852460b6bcea46f0
+352af5840d6cfedaf835b2333dc24579cb5b8b05b25e3ef130ba8ec5a1db9360
 ```
 
 Operator-facing report index:
@@ -53,16 +53,17 @@ http://192.168.2.0:9898/?mode=run_studio_calibration_pipeline
 
 默认数据根是 `/home/ubuntu/calib_data/calib_2026_05_31_v3`。默认 prior 则有意
 来自已经人工检查过的稳定结果：inner prior 使用 2026-05-26 的 refined inner8
-state，outer COLMAP prior 使用 2026-05-26 的 fixed-K first-frame COLMAP，
-outer frame-face delta prior/intrinsics 使用 2026-05-31 fullres raw gate6
-发布结果。不要把这些 prior 自动改到最新 data root，除非最新 root 已经明确发布了
-等价的 bootstrap artifact。
+state，outer COLMAP prior 使用 2026-05-26 的 fixed-K first-frame COLMAP。
+outer frame-face delta prior 仍可来自早期人工检查过的 2026-05-31 wide50/gate6
+bootstrap artifact；outer intrinsics 当前应优先使用 2026-06-04
+`outer_large_marker` 标定结果。不要把这些 prior 自动改到最新 data root，除非
+最新 root 已经明确发布了等价的 bootstrap artifact。
 
 ```text
 /home/ubuntu/calib_data/calib_2026_05_26_jpg_v3/final_inner8_calibration_v1/states/final_small_marker_grid4_refine_v1
 /home/ubuntu/calib_data/calib_2026_05_26_jpg_v3/colmap_outer24_firstframe_colmap404_v3/fixed_intrinsics/sparse_txt_final24_fixedK_ba/images.txt
 /home/ubuntu/calib_data/studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50/outer_tower/frame_face_refine_fullres_raw_ransac1000_wide50_gate6_v1/camera_tr_rig_delta_refined.yaml
-/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50/outer_tower/frame_face_refine_fullres_raw_ransac1000_wide50_gate6_v1/intrinsics_refined
+/home/ubuntu/calib_data/calib_2026_06_04_outer_large_marker_v2/outer_large_marker_20260604_passing_images_only_min1_bycam/outer24_intrinsics_large_marker_v1
 ```
 
 ## Operation Entries
@@ -90,8 +91,9 @@ small_marker       -> http://192.168.2.0:9898/?mode=operate_small_marker_inner
 - `large_marker`: low-density large board capture。产品目标是 inner-to-outer
   bridge，当前 production sequence 是 `large_marker_bridge_all32`，并用
   `large_marker_inner8` 作为 fixed-intrinsic inner baseline/init。all32 index
-  contract 是 outer `0..23`、inner `24..31`，top-down bridge anchors
-  `4-1`,`4-2`,`4-3` 对应 indices `9,10,11`。
+  contract 是 outer `0..23`、inner `24..31`。`4-1`,`4-2`,`4-3`
+  是 top-down hardware/layout metadata 和 legacy diagnostics，不是当前
+  production bridge 的唯一 anchors。
 - `small_marker`: high-density small board capture。产品目标是 inner8
   calibration / fixed-rig quality / diagnostic refine。默认不要把 small marker
   当作 outer bridge 输入；它只回答 inner intrinsics/extrinsics 是否可信。
@@ -149,9 +151,9 @@ do not skip them and then claim the run is reproducible.
    - 用第 3 步的 outer pose/intrinsics 跑 all32 bridge。
    - 默认复用内参；只有 inner rig 相机相对位置发生变化时才加
      `--run-large-inner-init`。
-   - 必须检查 `bridge_summary.json` 的 metric bridge gate，尤其是 top-down
-     anchors `4-1`,`4-2`,`4-3` 的 vote count、center/rotation residual 和
-     triangle degeneracy。
+   - 必须检查 all32 fixed-known-point BA 导出的 correspondence residual
+     summary：`ok_count`、median/p90/max residual。旧 `bridge_summary.json`
+     的 top-down metric gate 只作为 diagnostic，不再作为 production gate。
 
 5. Small-marker quality/refine
    - 正常回归至少跑 fixed-rig quality probe，即
@@ -257,38 +259,35 @@ python3 scripts/calib/run_studio_calibration_pipeline.py \
 `outer_tower/frame_face_refine_wide50_then_gate6/camera_tr_rig_delta_refined.yaml`
 和 `intrinsics_refined/`，否则 bridge 没有 outer source。
 
-## Current 2026-05-31 v2 Result
+## Current 2026-06-05 Result
 
 The current published run is:
 
 ```text
-/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50
+/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260605_whole_fullres_probe_v1
 ```
 
 Key report URLs:
 
 ```text
 http://192.168.2.0:9899/
-http://192.168.2.0:9899/studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50/inner_bridge/combined_studio_rig_viewer_v1/index.html
-http://192.168.2.0:9899/studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50/index.html
-```
-
-The 2026-06-04 run with outer intrinsics from `outer_large_marker` is the current
-reference:
-
-```text
-/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260604_outer_large_intrinsics_v1
-http://192.168.2.0:9899/
-http://192.168.2.0:9899/studio_calibration_runs/recalib_20260604_outer_large_intrinsics_v1/calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml
+http://192.168.2.0:9899/current_calibration/artifacts/studio_32_cameras.yaml
+http://192.168.2.0:9899/current_calibration/reports/01_3d_viewer/index.html
 ```
 
 Key metrics from that run:
 
-- outer24 intrinsic solve: `24/24` cameras, fx range `3628.51 - 3659.18 px`;
-- outer whole residual median/p90: `2.264 / 4.956 px`;
-- bridge metric gate: pass, top-down max center p90 `0.0339 m`, max rotation
-  p90 `1.569 deg`;
-- small-marker inner residual median/p90: `0.488 / 1.232 px`.
+- outer24 intrinsic solve: `24/24` cameras from `outer_large_marker`;
+- outer whole residual median/p90: `2.441 / 5.122 px`;
+- large-marker all32 BA residual median/p90/max:
+  `0.058 / 0.135 / 4.712 px`, `650948` accepted correspondences;
+- small-marker inner residual is reported separately under the current inner
+  intrinsic/extrinsic reports.
+
+The 9899 homepage must keep only the final YAML, one unified 3D viewer, and the
+seven curated reports described in `scripts/ops/README_t0_report_contract.md`.
+Do not promote old top-down anchor diagnostics, raw dated report folders, or
+standalone correspondence viewers to the root page.
 
 ## Fast vs Full Recalib Policy
 
@@ -311,7 +310,8 @@ Key metrics from that run:
 - exact command 和 dry-run command
 - distributed QC summary path 和 staged selected frame count
 - outer active/prior-only camera list、accepted-output median/p90 residual
-- bridge metric gate 状态和 top-down anchor residual
+- all32 bridge BA correspondence median/p90/max residual
+- legacy bridge metric gate 状态，仅作为 diagnostic
 - small-marker fixed-rig quality 状态
 - large/small correspondence TSV summary 和 advanced correspondence viewer path
 - unified YAML path、SHA256、backup path

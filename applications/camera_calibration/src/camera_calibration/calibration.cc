@@ -249,6 +249,7 @@ void RunBundleAdjustment(
     BAState* state,
     double regularization_weight,
     bool localize_only,
+    bool debug_fix_points,
     CalibrationWindow* calibration_window,
     bool step_by_step,
     const char* state_output_path) {
@@ -290,7 +291,10 @@ void RunBundleAdjustment(
             localize_only,
             /*eliminate_points*/ false,
             schur_mode,
-            &lambda);
+            &lambda,
+            /*performed_an_iteration*/ nullptr,
+            /*debug_verify_cost*/ false,
+            debug_fix_points);
       }
       
       LOG(INFO) << "[" << (iteration + 1) << "] Cost: " << cost;
@@ -1047,6 +1051,7 @@ bool Calibrate(
     float outlier_removal_factor,
     bool localize_only,
     bool skip_bundle_adjustment,
+    bool debug_fix_points,
     int max_ba_iterations,
     CalibrationWindow* calibration_window,
     BAState* state,
@@ -1204,11 +1209,11 @@ bool Calibrate(
     // pyramid level yet.
     RunBundleAdjustment(
         use_cuda, schur_mode, std::min(10, max_ba_iterations), /*cost_reduction_threshold*/ 0.0001, dataset, state, regularization_weight,
-        localize_only, calibration_window, step_by_step, state_output_path);
+        localize_only, debug_fix_points, calibration_window, step_by_step, state_output_path);
     if (max_ba_iterations > 10) {
       RunBundleAdjustment(
           use_cuda, schur_mode, std::min(50, max_ba_iterations - 10), /*cost_reduction_threshold*/ 1, dataset, state, regularization_weight,
-          localize_only, calibration_window, step_by_step, state_output_path);
+          localize_only, debug_fix_points, calibration_window, step_by_step, state_output_path);
     }
     
     // Upsample the camera models to the next level
@@ -1245,7 +1250,7 @@ bool Calibrate(
     if (warmup_iterations > 0) {
       RunBundleAdjustment(
           use_cuda, schur_mode, warmup_iterations, /*cost_reduction_threshold*/ 0.0001, dataset, state, regularization_weight,
-          localize_only, calibration_window, step_by_step, state_output_path);
+          localize_only, debug_fix_points, calibration_window, step_by_step, state_output_path);
     }
     
     for (int camera_index = 0; camera_index < dataset->num_cameras(); ++ camera_index) {
@@ -1261,7 +1266,7 @@ bool Calibrate(
   if (max_ba_iterations > 0) {
     RunBundleAdjustment(
         use_cuda, schur_mode, max_ba_iterations, /*cost_reduction_threshold*/ 0.0001, dataset, state, regularization_weight,
-        localize_only, calibration_window, step_by_step, state_output_path);
+        localize_only, debug_fix_points, calibration_window, step_by_step, state_output_path);
   }
   
   // If we used CUDA, which has a PCG-based BA implementation that is less accurate
@@ -1269,7 +1274,7 @@ bool Calibrate(
   if (use_cuda) {
     RunBundleAdjustment(
         /*use_cuda*/ false, schur_mode, std::min(10, max_ba_iterations), /*cost_reduction_threshold*/ 0.0001, dataset, state, regularization_weight,
-        localize_only, calibration_window, step_by_step, state_output_path);
+        localize_only, debug_fix_points, calibration_window, step_by_step, state_output_path);
   }
   
   // Scale the result as good as possible.
@@ -1394,6 +1399,7 @@ void CalibrateBatch(
     float outlier_removal_factor,
     bool localize_only,
     bool skip_bundle_adjustment,
+    bool debug_fix_points,
     int max_ba_iterations,
     SchurMode schur_mode,
     CalibrationWindow* calibration_window) {
@@ -1455,6 +1461,7 @@ void CalibrateBatch(
                  outlier_removal_factor,
                  localize_only,
                  skip_bundle_adjustment,
+                 debug_fix_points,
                  max_ba_iterations,
                  calibration_window,
                  &calibration,
@@ -1505,6 +1512,7 @@ int BatchCalibrationWithGUI(
     float outlier_removal_factor,
     bool localize_only,
     bool skip_bundle_adjustment,
+    bool debug_fix_points,
     int max_ba_iterations,
     SchurMode schur_mode,
     bool show_visualizations) {
@@ -1537,6 +1545,7 @@ int BatchCalibrationWithGUI(
         outlier_removal_factor,
         localize_only,
         skip_bundle_adjustment,
+        debug_fix_points,
         max_ba_iterations,
         schur_mode,
         show_visualizations ? &calibration_window : nullptr);

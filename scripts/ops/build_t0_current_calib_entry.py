@@ -22,7 +22,7 @@ INNER_SUMMARY_REL = (
 )
 BRIDGE_SUMMARY_REL = (
     "studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50/"
-    "inner_bridge/bridge_colmap_inner_refined_v1/bridge_summary.json"
+    "inner_bridge/summary.json"
 )
 CURRENT_BRIDGE_RUN_REL = (
     "studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50/"
@@ -80,7 +80,7 @@ LINKS = {
     ),
     "large_final": (
         "Large Marker Bridge 最终标定报告",
-        f"{CURRENT_BRIDGE_RUN_REL}/bridge_colmap_inner_refined_v1/index.html",
+        f"{CURRENT_BRIDGE_RUN_REL}/final_report/index.html",
     ),
     "inner_final": (
         "Inner/bridge final report",
@@ -88,7 +88,7 @@ LINKS = {
     ),
     "bridge_summary": (
         "Bridge summary.json",
-        f"{CURRENT_BRIDGE_RUN_REL}/bridge_colmap_inner_refined_v1/bridge_summary.json",
+        f"{CURRENT_BRIDGE_RUN_REL}/summary.json",
     ),
     "small_data_collection": (
         "Small Marker 数据采集报告",
@@ -212,7 +212,7 @@ OPERATION_GROUPS = [
         "purpose": (
             "Large Marker 的主要目的，是 bridge inner cameras 和 outer cameras。当前包含 "
             "large_marker_inner8 作为 inner baseline，以及 large_marker_bridge_all32 "
-            "用于 top-down outer bridge。"
+            "用于 all32 inner/outer bridge。"
         ),
     },
     {
@@ -256,7 +256,8 @@ OPERATION_DEFINITIONS = {
         "panel_mode": "operate_large_marker_bridge",
         "summary": (
             "采集 large marker 数据后，处理 inner-to-outer bridge：检查 large_marker_inner8 "
-            "和 large_marker_bridge_all32 的可用观测，求解 bridge anchors，并生成 combined viewer。"
+            "和 large_marker_bridge_all32 的可用观测，先做 all32 PnP initializer，再运行 "
+            "all32 fixed-known-point joint BA，并生成 combined viewer。"
         ),
         "current_backend": "scripts/calib/run_inner_bridge_recalib_pipeline.py",
         "target_cli": (
@@ -265,14 +266,15 @@ OPERATION_DEFINITIONS = {
         ),
         "steps": [
             "Validate large-marker inner8 and all32 bridge capture contracts.",
-            "Run large-marker feature extraction / PnP for bridge inputs.",
-            "Evaluate inner-to-outer transform against anchor and metric gates.",
+            "Run large-marker feature extraction / PnP initializer for bridge inputs.",
+            "Run all32 joint BA with known board points fixed and export post-BA correspondence residuals.",
             "Generate bridge final report and combined inner+outer viewer artifacts.",
             "Publish promoted bridge artifacts into current_calibration/report_registry.json.",
         ],
         "notes": [
             "这个 operation 的产品目标是 bridge inner cameras 和 outer cameras。",
-            "当前底层 wrapper 还同时包含 small-marker probe；后续 clean CLI 应把 bridge 和 small-inner 分开。",
+            "4-* top-down cameras are metadata / diagnostics only; production bridge quality is post-BA reprojection residual.",
+            "当前底层 wrapper 还同时包含 small-marker probe；后续 clean CLI 可把 bridge 和 small-inner 分开。",
         ],
     },
     "small_marker": {
@@ -322,9 +324,9 @@ STANDARD_REPORT_DRAFT = [
     {
         "label": "Large Marker / Bridge",
         "items": [
-            "bridge input contract：outer / inner camera index order、参与 bridge 的 anchors、accepted frames。",
-            "inner-to-outer transform、top-down / outer anchor vote count、metric residual gate。",
-            "bridge 成功 / 失败的硬门槛、caveats、以及最终 combined viewer。",
+            "bridge input contract：outer / inner camera index order、accepted frames、all32 correspondence count。",
+            "all32 PnP initializer、fixed-known-point joint BA、post-BA reprojection residual。",
+            "bridge/outer alignment diagnostic、caveats、以及最终 combined viewer。",
         ],
     },
 ]
@@ -411,7 +413,7 @@ def configure_current_run_paths(
             "studio_32_cameras_current/studio_32_cameras.yaml"
         )
     INNER_SUMMARY_REL = f"{CURRENT_BRIDGE_RUN_REL}/summary.json"
-    BRIDGE_SUMMARY_REL = f"{CURRENT_BRIDGE_RUN_REL}/bridge_colmap_inner_refined_v1/bridge_summary.json"
+    BRIDGE_SUMMARY_REL = f"{CURRENT_BRIDGE_RUN_REL}/summary.json"
     LINKS.update({
         "overall_viewer": (
             "Unified 3D viewer",
@@ -447,7 +449,7 @@ def configure_current_run_paths(
         ),
         "large_final": (
             "Large Marker Bridge 最终标定报告",
-            f"{CURRENT_BRIDGE_RUN_REL}/bridge_colmap_inner_refined_v1/index.html",
+            f"{CURRENT_BRIDGE_RUN_REL}/final_report/index.html",
         ),
         "inner_final": (
             "Inner/bridge final report",
@@ -531,6 +533,7 @@ def inner_audit(root: Path, base_url: str):
     bridge = read_json(root / BRIDGE_SUMMARY_REL)
     final = summary.get("final_yaml_candidates") or {}
     bridge_quality = summary.get("bridge_quality") or {}
+    bridge_correspondence_quality = summary.get("bridge_correspondence_quality") or {}
     small_summary_path = Path(final.get("small_fixed_rig_quality_camera_pnp_summary", ""))
     large_inner_summary_path = Path(final.get("large_inner_init_state_dir", "")) / "camera_pnp_summary.tsv"
     large_bridge_summary_path = (
@@ -542,10 +545,6 @@ def inner_audit(root: Path, base_url: str):
     large_bridge_rows = read_tsv(large_bridge_summary_path)
     small_disconnected = [row.get("user_id") for row in small_rows if row.get("connected") != "yes"]
     large_bridge_disconnected = [row.get("user_id") for row in large_bridge_rows if row.get("connected") != "yes"]
-    topdown_rows = [
-        row for row in large_bridge_rows
-        if row.get("user_id") in {"4-1", "4-2", "4-3"}
-    ]
     stage_rows = summarize_stages(summary)
     stage_failures = [
         row for row in stage_rows
@@ -556,13 +555,15 @@ def inner_audit(root: Path, base_url: str):
         contracts.get(name, {}).get("ready")
         for name in ["small_marker_inner8", "large_marker_inner8", "large_marker_bridge_all32"]
     )
-    metric_bridge_pass = bridge_quality.get("metric_bridge_gate") == "pass"
     large_inner_connected = sum(1 for row in large_inner_rows if row.get("connected") == "yes")
     inner_baseline_state = Path(final.get("inner_final_baseline_state_dir", ""))
     inner_baseline_ready = inner_baseline_state.is_dir()
-    topdown_connected = all(row.get("connected") == "yes" for row in topdown_rows)
+    bridge_ba_ready = (
+        bridge_correspondence_quality.get("status") == "present"
+        and int(bridge_correspondence_quality.get("ok_count") or 0) > 0
+    )
     status = "usable_with_caveats"
-    if not all_contracts_ready or not metric_bridge_pass or not inner_baseline_ready:
+    if not all_contracts_ready or not bridge_ba_ready or not inner_baseline_ready:
         status = "needs_attention"
     return {
         "status": status,
@@ -577,10 +578,9 @@ def inner_audit(root: Path, base_url: str):
         "large_inner_connected": large_inner_connected,
         "large_bridge_connected": sum(1 for row in large_bridge_rows if row.get("connected") == "yes"),
         "large_bridge_disconnected": large_bridge_disconnected,
-        "topdown_connected": topdown_connected,
-        "topdown_rows": topdown_rows,
-        "metric_bridge_pass": metric_bridge_pass,
+        "bridge_ba_ready": bridge_ba_ready,
         "bridge_quality": bridge_quality,
+        "bridge_correspondence_quality": bridge_correspondence_quality,
         "final": final,
         "links": {
             name: {"label": label, **link_state(root, base_url, rel)}
@@ -633,6 +633,12 @@ def render_topdown_rows(rows):
         "</tr>"
         for row in rows
     )
+
+
+def render_disconnected(labels):
+    if not labels:
+        return "-"
+    return ", ".join(labels)
 
 
 def render_report_category(category, links):
@@ -695,6 +701,87 @@ def render_operation_links(base_url, panel_url, output_rel):
   </div>
 </section>
 """
+
+
+CURRENT_REPORT_ENTRIES = [
+    {
+        "title": "Overall 3D Viewer",
+        "href": "reports/01_3d_viewer/index.html",
+        "description": (
+            "Unified 32-camera viewer. It includes camera-set filters, dataset coverage, "
+            "correspondence loading, intrinsic residuals, and final dataset/extrinsic residuals."
+        ),
+        "kind": "viewer",
+    },
+    {
+        "title": "Inner Capture Report",
+        "href": "reports/02_inner_capture_small_marker/index.html",
+        "description": "Small-marker inner8 capture/staging quality and usable observation coverage.",
+        "kind": "report",
+    },
+    {
+        "title": "Inner Intrinsic Report",
+        "href": "reports/03_inner_intrinsics_small_marker/index.html",
+        "description": "Inner8 feature accumulation, reprojection residuals, and per-camera intrinsic quality.",
+        "kind": "report",
+    },
+    {
+        "title": "Inner Extrinsic Report",
+        "href": "reports/04_inner_extrinsics_small_marker/index.html",
+        "description": "Inner8 rig layout and final inner extrinsic consistency.",
+        "kind": "report",
+    },
+    {
+        "title": "Outer Capture Report",
+        "href": "reports/05_outer_capture_outer_large_marker_whole/index.html",
+        "description": "Outer-large-marker intrinsic capture plus whole/tower extrinsic capture QC.",
+        "kind": "report",
+    },
+    {
+        "title": "Outer Intrinsic Report",
+        "href": "reports/06_outer_intrinsics_outer_large_marker/index.html",
+        "description": "Outer24 large-marker feature accumulation, residuals, and intrinsic quality.",
+        "kind": "report",
+    },
+    {
+        "title": "Outer Extrinsic Report",
+        "href": "reports/07_outer_extrinsics_whole/index.html",
+        "description": "Whole/tower outer24 extrinsic refinement residuals and accepted observation summary.",
+        "kind": "report",
+    },
+    {
+        "title": "Bridge Result Report",
+        "href": "reports/09_bridge_result_large_marker/index.html",
+        "description": "Large-marker all-camera inner/outer bridge result and final consistency checks.",
+        "kind": "report",
+    },
+]
+
+
+def current_report_url(base_url, output_rel, rel_path):
+    return f"{base_url.rstrip('/')}/{output_rel.strip('/')}/{rel_path.strip('/')}"
+
+
+def render_current_report_card(entry, base_url, output_rel):
+    href = current_report_url(base_url, output_rel, entry["href"])
+    return (
+        f"<a class='card link-card current-card {esc(entry['kind'])}' href='{esc(href)}'>"
+        f"<strong>{esc(entry['title'])}</strong>"
+        f"<span>{esc(entry['description'])}</span>"
+        "</a>"
+    )
+
+
+def render_final_yaml_card(link):
+    status = "ready" if link.get("exists") else "missing"
+    return (
+        f"<a class='artifact-card {esc(status)}' href='{esc(link['url'])}'>"
+        "<strong>Final 32-camera YAML</strong>"
+        "<span>Machine-readable intrinsics, distortion, and T_camera_studio "
+        "extrinsics for all 24 outer + 8 inner cameras.</span>"
+        f"<code>{esc(link.get('rel_path', ''))}</code>"
+        "</a>"
+    )
 
 
 def render_standard_report_draft():
@@ -961,11 +1048,18 @@ h2 { margin: 34px 0 12px; font-size: 20px; }
 p { line-height: 1.5; max-width: 1080px; }
 .muted { color: #686b70; font-size: 13px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.viewer-grid { display: grid; grid-template-columns: minmax(280px, 520px); gap: 12px; }
+.report-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
 .card { background: #fff; border: 1px solid #deded7; border-radius: 8px; padding: 14px 16px; }
 .link-card { display: flex; flex-direction: column; gap: 6px; text-decoration: none; color: #222; min-height: 72px; }
 .link-card strong { font-size: 17px; }
 .link-card span { color: #62666b; font-size: 13px; line-height: 1.35; }
 .link-card:hover { border-color: #9ba7b5; }
+.current-card.viewer { border-color: #b6c5d2; background: #fbfdff; }
+.artifact-card { display: flex; flex-direction: column; gap: 7px; max-width: 720px; margin: 0 0 18px; text-decoration: none; color: #222; background: #f7fbff; border: 1px solid #b6c5d2; border-radius: 8px; padding: 14px 16px; }
+.artifact-card strong { font-size: 18px; }
+.artifact-card span { color: #46515c; font-size: 13px; line-height: 1.35; }
+.artifact-card code { overflow-wrap: anywhere; }
 .missing { border-color: #d9a49d; background: #fff8f7; }
 .status { display: inline-flex; align-items: center; gap: 8px; border-radius: 999px; padding: 5px 10px; background: #e5eadf; font-size: 13px; font-weight: 650; }
 .needs_attention { background: #f2ddc8; }
@@ -1003,6 +1097,7 @@ code { background: #eeeeea; padding: 1px 4px; border-radius: 4px; }
 def render_audit_page(audit, base_url, output_rel):
     generated = time.strftime("%Y-%m-%d %H:%M:%S %Z")
     bq = audit["bridge_quality"]
+    bcq = audit["bridge_correspondence_quality"]
     final = audit["final"]
     links = audit["links"]
     status_text = (
@@ -1011,10 +1106,10 @@ def render_audit_page(audit, base_url, output_rel):
         else "needs attention"
     )
     open_question = (
-        "当前代码把 4-1/4-2/4-3 作为 production top-down bridge anchors。"
-        "large_marker_bridge_all32 会采集并求解 24 个 outer + 8 个 inner，"
-        "但最终 bridge quality gate 只强制这三个 top-down anchors。"
-        "如果还需要额外三个水平 outer cameras 作为硬约束，需要指定 camera labels 并扩展 evaluator。"
+        "当前 production bridge 使用 large_marker_bridge_all32 的 all32 fixed-known-point joint BA。"
+        "legacy top-down metric gate 只保留为诊断，不再作为 current calibration 的主质量门槛。"
+        "如果 bridge BA 与 whole outer final rig 的 gauge / scale alignment 诊断偏大，需要单独决定"
+        "固定 outer rig 还是接受 large-marker BA gauge。"
     )
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -1032,23 +1127,23 @@ def render_audit_page(audit, base_url, output_rel):
   </header>
   <main>
     <h2>Verdict</h2>
-    <p>Pipeline 的主路径可用，但不是完全干净：large-inner fixed-intrinsic baseline 成功，large all32 bridge 的 metric gate 通过；small-marker 质量 probe 暴露出 <code>{esc(', '.join(audit['small_disconnected']) or 'none')}</code> 在 small marker 数据上连通性不足；all32 PnP 命令返回 1 是因为并非所有 32 个 camera 都连通，但 bridge 所需的 top-down anchors 与 inner support 足够，后续 evaluator 和 combined viewer 已成功生成。</p>
+    <p>Pipeline 的主路径以 all32 large-marker BA 为 bridge 产品：large-inner fixed-intrinsic baseline 成功；large_marker_bridge_all32 先做 PnP initializer，再用固定 board 3D points 的 joint BA 输出最终 residual；small-marker 质量 probe 的弱相机是 <code>{esc(render_disconnected(audit['small_disconnected']))}</code>。</p>
     <p>{esc(open_question)}</p>
     <div class="facts">
       <div class="card fact"><strong>{esc(audit['large_inner_connected'])}/8</strong><span>large-inner connected cameras</span></div>
-      <div class="card fact"><strong>{esc(bq.get('metric_bridge_gate'))}</strong><span>metric bridge gate</span></div>
-      <div class="card fact"><strong>{esc(bq.get('outer_vote_count_min'))}</strong><span>min top-down outer votes</span></div>
-      <div class="card fact"><strong>{esc(bq.get('max_outer_center_residual_p90_m'))}</strong><span>max center p90 residual, m</span></div>
-      <div class="card fact"><strong>{esc(bq.get('max_outer_rotation_residual_p90_deg'))}</strong><span>max rotation p90 residual, deg</span></div>
-      <div class="card fact"><strong>{esc(audit['large_bridge_connected'])}/32</strong><span>all32 PnP connected cameras</span></div>
+      <div class="card fact"><strong>{esc(bcq.get('ok_count', 0))}</strong><span>all32 BA residual count</span></div>
+      <div class="card fact"><strong>{esc(bcq.get('median_residual_px'))}</strong><span>all32 BA median residual px</span></div>
+      <div class="card fact"><strong>{esc(bcq.get('p90_residual_px'))}</strong><span>all32 BA p90 residual px</span></div>
+      <div class="card fact"><strong>{esc(bcq.get('max_residual_px'))}</strong><span>all32 BA max residual px</span></div>
+      <div class="card fact"><strong>{esc(audit['large_bridge_connected'])}/32</strong><span>all32 PnP initializer connected cameras</span></div>
     </div>
 
     <h2>Data Quality</h2>
     <table><thead><tr><th>Dataset</th><th>Status</th><th>Usable cameras</th><th>Common frames</th><th>Frame spread</th><th>Warning</th></tr></thead><tbody>{render_quality_rows(audit['data_quality'])}</tbody></table>
 
     <h2>Large Marker Bridge Contract</h2>
-    <p>all32 order: outer cameras <code>0..23</code>, inner cameras <code>24..31</code>; production top-down anchors are <code>4-1/4-2/4-3</code> at bridge indices <code>9/10/11</code>. Inner final baseline source is <code>{esc(final.get('inner_prior_source'))}</code>.</p>
-    <table><thead><tr><th>Top-down camera</th><th>Connected</th><th>Positive views</th><th>Solved views</th><th>Median view error px</th></tr></thead><tbody>{render_topdown_rows(audit['topdown_rows'])}</tbody></table>
+    <p>all32 order: outer cameras <code>0..23</code>, inner cameras <code>24..31</code>. Production bridge pose source is <code>{esc(final.get('bridge_pose_yaml'))}</code>. Inner final baseline source is <code>{esc(final.get('inner_prior_source'))}</code>. The legacy metric bridge gate status is <code>{esc(bq.get('metric_bridge_gate', 'missing'))}</code> and is diagnostic only.</p>
+    <p>Disconnected PnP initializer cameras: <code>{esc(render_disconnected(audit['large_bridge_disconnected']))}</code>.</p>
 
     <h2>Known Caveats</h2>
     <table><thead><tr><th>Group</th><th>Stage</th><th>Status</th><th>Return code</th><th>Allow failure</th><th>Notes</th></tr></thead><tbody>{render_stage_rows(audit['stage_failures'])}</tbody></table>
@@ -1057,7 +1152,7 @@ def render_audit_page(audit, base_url, output_rel):
     <div class="grid">
       {render_link_card(links['large_data_collection']['label'], links['large_data_collection']['url'], 'capture and stage quality')}
       {render_link_card(links['inner_final']['label'], links['inner_final']['url'], 'wrapper final report')}
-      {render_link_card(links['large_final']['label'], links['large_final']['url'], 'top-down bridge metric gate')}
+      {render_link_card(links['large_final']['label'], links['large_final']['url'], 'all32 bridge BA final report')}
       {render_link_card('summary.json', url(base_url, INNER_SUMMARY_REL), 'machine-readable pipeline summary')}
     </div>
   </main>
@@ -1068,40 +1163,41 @@ def render_audit_page(audit, base_url, output_rel):
 
 def render_entry_page(audit, base_url, panel_url, output_rel):
     generated = time.strftime("%Y-%m-%d %H:%M:%S %Z")
-    links = audit["links"]
-    registry_url = base_url.rstrip("/") + "/" + output_rel + "/report_registry.json"
     status_text = (
-        "canonical report categories ready; inner audit has caveats"
+        "current calibration reports ready; inner audit has caveats"
         if audit["status"] == "usable_with_caveats"
-        else "canonical report categories ready; inner audit needs attention"
+        else "current calibration reports ready; inner audit needs attention"
     )
-    report_sections = "\n".join(
-        render_report_category(category, links)
-        for category in CANONICAL_REPORT_CATEGORIES
+    viewer_card = render_current_report_card(CURRENT_REPORT_ENTRIES[0], base_url, output_rel)
+    report_cards = "\n".join(
+        render_current_report_card(entry, base_url, output_rel)
+        for entry in CURRENT_REPORT_ENTRIES[1:]
     )
+    final_yaml_card = render_final_yaml_card(audit["links"]["studio32_yaml"])
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Current Calibration Entry</title>
+  <title>Studio Calibration Reports</title>
   <style>{css()}</style>
 </head>
 <body>
   <header>
-    <h1>当前标定报告入口</h1>
+    <h1>Studio Calibration Reports</h1>
     <div class="status {esc(audit['status'])}">{esc(status_text)}</div>
-    <p class="muted">Generated: {esc(generated)} · canonical reports + controlled operations · <a href="{esc(registry_url)}">report_registry.json</a></p>
+    <p class="muted">Generated: {esc(generated)} · one viewer + seven reports</p>
   </header>
   <main>
-    <p>这个页面是给人看的稳定入口。首页提升五类 canonical reports，并提供采集后的受控处理入口。所有生产发布仍通过 <a href="{esc(registry_url)}">report_registry.json</a> 登记。</p>
+    <p>这个入口只保留当前生产标定需要看的内容：一个整体 3D viewer，以及内圈、外圈、bridge 的七个报告。operation panel、registry、历史诊断和探索报告不在首页展示。</p>
 
-    {render_operation_links(base_url, panel_url, output_rel)}
+    {final_yaml_card}
 
-    {report_sections}
+    <h2>Overall Viewer</h2>
+    <div class="viewer-grid">{viewer_card}</div>
 
-    <h2>Repo Hygiene</h2>
-    <p>repo 内不应新增 generated report HTML 作为脚本目录文件。生成报告应写入 pipeline run directory、t0 report root，或 repo 内 <code>studio/exp</code> / <code>studio/archive</code> 归档位置，并由 <code>report_registry.json</code> 统一提升到当前入口。</p>
+    <h2>Reports</h2>
+    <div class="report-grid">{report_cards}</div>
   </main>
 </body>
 </html>

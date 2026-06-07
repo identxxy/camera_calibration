@@ -58,23 +58,22 @@ operators can copy URLs directly from the page. The operation panel defaults to:
 http://192.168.2.0:9898/
 ```
 
-The final report interface is organized only around five canonical report
-categories:
+The final report interface is intentionally compact:
 
-1. Inner capture QC: `small_marker` and `large_marker` calib board data
-   collection reports.
-2. Inner solve result: inner8 3D viewer plus reprojection/final solve report.
-3. Outer capture QC: `whole` / tower AprilTag data collection and coverage
-   reports.
-4. Outer solve diagnostics/result: outer tower frame-face refine and COLMAP
-   audit diagnostics.
-5. Combined bridge / 32-camera result: unified 3D viewer plus
-   `studio_32_cameras.yaml`.
+1. Final YAML: `current_calibration/artifacts/studio_32_cameras.yaml`.
+2. Overall 3D viewer: `current_calibration/reports/01_3d_viewer/index.html`.
+3. Inner data capture report: `02_inner_capture_small_marker`.
+4. Inner intrinsic report: `03_inner_intrinsic_small_marker`.
+5. Inner extrinsic report: `04_inner_extrinsic_small_marker`.
+6. Outer data capture report: `05_outer_capture_whole_and_outer_large_marker`.
+7. Outer intrinsic report: `06_outer_intrinsic_outer_large_marker`.
+8. Outer extrinsic report: `07_outer_extrinsic_whole`.
+9. Bridge result report: `09_bridge_result_large_marker`.
 
 The root dashboard should not promote dated scratch reports, raw pipeline
-directories, source/debug viewers, or operation buttons as extra homepage
-groups. Operation pages remain linked through `report_registry.json` and the
-9898 panel.
+directories, source/debug viewers, standalone correspondence viewers,
+registry/debug JSON files, or operation buttons as extra homepage groups.
+Operation launch is handled by the 9898 panel.
 
 Production pipeline entrypoint:
 
@@ -139,11 +138,11 @@ not be interpreted as final outer calibration results.
   camera products still use compact inner indices `0..7`; the pipeline remaps
   those inner intrinsics/poses to bridge indices `24..31` only for the all32
   bridge. The top-down anchor cameras are `4-1`, `4-2`, and `4-3`, corresponding
-  to bridge indices `9`, `10`, and `11`. The current bridge product is a
-  fixed-intrinsic PnP solve plus top-down anchor evaluation/viewer; combined
-  BA/refinement is a follow-up stage rather than part of this panel run. Bridge
-  PnP uses full-frame stride 1 by default because stride 2 disconnected the
-  current all32 bridge graph from camera0.
+  to bridge indices `9`, `10`, and `11`, but they are not the only bridge
+  anchors. The current bridge product is an all32 PnP initializer followed by
+  direct all32 joint BA with known board points fixed. The final bridge quality
+  comes from the BA correspondence residual TSV; the top-down bridge metric is
+  kept only as a legacy diagnostic.
 - `operate_whole_outer_cage`: calls
   `scripts/calib/run_outer_tower_recalib_pipeline.py` through the production
   operation alias. Its browser form defaults match the current production whole

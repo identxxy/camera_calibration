@@ -351,6 +351,81 @@ def parse_indices(text):
     return [int(item) for item in str(text).split(",") if item.strip()]
 
 
+def invert_pose(pose):
+    inverse = np.eye(4, dtype=np.float64)
+    inverse[:3, :3] = pose[:3, :3].T
+    inverse[:3, 3] = -pose[:3, :3].T @ pose[:3, 3]
+    return inverse
+
+
+def average_rotation(rotations):
+    if not rotations:
+        return np.eye(3, dtype=np.float64)
+    matrix = np.sum(np.asarray(rotations, dtype=np.float64), axis=0)
+    u, _s, vt = np.linalg.svd(matrix)
+    rotation = u @ vt
+    if np.linalg.det(rotation) < 0:
+        u[:, -1] *= -1.0
+        rotation = u @ vt
+    return rotation
+
+
+def estimate_reference_from_bridge(bridge_poses, reference_poses):
+    transforms = []
+    for index in range(min(len(OUTER_CAMERA_LABELS), len(bridge_poses), len(reference_poses))):
+        bridge_pose = bridge_poses[index]
+        reference_pose = reference_poses[index]
+        if bridge_pose is None or reference_pose is None:
+            continue
+        validate_pose(index, bridge_pose)
+        validate_pose(index, reference_pose)
+        transforms.append(invert_pose(reference_pose) @ bridge_pose)
+    if not transforms:
+        return np.eye(4, dtype=np.float64), {
+            "outer_alignment_camera_count": 0,
+            "outer_alignment_center_rms_m": None,
+            "outer_alignment_rotation_rms_deg": None,
+        }
+
+    reference_from_bridge = np.eye(4, dtype=np.float64)
+    reference_from_bridge[:3, :3] = average_rotation([transform[:3, :3] for transform in transforms])
+    reference_from_bridge[:3, 3] = np.mean([transform[:3, 3] for transform in transforms], axis=0)
+
+    center_residuals = []
+    rotation_residuals = []
+    for index in range(min(len(OUTER_CAMERA_LABELS), len(bridge_poses), len(reference_poses))):
+        bridge_pose = bridge_poses[index]
+        reference_pose = reference_poses[index]
+        if bridge_pose is None or reference_pose is None:
+            continue
+        predicted_reference_pose = bridge_pose @ invert_pose(reference_from_bridge)
+        predicted_center = invert_pose(predicted_reference_pose)[:3, 3]
+        target_center = invert_pose(reference_pose)[:3, 3]
+        center_residuals.append(float(np.linalg.norm(predicted_center - target_center)))
+        delta_r = predicted_reference_pose[:3, :3] @ reference_pose[:3, :3].T
+        cos_angle = max(-1.0, min(1.0, (float(np.trace(delta_r)) - 1.0) * 0.5))
+        rotation_residuals.append(math.degrees(math.acos(cos_angle)))
+
+    return reference_from_bridge, {
+        "outer_alignment_camera_count": len(transforms),
+        "outer_alignment_center_rms_m": float(np.sqrt(np.mean(np.square(center_residuals)))) if center_residuals else None,
+        "outer_alignment_rotation_rms_deg": float(np.sqrt(np.mean(np.square(rotation_residuals)))) if rotation_residuals else None,
+    }
+
+
+def bridge_poses_in_outer_reference(bridge_poses, outer_reference_poses):
+    if len(bridge_poses) < len(OUTER_CAMERA_LABELS):
+        return bridge_poses, {
+            "outer_alignment_camera_count": 0,
+            "outer_alignment_center_rms_m": None,
+            "outer_alignment_rotation_rms_deg": None,
+            "note": "bridge pose YAML has no outer poses; assuming it is already in the outer reference frame",
+        }
+    reference_from_bridge, summary = estimate_reference_from_bridge(bridge_poses, outer_reference_poses)
+    bridge_from_reference = invert_pose(reference_from_bridge)
+    return [pose @ bridge_from_reference if pose is not None else None for pose in bridge_poses], summary
+
+
 def build_combined_poses(args):
     inner_bridge_indices = parse_indices(args.inner_bridge_indices)
     if len(inner_bridge_indices) != 8:
@@ -358,6 +433,7 @@ def build_combined_poses(args):
 
     outer_poses = load_pose_yaml(args.outer_final_pose_yaml)
     inner_bridge_poses = load_pose_yaml(args.inner_bridge_pose_yaml)
+    inner_bridge_poses, bridge_alignment = bridge_poses_in_outer_reference(inner_bridge_poses, outer_poses)
     inner_camera_ids = read_inner_camera_ids(args.inner_manifest)
 
     poses = [None for _ in range(32)]
@@ -389,16 +465,25 @@ def build_combined_poses(args):
             "source_yaml": str(Path(args.inner_bridge_pose_yaml).resolve()),
             "source_index": source_index,
         })
-    return poses, rows
+    return poses, rows, bridge_alignment
 
 
-def write_manifest(path, args, pose_yaml, label_tsv, unified_yaml, camera_rows, coordinate_frame=None):
+def write_manifest(
+        path,
+        args,
+        pose_yaml,
+        label_tsv,
+        unified_yaml,
+        camera_rows,
+        coordinate_frame=None,
+        bridge_alignment=None):
     manifest = {
         "schema_version": 1,
         "artifact": "studio_32_relative_extrinsics",
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "coordinate_frame": coordinate_frame["aligned_coordinate_frame"] if coordinate_frame else "studio_rig_current",
         "coordinate_transform": coordinate_frame or {},
+        "bridge_outer_alignment": bridge_alignment or {},
         "pose_convention": {
             "transform": "camera_tr_studio_rig",
             "meaning": "rig point to camera coordinates",
@@ -449,7 +534,7 @@ def main():
     parser.add_argument("--no-canonical-studio-frame", action="store_true")
     args = parser.parse_args()
 
-    poses, rows = build_combined_poses(args)
+    poses, rows, bridge_alignment = build_combined_poses(args)
     coordinate_frame = None
     if not args.no_canonical_studio_frame:
         coordinate_frame = estimate_frame_from_camera_poses(poses, rows)
@@ -464,8 +549,18 @@ def main():
     write_pose_yaml(pose_yaml, poses, coordinate_frame)
     write_label_tsv(label_tsv, rows)
     write_unified_camera_yaml(unified_yaml, poses, rows, args.intrinsics_dir, coordinate_frame)
-    write_manifest(manifest_json, args, pose_yaml, label_tsv, unified_yaml, rows, coordinate_frame)
+    write_manifest(
+        manifest_json,
+        args,
+        pose_yaml,
+        label_tsv,
+        unified_yaml,
+        rows,
+        coordinate_frame,
+        bridge_alignment,
+    )
     print(json.dumps({
+        "bridge_outer_alignment": bridge_alignment,
         "coordinate_frame": coordinate_frame["aligned_coordinate_frame"] if coordinate_frame else "studio_rig_current",
         "pose_count": len(poses),
         "unified_yaml": str(unified_yaml),

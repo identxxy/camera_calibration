@@ -84,6 +84,55 @@ class OuterTowerRecalibPipelineTest(unittest.TestCase):
             self.assertEqual(summary["inputs"]["frame_face_prior_pose_yaml"]["path"], str(prior.resolve()))
             self.assertEqual(summary["inputs"]["frame_face_intrinsics_dir"]["path"], str(intrinsics.resolve()))
 
+    def test_frame_face_wide50_gate4_refine_stage_is_planned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "calib_data"
+            output_root = root / "out"
+            data_root.mkdir()
+            dataset = root / "tower_fullres.bin"
+            manifest = root / "manifest.tsv"
+            prior = root / "camera_tr_rig.yaml"
+            intrinsics = root / "intrinsics"
+            dataset.write_bytes(b"")
+            manifest.write_text("camera_index\tcamera_id\n", encoding="utf-8")
+            prior.write_text("poses: []\n", encoding="utf-8")
+            intrinsics.mkdir()
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--data-root", str(data_root),
+                    "--output-root", str(output_root),
+                    "--dry-run",
+                    "--run-frame-face-refine",
+                    "--frame-face-refine-preset", "wide50_then_gate4",
+                    "--frame-face-dataset", str(dataset),
+                    "--frame-face-manifest", str(manifest),
+                    "--frame-face-prior-pose-yaml", str(prior),
+                    "--frame-face-intrinsics-dir", str(intrinsics),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
+            stages = {stage["name"]: stage for stage in summary["stages"]}
+            command = stages["frame_face_refine"]["commands"][0]
+
+            self.assertTrue(stages["frame_face_refine"]["requested"])
+            self.assertIn("refine_outer_tower_frame_face_planes.py", command)
+            self.assertIn("--initial_observation_residual_gate_px 50.0", command)
+            self.assertIn("--observation_residual_gate_px 4.0", command)
+            self.assertIn("--optimizer_residual_clip_px 20.0", command)
+            self.assertIn("--pnp_ransac_iterations 1000", command)
+            self.assertIn("--min_camera_observations_for_delta 8", command)
+            self.assertIn("frame_face_refine_wide50_then_gate4", command)
+
     def test_frame_face_gate10_refine_stage_is_planned(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

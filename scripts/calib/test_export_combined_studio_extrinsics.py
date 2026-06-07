@@ -100,7 +100,7 @@ class ExportCombinedStudioExtrinsicsTest(unittest.TestCase):
                 "run_tag": "test",
             })()
 
-            poses, rows = export_extrinsics.build_combined_poses(args)
+            poses, rows, bridge_alignment = export_extrinsics.build_combined_poses(args)
             export_extrinsics.write_pose_yaml(output_dir / "camera_tr_studio_rig.yaml", poses)
             export_extrinsics.write_label_tsv(output_dir / "camera_labels.tsv", rows)
             export_extrinsics.write_manifest(
@@ -115,8 +115,9 @@ class ExportCombinedStudioExtrinsicsTest(unittest.TestCase):
             self.assertEqual(len(poses), 32)
             self.assertAlmostEqual(poses[0][0, 3], 100.0)
             self.assertAlmostEqual(poses[23][0, 3], 123.0)
-            self.assertAlmostEqual(poses[24][0, 3], 224.0)
-            self.assertAlmostEqual(poses[31][0, 3], 231.0)
+            self.assertAlmostEqual(poses[24][0, 3], 124.0)
+            self.assertAlmostEqual(poses[31][0, 3], 131.0)
+            self.assertEqual(bridge_alignment["outer_alignment_camera_count"], 24)
             self.assertEqual(rows[0]["label"], "1-1")
             self.assertEqual(rows[23]["label"], "8-3")
             self.assertEqual(rows[24]["label"], "inner0")

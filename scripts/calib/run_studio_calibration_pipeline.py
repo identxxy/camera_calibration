@@ -35,8 +35,11 @@ DEFAULT_OUTER_FRAME_FACE_INTRINSICS_DIR = (
     Path("/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50")
     / "outer_tower/frame_face_refine_fullres_raw_ransac1000_wide50_gate6_v1/intrinsics_refined"
 )
-
-
+DEFAULT_OUTER_INTRINSIC_METRICS_TSV = (
+    Path("/home/ubuntu/calib_data/calib_2026_06_04_outer_large_marker_v2")
+    / "outer_large_marker_20260604_passing_images_only_min1_bycam"
+    / "outer24_intrinsic_report_large_marker_v1/camera_metrics.tsv"
+)
 def repo_root():
     return Path(__file__).resolve().parents[2]
 
@@ -91,6 +94,13 @@ def path_status(path):
     return {"path": str(path), "exists": path.exists(), "kind": kind}
 
 
+def first_existing(paths):
+    for path in paths:
+        if path and Path(path).is_file():
+            return Path(path).resolve(strict=False)
+    return ""
+
+
 def default_output_root(args):
     run_tag = args.run_tag or timestamp_tag()
     return DEFAULT_HTTP_ROOT / "studio_calibration_runs" / run_tag
@@ -112,7 +122,20 @@ def build_paths(args):
         if args.outer_final_intrinsics_dir
         else outer_frame_face_dir / "intrinsics_refined"
     )
+    outer_intrinsic_metrics_tsv = (
+        resolve_path(args.outer_intrinsic_metrics_tsv)
+        if args.outer_intrinsic_metrics_tsv
+        else first_existing([
+            output_root / "outer_large_marker_intrinsics" / "camera_metrics.tsv",
+            DEFAULT_OUTER_INTRINSIC_METRICS_TSV,
+            DEFAULT_HTTP_ROOT / "current_calibration/reports/06_outer_intrinsics_outer_large_marker/camera_metrics.tsv",
+        ])
+    )
     bridge_root = output_root / "inner_bridge"
+    large_marker_ba_state_dir = (
+        bridge_root / args.large_marker_sequence /
+        f"fixed_points_joint_ba_stride{args.large_frame_stride}_{args.large_bridge_schur_mode}_v1"
+    )
     unified_artifact_dir = output_root / "calibration_artifacts" / "studio_32_cameras_current"
     marker_correspondence_dir = output_root / "marker_correspondences"
     advanced_correspondence_root = output_root / "advanced_correspondence_viewer_v1"
@@ -130,15 +153,16 @@ def build_paths(args):
         "outer_frame_face_dir": outer_frame_face_dir,
         "outer_pose_yaml": outer_pose_yaml,
         "outer_intrinsics_dir": outer_intrinsics_dir,
+        "outer_intrinsic_metrics_tsv": outer_intrinsic_metrics_tsv,
         "whole_data_report": whole_data_report,
         "bridge_root": bridge_root,
         "bridge_viewer": bridge_root / "combined_studio_rig_viewer_v1" / "index.html",
-        "bridge_pose_yaml": bridge_root / "bridge_colmap_inner_refined_v1" / "camera_tr_inner_refined_plus_outer_topdown.yaml",
+        "bridge_pose_yaml": large_marker_ba_state_dir / "camera_tr_rig.yaml",
         "bridge_intrinsics_dir": bridge_root / "planned_inputs" / "bridge_all32_fixed_intrinsics",
         "unified_artifact_dir": unified_artifact_dir,
         "unified_camera_yaml": unified_artifact_dir / "studio_32_cameras.yaml",
         "large_marker_dataset": bridge_root / args.large_marker_sequence / f"features_parallel_pattern0_bridge_stride{args.large_frame_stride}_v1.bin",
-        "large_marker_state_dir": bridge_root / args.large_marker_sequence / f"fixed_intrinsic_bridge_pnp_stride{args.large_frame_stride}_v1",
+        "large_marker_state_dir": large_marker_ba_state_dir,
         "large_marker_manifest": bridge_root / "planned_inputs" / "large_marker_usable_manifest.tsv",
         "small_marker_dataset": bridge_root / args.small_marker_sequence / f"features_pattern3_grid4_stride{args.small_frame_stride}_fast_v1.bin",
         "small_marker_state_dir": bridge_root / args.small_marker_sequence / "fixed_intrinsic_small_grid4_quality_probe_v1",
@@ -150,7 +174,11 @@ def build_paths(args):
         "small_marker_correspondence_summary": marker_correspondence_dir / "small_marker_correspondences.summary.json",
         "outer_observation_residuals_tsv": outer_frame_face_dir / "diagnostics" / "observation_residuals.tsv",
         "outer_frame_face_pose_yaml": outer_frame_face_dir / "rig_tr_frame_face.yaml",
-        "large_pnp_dir": bridge_root / args.large_marker_sequence / "fixed_intrinsic_bridge_pnp_stride1_v1",
+        "large_pnp_dir": (
+            bridge_root / args.large_marker_sequence /
+            f"fixed_intrinsic_bridge_pnp_stride{args.large_frame_stride}_v1"
+        ),
+        "large_ba_dir": large_marker_ba_state_dir,
         "small_pnp_dir": bridge_root / args.small_marker_sequence / "fixed_intrinsic_small_grid4_quality_probe_v1",
         "viewer_assets_dir": bridge_root / "combined_studio_rig_viewer_v1",
         "advanced_correspondence_root": advanced_correspondence_root,
@@ -192,11 +220,18 @@ def bridge_command(args, paths):
         "--large-inner-marker-sequence", args.large_inner_marker_sequence,
         "--small-marker-sequence", args.small_marker_sequence,
         "--large-frame-stride", str(args.large_frame_stride),
+        "--large-bridge-schur-mode", args.large_bridge_schur_mode,
+        "--large-bridge-max-ba-iterations", str(args.large_bridge_max_ba_iterations),
+        "--large-bridge-model", args.large_bridge_model,
         "--small-frame-stride", str(args.small_frame_stride),
         "--run-large-bridge",
         "--run-reports",
         "--run-tag", args.run_tag,
     ]
+    if args.camera_calibration_binary:
+        command.extend(["--camera-calibration-binary", resolve_path(args.camera_calibration_binary)])
+    if paths["outer_intrinsic_metrics_tsv"]:
+        command.extend(["--outer-intrinsic-metrics-tsv", paths["outer_intrinsic_metrics_tsv"]])
     if args.inner_prior:
         command.extend(["--inner-prior", resolve_path(args.inner_prior)])
     if args.outer_prior:
@@ -472,6 +507,13 @@ def parse_args():
     parser.add_argument("--large-inner-marker-sequence", default="large_marker_inner8")
     parser.add_argument("--small-marker-sequence", default="small_marker_inner8")
     parser.add_argument("--large-frame-stride", type=int, default=1)
+    parser.add_argument("--large-bridge-model", default="central_opencv")
+    parser.add_argument("--large-bridge-max-ba-iterations", type=int, default=80)
+    parser.add_argument(
+        "--large-bridge-schur-mode",
+        choices=["dense", "dense_cuda", "dense_onthefly", "sparse", "sparse_onthefly"],
+        default="dense",
+    )
     parser.add_argument("--small-frame-stride", type=int, default=4)
     parser.add_argument("--run-large-inner-init", action="store_true")
     parser.add_argument("--run-small-quality", action="store_true")
@@ -512,10 +554,28 @@ def parse_args():
         help="Override final outer intrinsics directory consumed by bridge stages.",
     )
     parser.add_argument(
+        "--outer-intrinsic-metrics-tsv",
+        type=Path,
+        default=None,
+        help=(
+            "Outer large-marker intrinsic camera_metrics.tsv used by the unified viewer "
+            "for intrinsic residual columns."
+        ),
+    )
+    parser.add_argument(
         "--whole-data-report",
         type=Path,
         default=None,
         help="Promoted whole data collection report passed into the current-calibration entry publisher.",
+    )
+    parser.add_argument(
+        "--camera-calibration-binary",
+        type=Path,
+        default=None,
+        help=(
+            "Optional camera_calibration C++ binary forwarded to the inner/bridge wrapper. "
+            "When omitted, the inner wrapper probes the current checkout and known T0 release builds."
+        ),
     )
     parser.add_argument("--outer-only", action="store_true")
     parser.add_argument("--bridge-only", action="store_true")
@@ -531,6 +591,8 @@ def parse_args():
         parser.error("--outer-only and --bridge-only are mutually exclusive")
     if args.large_frame_stride < 1:
         parser.error("--large-frame-stride must be >= 1")
+    if args.large_bridge_max_ba_iterations < 0:
+        parser.error("--large-bridge-max-ba-iterations must be non-negative")
     if args.small_frame_stride < 1:
         parser.error("--small-frame-stride must be >= 1")
     return args

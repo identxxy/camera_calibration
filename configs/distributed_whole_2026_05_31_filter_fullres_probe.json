@@ -1,0 +1,68 @@
+{
+  "clients": [
+    {
+      "name": "w3_5_fullres",
+      "host": "admin@192.168.2.3",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_fullres_detections_probe/w3/5_fullres --worker-id w3_5_fullres --camera-id 5-1,5-2,5-3 --time 2026_05_31-17_54_18 --resize-factor 1.0 --min-tags 4",
+      "collect": {"method": "skip"}
+    },
+    {
+      "name": "w3_6_fullres",
+      "host": "admin@192.168.2.3",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_fullres_detections_probe/w3/6_fullres --worker-id w3_6_fullres --camera-id 6-1,6-2,6-3 --time 2026_05_31-17_54_18 --resize-factor 1.0 --min-tags 4",
+      "collect": {"method": "skip"}
+    },
+    {
+      "name": "w3_7_fullres",
+      "host": "admin@192.168.2.3",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_fullres_detections_probe/w3/7_fullres --worker-id w3_7_fullres --camera-id 7-1,7-2,7-3 --time 2026_05_31-17_54_18 --resize-factor 1.0 --min-tags 4",
+      "collect": {"method": "skip"}
+    },
+    {
+      "name": "w3_8_fullres",
+      "host": "admin@192.168.2.3",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_fullres_detections_probe/w3/8_fullres --worker-id w3_8_fullres --camera-id 8-1,8-2,8-3 --time 2026_05_31-17_54_18 --resize-factor 1.0 --min-tags 4",
+      "collect": {"method": "skip"}
+    },
+    {
+      "name": "w4_1_fullres",
+      "host": "admin@192.168.2.4",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_fullres_detections_probe/w4/1_fullres --worker-id w4_1_fullres --camera-id 1-1,1-2,1-3 --time 2026_05_31-17_54_18 --resize-factor 1.0 --min-tags 4",
+      "collect": {"method": "skip"}
+    },
+    {
+      "name": "w4_2_fullres",
+      "host": "admin@192.168.2.4",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_fullres_detections_probe/w4/2_fullres --worker-id w4_2_fullres --camera-id 2-1,2-2,2-3 --time 2026_05_31-17_54_18 --resize-factor 1.0 --min-tags 4",
+      "collect": {"method": "skip"}
+    },
+    {
+      "name": "w4_3_fullres",
+      "host": "admin@192.168.2.4",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_fullres_detections_probe/w4/3_fullres --worker-id w4_3_fullres --camera-id 3-1,3-2,3-3 --time 2026_05_31-17_54_18 --resize-factor 1.0 --min-tags 4",
+      "collect": {"method": "skip"}
+    },
+    {
+      "name": "w4_4_fullres",
+      "host": "admin@192.168.2.4",
+      "shell": "powershell",
+      "workdir": "D:/camera_calibration",
+      "command": "D:/tools/Python311/python.exe scripts/calib/distributed_apriltag_quality_filter.py detect --input-root D:/output/calib/whole --output-dir D:/output/calib_quality/whole_2026_05_31_min4_fullres_detections_probe/w4/4_fullres --worker-id w4_4_fullres --camera-id 4-1,4-2,4-3 --time 2026_05_31-17_54_18 --resize-factor 1.0 --min-tags 4",
+      "collect": {"method": "skip"}
+    }
+  ]
+}

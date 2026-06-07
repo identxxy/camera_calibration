@@ -66,6 +66,46 @@ each `(camera, time, frame)` before computing frame gates and per-camera stats.
 This keeps temporary full-resolution rescans from double-counting frames if a
 half-resolution output is also passed for the same camera.
 
+Keep each worker `detections.jsonl` in production full-resolution runs; do not
+pass `--skip-detections-jsonl` unless the run is QC-only. After
+`distributed_apriltag_quality_filter.py aggregate` writes the staged
+`manifest.tsv`, `image_directories.txt`, `selected_frames.tsv`, and
+`selected_images.tsv`, build the BA `calib_data` binary directly from cached
+detections instead of making t0 read SMB 4K images and detect tags again:
+
+```bash
+python3 scripts/calib/build_apriltag_tower_dataset_from_detections.py \
+  --manifest /home/ubuntu/calib_data/<stage>/manifest.tsv \
+  --image-directories-file /home/ubuntu/calib_data/<stage>/image_directories.txt \
+  --worker-output /home/ubuntu/calib_data/<worker-output-or-collection-dir> \
+  --output-dataset /home/ubuntu/calib_data/<stage>/opencv_tower_dataset_fullres_from_detections.bin \
+  --tower-config applications/camera_calibration/patterns/apriltag_tower_8faces_2x16_8cm.yaml \
+  --summary-json /home/ubuntu/calib_data/<stage>/opencv_tower_dataset_fullres_from_detections_summary.json \
+  --per-camera-tsv /home/ubuntu/calib_data/<stage>/opencv_tower_dataset_fullres_from_detections_per_camera.tsv \
+  --detections-tsv /home/ubuntu/calib_data/<stage>/opencv_tower_dataset_fullres_from_detections.tsv
+```
+
+The builder auto-discovers `selected_images.tsv` / `selected_frames.tsv` next to
+the staged manifest, filters detections to tower-valid tag IDs, preserves OpenCV
+corner order, and writes the same version-1 dataset format as
+`build_apriltag_tower_dataset_opencv.py`.
+
+On the 2026-05-31 whole recapture, a full-resolution QC probe recovered many
+more candidate frames than the hybrid QC cache: 780 selected synchronized frames
+and 8148 passing images, versus the older 249 selected frames. Rebuilding the
+tower dataset from t0 by re-reading SMB 4K images took about 27.8 minutes for
+24 cameras x 780 frames, so production runs should keep worker
+`detections.jsonl` and use the direct-detections builder above.
+
+The same probe also shows why the final BA gate matters. With the full-resolution
+dataset and the current outer large-marker intrinsics, `wide50_then_gate6`
+accepted 8123 residuals at median/p90 `2.44 / 5.12 px`; the stricter
+`wide50_then_gate4` accepted 4778 residuals at median/p90 `1.83 / 3.50 px` and
+kept 22/24 outer cameras active (`4-1`, `4-2` still inactive from tower tags).
+Use `wide50_then_gate4` as a high-precision candidate when full-resolution
+detections provide enough coverage, and keep `wide50_then_gate6` as the
+conservative support-retaining default.
+
 AprilTag corner localization is expected to be subpixel. The Python/OpenCV
 distributed QC and dataset builder paths default to ArUco subpixel refinement
 and then run `cv2.cornerSubPix()` on the original full-resolution grayscale

@@ -158,6 +158,29 @@ class InnerBridgeRecalibPipelineTest(unittest.TestCase):
             )
             self.assertIn("type: CentralOpenCVModel", copied)
 
+    def test_infer_outer_intrinsic_metrics_finds_current_outer_large_marker_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "calib_2026_05_31_v3"
+            outer_intrinsics = (
+                root / "studio_calibration_runs/run/outer_tower/"
+                "frame_face_refine_gate6/intrinsics_refined"
+            )
+            metrics = (
+                root / "current_calibration/reports/"
+                "06_outer_intrinsics_outer_large_marker/camera_metrics.tsv"
+            )
+            outer_intrinsics.mkdir(parents=True)
+            metrics.parent.mkdir(parents=True)
+            metrics.write_text("camera_index\tuser_id\tresidual_count\n", encoding="utf-8")
+
+            inferred = inner_pipeline.infer_outer_intrinsic_metrics_tsv(
+                outer_intrinsics,
+                data_root,
+            )
+
+            self.assertEqual(inferred, metrics.resolve(strict=False))
+
     def test_combined_viewer_uses_outer_final_pose_yaml_for_outer_ring(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -258,8 +281,9 @@ class InnerBridgeRecalibPipelineTest(unittest.TestCase):
                 if not str(camera["label"]).startswith("inner")
             ]
             self.assertNotIn("colmap_sim3_approx", outer_sources)
-            self.assertEqual(outer_sources.count("outer_final_pose_yaml_bridge_aligned"), 24)
+            self.assertEqual(outer_sources.count("outer_final_pose_yaml"), 24)
             self.assertNotIn("bridge_metric_topdown", outer_sources)
+            self.assertTrue(data["metrics"]["bridge_outer_alignment"]["available"])
             self.assertEqual(
                 data["inputs"]["outer_final_pose_yaml"],
                 str(outer_final_yaml.resolve()),
@@ -363,7 +387,7 @@ class InnerBridgeRecalibPipelineTest(unittest.TestCase):
             summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
             stages = {stage["name"]: stage for stage in summary["stages"]}
             viewer_stage = stages["generate_combined_bridge_viewer"]
-            bridge_stage = stages["evaluate_topdown_bridge"]
+            bridge_stage = stages["evaluate_inner_outer_bridge_alignment"]
             viewer_command = viewer_stage["planned_command"]
             bridge_command = bridge_stage["planned_command"]
 
@@ -420,8 +444,8 @@ class InnerBridgeRecalibPipelineTest(unittest.TestCase):
             self.assertIn("--run-large-bridge", summary["provenance"]["argv"])
             self.assertIn("git", summary["provenance"])
             self.assertEqual(summary["bridge_layout"]["inner_indices"], list(range(24, 32)))
-            self.assertEqual(summary["bridge_layout"]["outer_indices"], [9, 10, 11])
-            self.assertEqual(summary["bridge_layout"]["outer_labels"], ["4-1", "4-2", "4-3"])
+            self.assertEqual(summary["bridge_layout"]["outer_indices"], list(range(24)))
+            self.assertEqual(summary["bridge_layout"]["outer_labels"], [camera_id for _machine, camera_id in OUTER_CAMERAS])
             self.assertEqual(summary["bridge_intrinsics"]["ready_count"], 32)
             self.assertTrue((bridge_intrinsics / "intrinsics0.yaml").is_file())
             self.assertTrue((bridge_intrinsics / "intrinsics23.yaml").is_file())
@@ -432,16 +456,76 @@ class InnerBridgeRecalibPipelineTest(unittest.TestCase):
             self.assertIn(f"--fixed_intrinsics_directory {bridge_intrinsics}", pnp_command)
             self.assertNotIn("small_marker_opencv_grid4_pattern3_v2", pnp_command)
 
-            eval_command = stages["evaluate_topdown_bridge"]["planned_command"]
+            ba_command = stages["refine_large_marker_bridge_joint_ba"]["planned_command"]
+            self.assertIn("--debug_fix_points", ba_command)
+            self.assertIn("--model central_opencv", ba_command)
+            self.assertIn("--max_ba_iterations 80", ba_command)
+
+            eval_command = stages["evaluate_inner_outer_bridge_alignment"]["planned_command"]
             self.assertIn("--inner_indices 24,25,26,27,28,29,30,31", eval_command)
-            self.assertIn("--outer_indices 9,10,11", eval_command)
-            self.assertIn("--outer_labels 4-1,4-2,4-3", eval_command)
+            self.assertIn("--outer_indices " + ",".join(str(index) for index in range(24)), eval_command)
+            self.assertIn("--outer_labels " + ",".join(camera_id for _machine, camera_id in OUTER_CAMERAS), eval_command)
 
             viewer_command = stages["generate_combined_bridge_viewer"]["planned_command"]
             self.assertIn("--inner_bridge_indices 24,25,26,27,28,29,30,31", viewer_command)
-            self.assertIn("--topdown_bridge_indices 9,10,11", viewer_command)
+            self.assertIn("--topdown_bridge_indices " + ",".join(str(index) for index in range(24)), viewer_command)
             self.assertIn("--correspondence_data_url ../../advanced_correspondence_viewer_v1/correspondence_data.json", viewer_command)
             self.assertNotIn("/home/vox/calib_data", pnp_command + eval_command + viewer_command)
+
+    def test_legacy_bridge_outputs_do_not_make_final_viewer_ready(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "calib_data"
+            output_root = root / "out"
+            outer_prior = data_root / "colmap_outer24_firstframe_colmap404_v3/fixed_intrinsics/sparse_txt_final24_fixedK_ba/images.txt"
+            write_session(data_root, "small_marker_inner8", INNER_CAMERAS)
+            write_session(data_root, "large_marker_inner8", INNER_CAMERAS)
+            write_session(data_root, "large_marker_bridge_all32", OUTER_CAMERAS + INNER_CAMERAS)
+            write_intrinsics(data_root)
+            outer_prior.parent.mkdir(parents=True)
+            outer_prior.write_text("# empty test COLMAP file\n", encoding="utf-8")
+            legacy_dir = output_root / "bridge_colmap_inner_refined_v1"
+            legacy_dir.mkdir(parents=True)
+            (legacy_dir / "bridge_summary.json").write_text('{"legacy": true}\n', encoding="utf-8")
+            (legacy_dir / "camera_tr_inner_refined_plus_outer_topdown.yaml").write_text(
+                "pose_count: 0\nposes:\n",
+                encoding="utf-8",
+            )
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--data-root", str(data_root),
+                    "--output-root", str(output_root),
+                    "--outer-prior", str(outer_prior),
+                    "--dry-run",
+                    "--run-reports",
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
+            stages = {stage["name"]: stage for stage in summary["stages"]}
+
+            self.assertEqual(
+                stages["generate_combined_bridge_viewer"]["status"],
+                "blocked_missing_inputs",
+            )
+            self.assertTrue(
+                summary["final_yaml_candidates"]["legacy_bridge_pose_yaml"].endswith(
+                    "bridge_colmap_inner_refined_v1/camera_tr_inner_refined_plus_outer_topdown.yaml"
+                )
+            )
+            self.assertTrue(
+                summary["final_yaml_candidates"]["bridge_pose_yaml"].endswith(
+                    "large_marker_bridge_all32/fixed_points_joint_ba_stride1_dense_v1/camera_tr_rig.yaml"
+                )
+            )
 
     def test_dry_run_plans_correspondence_residual_exports(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -512,6 +596,11 @@ class InnerBridgeRecalibPipelineTest(unittest.TestCase):
             )
             self.assertTrue(
                 candidates["large_marker_bridge_correspondence_residuals_tsv"].endswith(
+                    "large_marker_bridge_all32/fixed_points_joint_ba_stride1_dense_v1/correspondence_residuals.tsv"
+                )
+            )
+            self.assertTrue(
+                candidates["large_marker_bridge_initializer_correspondence_residuals_tsv"].endswith(
                     "large_marker_bridge_all32/fixed_intrinsic_bridge_pnp_stride1_v1/correspondence_residuals.tsv"
                 )
             )

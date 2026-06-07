@@ -186,6 +186,9 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
       "--localize_only", "Load an existing intrinsics calibration (from --state_directory), keep it fixed, and optimize for camera poses and pattern geometry only.");
   bool skip_bundle_adjustment = cmd_parser.Flag(
       "--skip_bundle_adjustment", "Stop after dense initialization / localization and write the initialized state without running joint bundle adjustment.");
+  bool debug_fix_points = cmd_parser.Flag(
+      "--debug_fix_points",
+      "Keep calibration state points fixed during bundle adjustment. This is intended for known-geometry diagnostics and fixed-board bridge refinement.");
   int max_ba_iterations = 100;
   cmd_parser.NamedParameter(
       "--max_ba_iterations", &max_ba_iterations, /*required*/ false,
@@ -629,6 +632,7 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
         outlier_removal_factor,
         localize_only,
         skip_bundle_adjustment,
+        debug_fix_points,
         max_ba_iterations,
         schur_mode,
         show_visualizations);

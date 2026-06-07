@@ -24,7 +24,14 @@ CURRENT_WHOLE_ROOT = "calib_2026_05_31_v3"
 CURRENT_WHOLE_OUTER24 = f"{CURRENT_WHOLE_ROOT}/whole_outer24_filtered_min4_hybrid_min4cam"
 CURRENT_WHOLE_ALL32 = f"{CURRENT_WHOLE_ROOT}/whole_all32_filtered_min4_hybrid_min4cam"
 CURRENT_OUTER_CANDIDATE = OUTER_TOWER_LATEST
-UNIFIED_VIEWER = f"{FAST_INNER_BRIDGE_LATEST}/combined_studio_rig_viewer_v1/index.html"
+UNIFIED_VIEWER = "current_calibration/reports/01_3d_viewer/index.html"
+INNER_CAPTURE_REPORT = "current_calibration/reports/02_inner_capture_small_marker/index.html"
+INNER_INTRINSIC_REPORT = "current_calibration/reports/03_inner_intrinsics_small_marker/index.html"
+INNER_EXTRINSIC_REPORT = "current_calibration/reports/04_inner_extrinsics_small_marker/index.html"
+OUTER_CAPTURE_REPORT = "current_calibration/reports/05_outer_capture_outer_large_marker_whole/index.html"
+OUTER_INTRINSIC_REPORT = "current_calibration/reports/06_outer_intrinsics_outer_large_marker/index.html"
+OUTER_EXTRINSIC_REPORT = "current_calibration/reports/07_outer_extrinsics_whole/index.html"
+BRIDGE_RESULT_REPORT = "current_calibration/reports/09_bridge_result_large_marker/index.html"
 STUDIO32_YAML = (
     f"{CURRENT_RUN_ROOT}/calibration_artifacts/"
     "studio_32_cameras_current/studio_32_cameras.yaml"
@@ -41,170 +48,164 @@ EXCLUDED_REPORT_PATHS = {
 }
 
 
-TOOL_LINKS = [
-    {
-        "label": "一键标定 Panel",
-        "description": "采集后从 9898 panel 以 dry-run 优先启动 pipeline wrapper。",
-        "kind": "operation",
-        "url": "panel",
-    },
-]
+TOOL_LINKS = []
 
 
 REPORT_GROUPS = [
     {
-        "title": "1. Inner Capture QC",
-        "subtitle": "small_marker / large_marker calib board data quality",
+        "title": "Overall Viewer",
+        "subtitle": "single unified 32-camera viewer",
         "status": "pipeline",
         "status_label": "canonical",
-        "panel_mode": "operate_small_marker_inner",
+        "panel_mode": "",
         "description": (
-            "内圈 calib board 采集质量入口。这里只看同步、尾帧裁剪、掉帧排除、"
-            "角点覆盖和可用相机集合。"
+            "统一查看 24+8 camera rig。viewer 内包含 camera filters、dataset coverage、"
+            "correspondence loading、intrinsic residuals 和 final dataset/extrinsic residuals。"
         ),
         "items": [
             {
-                "label": "Small marker data QC",
-                "path": f"{STAGE_ROOT}/small_marker_inner8/coverage_gate_pattern3_v1/coverage_report.html",
-                "kind": "data collection quality",
-                "status_if_exists": "ready",
-                "status_if_missing": "not produced yet",
-            },
-            {
-                "label": "Large marker bridge input QC",
-                "path": f"{FAST_INNER_BRIDGE_LATEST}/quality_report/index.html",
-                "kind": "data collection quality",
-                "status_if_exists": "ready",
-                "status_if_missing": "not produced yet",
-            },
-        ],
-        "notes": [
-            "这是采集质量，不是最终 solve result。",
-            "operation 入口只负责触发受控 panel mode，不把临时 report 提升为首页入口。",
-        ],
-    },
-    {
-        "title": "2. Inner Solve Result",
-        "subtitle": "inner 8-camera intrinsics/extrinsics quality",
-        "status": "pipeline",
-        "status_label": "canonical",
-        "panel_mode": "operate_small_marker_inner",
-        "description": (
-            "内圈 8 相机解算结果入口。最终 3D 姿态只在统一 viewer 中查看，"
-            "这里保留 reprojection / intrinsics 报告。"
-        ),
-        "items": [
-            {
-                "label": "Small marker refined reprojection report",
-                "path": (
-                    f"{STAGE_ROOT}/final_inner8_calibration_v1/reports/"
-                    "report_small_grid4_refined_reprojection_v1/index.html"
-                ),
-                "kind": "final report",
-                "status_if_exists": "ready",
-                "status_if_missing": "not produced yet",
-            },
-            {
-                "label": "Inner/bridge wrapper final report",
-                "path": f"{FAST_INNER_BRIDGE_LATEST}/final_report/index.html",
-                "kind": "final report",
-                "status_if_exists": "ready",
-                "status_if_missing": "not produced yet",
-            },
-        ],
-        "notes": [
-            "standalone inner viewer 是历史诊断产物；当前首页只提升一个 unified 3D viewer。",
-        ],
-    },
-    {
-        "title": "3. Outer Capture QC",
-        "subtitle": "whole AprilTag tower data quality",
-        "status": "pipeline",
-        "status_label": "canonical",
-        "panel_mode": "operate_whole_outer_cage",
-        "description": (
-            "whole / tower 采集质量入口。这里回答每台 outer camera 是否有足够 "
-            "AprilTag 观测进入后续 refine。"
-        ),
-        "items": [
-            {
-                "label": "Whole outer24 data QC",
-                "path": f"{CURRENT_WHOLE_OUTER24}/index.html",
-                "kind": "data collection quality",
-                "status_if_exists": "ready",
-                "status_if_missing": "not produced yet",
-            },
-        ],
-        "notes": [
-            "distributed logs、coverage drill-down 和 COLMAP audits 保留在 run directory，不出现在首页。",
-        ],
-    },
-    {
-        "title": "4. Outer Solve Result",
-        "subtitle": "outer 24-camera final solve diagnostics",
-        "status": "pipeline",
-        "status_label": "canonical",
-        "panel_mode": "operate_whole_outer_cage",
-        "description": (
-            "当前外圈解算结果入口。production 报告基于 05-31 run root；"
-            "底层 frame-face refine 不把八棱柱 face_width 几何当作生产入口。"
-        ),
-        "items": [
-            {
-                "label": "Outer solve final report",
-                "path": f"{CURRENT_OUTER_CANDIDATE}/index.html",
-                "kind": "final report",
-                "status_if_exists": "ready",
-                "status_if_missing": "not produced yet",
-            },
-            {
-                "label": "Outer solve summary.json",
-                "path": f"{CURRENT_OUTER_CANDIDATE}/summary.json",
-                "kind": "machine-readable summary",
-                "status_if_exists": "ready",
-                "status_if_missing": "not produced yet",
-            },
-        ],
-        "notes": [
-            "旧 COLMAP vote、side-prior、face_width 和 report inventory 都是历史诊断，不在首页展开。",
-        ],
-    },
-    {
-        "title": "5. Combined Bridge / 32-Camera Result",
-        "subtitle": "one canonical 3D viewer and one machine-readable YAML",
-        "status": "pipeline",
-        "status_label": "canonical",
-        "panel_mode": "operate_large_marker_bridge",
-        "description": (
-            "最终统一入口。viewer 内部提供 inner only / outer only / combined 和 "
-            "whole / large marker / small marker coverage 模式。"
-        ),
-        "items": [
-            {
-                "label": "Unified 3D viewer",
+                "label": "Overall 3D Viewer",
                 "path": UNIFIED_VIEWER,
                 "kind": "3D viewer",
                 "status_if_exists": "ready",
                 "status_if_missing": "not produced yet",
             },
+        ],
+        "notes": [],
+    },
+    {
+        "title": "1. Inner Capture Report",
+        "subtitle": "small-marker inner8 data quality",
+        "status": "pipeline",
+        "status_label": "canonical",
+        "panel_mode": "",
+        "description": (
+            "内圈采集质量入口。这里只看同步、尾帧裁剪、掉帧排除、角点覆盖和可用相机集合。"
+        ),
+        "items": [
             {
-                "label": "studio_32_cameras.yaml",
-                "path": STUDIO32_YAML,
-                "kind": "machine-readable calibration",
-                "status_if_exists": "ready",
-                "status_if_missing": "not produced yet",
-            },
-            {
-                "label": "Bridge summary.json",
-                "path": f"{FAST_INNER_BRIDGE_LATEST}/bridge_colmap_inner_refined_v1/bridge_summary.json",
-                "kind": "bridge summary",
+                "label": "Inner capture report",
+                "path": INNER_CAPTURE_REPORT,
+                "kind": "data collection quality",
                 "status_if_exists": "ready",
                 "status_if_missing": "not produced yet",
             },
         ],
-        "notes": [
-            "这是下游算法和人工检查共同使用的 canonical 32-camera result。",
+        "notes": [],
+    },
+    {
+        "title": "2. Inner Intrinsic Report",
+        "subtitle": "inner8 feature coverage and residuals",
+        "status": "pipeline",
+        "status_label": "canonical",
+        "panel_mode": "",
+        "description": (
+            "Inner8 intrinsic feature accumulation、reprojection residual 和 per-camera intrinsic quality。"
+        ),
+        "items": [
+            {
+                "label": "Inner intrinsic report",
+                "path": INNER_INTRINSIC_REPORT,
+                "kind": "intrinsic report",
+                "status_if_exists": "ready",
+                "status_if_missing": "not produced yet",
+            },
         ],
+        "notes": [],
+    },
+    {
+        "title": "3. Inner Extrinsic Report",
+        "subtitle": "inner8 rig layout and consistency",
+        "status": "pipeline",
+        "status_label": "canonical",
+        "panel_mode": "",
+        "description": "Inner8 extrinsic layout、relative pose sanity checks 和 final inner consistency。",
+        "items": [
+            {
+                "label": "Inner extrinsic report",
+                "path": INNER_EXTRINSIC_REPORT,
+                "kind": "extrinsic report",
+                "status_if_exists": "ready",
+                "status_if_missing": "not produced yet",
+            },
+        ],
+        "notes": [],
+    },
+    {
+        "title": "4. Outer Capture Report",
+        "subtitle": "outer-large-marker + whole capture QC",
+        "status": "pipeline",
+        "status_label": "canonical",
+        "panel_mode": "",
+        "description": (
+            "Outer-large-marker intrinsic capture 和 whole/tower extrinsic capture 的统一采集质量报告。"
+        ),
+        "items": [
+            {
+                "label": "Outer capture report",
+                "path": OUTER_CAPTURE_REPORT,
+                "kind": "data collection quality",
+                "status_if_exists": "ready",
+                "status_if_missing": "not produced yet",
+            },
+        ],
+        "notes": [],
+    },
+    {
+        "title": "5. Outer Intrinsic Report",
+        "subtitle": "outer24 large-marker intrinsics",
+        "status": "pipeline",
+        "status_label": "canonical",
+        "panel_mode": "",
+        "description": "Outer24 large-marker feature accumulation、residuals 和 per-camera intrinsic quality。",
+        "items": [
+            {
+                "label": "Outer intrinsic report",
+                "path": OUTER_INTRINSIC_REPORT,
+                "kind": "intrinsic report",
+                "status_if_exists": "ready",
+                "status_if_missing": "not produced yet",
+            },
+        ],
+        "notes": [],
+    },
+    {
+        "title": "6. Outer Extrinsic Report",
+        "subtitle": "whole/tower outer24 extrinsics",
+        "status": "pipeline",
+        "status_label": "canonical",
+        "panel_mode": "",
+        "description": "Whole/tower outer24 extrinsic refinement residuals and accepted observation summary。",
+        "items": [
+            {
+                "label": "Outer extrinsic report",
+                "path": OUTER_EXTRINSIC_REPORT,
+                "kind": "extrinsic report",
+                "status_if_exists": "ready",
+                "status_if_missing": "not produced yet",
+            },
+        ],
+        "notes": [],
+    },
+    {
+        "title": "7. Bridge Result Report",
+        "subtitle": "large-marker all-camera bridge",
+        "status": "pipeline",
+        "status_label": "canonical",
+        "panel_mode": "",
+        "description": (
+            "Large-marker all-camera bridge result、inner/outer consistency 和 final bridge quality gates。"
+        ),
+        "items": [
+            {
+                "label": "Bridge result report",
+                "path": BRIDGE_RESULT_REPORT,
+                "kind": "bridge report",
+                "status_if_exists": "ready",
+                "status_if_missing": "not produced yet",
+            },
+        ],
+        "notes": [],
     },
 ]
 
@@ -349,6 +350,17 @@ class ReportHandler(SimpleHTTPRequestHandler):
                 (path.parent / "scene_data.json").is_file()
                 and not self._is_outer_placeholder_viewer(path)
             )
+        if rel.endswith("current_calibration/reports/01_3d_viewer/index.html"):
+            rig_data_path = path.parent / "rig_data.json"
+            if not rig_data_path.is_file():
+                return False
+            try:
+                rig_data = json.loads(rig_data_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return False
+            if (rig_data.get("metrics") or {}).get("outer_pose_source") == "colmap_sim3_approx":
+                return False
+            return bool(rig_data.get("cameras"))
         if rel.endswith("combined_studio_rig_viewer_v1/index.html"):
             rig_data_path = path.parent / "rig_data.json"
             if not rig_data_path.is_file():
@@ -430,11 +442,7 @@ class ReportHandler(SimpleHTTPRequestHandler):
             f"<li>{html.escape(note)}</li>" for note in group.get("notes", [])
         )
         items = "".join(self._render_report_item(item) for item in group.get("items", []))
-        panel_href = self._panel_mode_href(panel_url, group.get("panel_mode", ""))
-        action = (
-            "<a class=\"pipeline-action\" "
-            f"href=\"{html.escape(panel_href)}\">Run from panel</a>"
-        )
+        notes_html = f"<ul class=\"notes\">{notes}</ul>" if notes else ""
         return (
             f"<section class=\"report-group {html.escape(group['status'])}\">"
             "<div class=\"group-head\">"
@@ -445,15 +453,15 @@ class ReportHandler(SimpleHTTPRequestHandler):
             f"<span class=\"status-pill\">{html.escape(group['status_label'])}</span>"
             "</div>"
             f"<p>{html.escape(group['description'])}</p>"
-            f"{action}"
             f"<ul class=\"report-list\">{items}</ul>"
-            f"<ul class=\"notes\">{notes}</ul>"
+            f"{notes_html}"
             "</section>"
         )
 
     def _serve_index(self):
         panel_url = getattr(self.server, "panel_url", DEFAULT_PANEL_URL) or self._same_host_panel_url()
         tool_links = "".join(self._render_tool_link(item, panel_url) for item in TOOL_LINKS)
+        tools_html = f"<div class=\"tools\">{tool_links}</div>" if tool_links else ""
         report_groups = "".join(self._render_report_group(group, panel_url) for group in REPORT_GROUPS)
         body = f"""<!doctype html>
 <html lang="zh-CN">
@@ -585,8 +593,8 @@ class ReportHandler(SimpleHTTPRequestHandler):
 <body>
   <header>
     <h1>Camera Calibration Reports</h1>
-    <p>最终报告入口只展示 canonical reports。所有 report href 使用完整 9899 URL。服务根目录: <code>{html.escape(str(self.root))}</code>。</p>
-    <div class="tools">{tool_links}</div>
+    <p>最终报告入口只展示一个 overall viewer 和七个 canonical reports。所有 report href 使用完整 9899 URL。服务根目录: <code>{html.escape(str(self.root))}</code>。</p>
+    {tools_html}
   </header>
   <main>
     <div class="report-grid">{report_groups}</div>

@@ -6,6 +6,7 @@ import csv
 import hashlib
 import html
 import json
+import math
 import os
 import re
 import shlex
@@ -19,10 +20,21 @@ from pathlib import Path
 
 DEFAULT_T0_DATA_ROOT = Path("/home/ubuntu/calib_data/calib_2026_05_26_jpg_v3")
 DEFAULT_T0_REPO = Path("/home/ubuntu/camera_calibration")
-DEFAULT_T0_BINARY = (
+DEFAULT_T0_BINARY = Path(
     "/home/ubuntu/camera_calibration/build_t0/applications/"
-    "camera_calibration/camera_calibration"
+    "camera_calibration/camera_calibration",
 )
+DEFAULT_T0_BINARY_FALLBACKS = [
+    DEFAULT_T0_BINARY,
+    Path(
+        "/home/ubuntu/camera_calibration_release_1771ad3/build_t0/"
+        "applications/camera_calibration/camera_calibration",
+    ),
+    Path(
+        "/home/ubuntu/camera_calibration_integration_build/build_t0_codex/"
+        "applications/camera_calibration/camera_calibration",
+    ),
+]
 DEFAULT_T0_PYTHON = "/home/ubuntu/miniconda3/bin/python"
 DEFAULT_OUTER_FINAL_POSE_YAML = (
     DEFAULT_T0_DATA_ROOT
@@ -87,6 +99,19 @@ def duration_s(value):
 
 def script_repo_root():
     return Path(__file__).resolve().parents[2]
+
+
+def default_camera_calibration_binary():
+    env_binary = os.environ.get("CAMERA_CALIBRATION_BINARY")
+    if env_binary:
+        return Path(env_binary).expanduser()
+    local_build = script_repo_root() / "build_t0/applications/camera_calibration/camera_calibration"
+    candidates = [local_build]
+    candidates.extend(DEFAULT_T0_BINARY_FALLBACKS)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return DEFAULT_T0_BINARY
 
 
 def resolve_user_path(path, base=None):
@@ -160,6 +185,10 @@ def command_string(argv):
     return shlex.join(str(item) for item in argv)
 
 
+def correspondence_summary_json_path(output_tsv):
+    return Path(output_tsv).parent / "correspondence_residual_summary.json"
+
+
 def correspondence_export_argv(
         repo_root,
         dataset_name,
@@ -176,6 +205,7 @@ def correspondence_export_argv(
         "--state-dir", str(state_dir),
         "--dataset-name", dataset_name,
         "--output-tsv", str(output_tsv),
+        "--summary-json", str(correspondence_summary_json_path(output_tsv)),
     ]
     if manifest:
         argv.extend(["--manifest", str(manifest)])
@@ -397,6 +427,74 @@ def summarize_bridge_quality(bridge_summary_json):
         summary["notes"].append("metric_bridge_gate_not_passed_do_not_use_as_production_bridge_prior")
     if summary.get("colmap_prior_diagnostic") not in {"consistent", "missing"}:
         summary["notes"].append("colmap_prior_diagnostic_is_weak_use_metric_bridge_gate_as_primary_signal")
+    return summary
+
+
+def summarize_correspondence_residuals(output_tsv):
+    path = Path(output_tsv)
+    summary_path = correspondence_summary_json_path(path)
+    summary = {
+        "path": str(path),
+        "summary_json": str(summary_path),
+        "exists": path.is_file(),
+        "summary_exists": summary_path.is_file(),
+        "status": "missing",
+        "ok_count": 0,
+        "row_count": 0,
+        "median_residual_px": None,
+        "p90_residual_px": None,
+        "max_residual_px": None,
+        "notes": [],
+    }
+    data = read_json_file(summary_path)
+    if data and not data.get("_read_error"):
+        summary.update({
+            "status": "present",
+            "ok_count": data.get("ok_count", 0),
+            "row_count": data.get("row_count", 0),
+            "median_residual_px": data.get("median_residual_px"),
+            "p90_residual_px": data.get("p90_residual_px"),
+            "max_residual_px": data.get("max_residual_px"),
+        })
+        return summary
+    if data and data.get("_read_error"):
+        summary["notes"].append(data["_read_error"])
+    if not path.is_file():
+        return summary
+
+    residuals = []
+    row_count = 0
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream, delimiter="\t")
+            for row in reader:
+                row_count += 1
+                if row.get("projection_status") != "ok":
+                    continue
+                value = row.get("residual_px")
+                if not value:
+                    continue
+                try:
+                    residual = float(value)
+                except ValueError:
+                    continue
+                if math.isfinite(residual):
+                    residuals.append(residual)
+    except OSError as exc:
+        summary["status"] = "read_error"
+        summary["notes"].append(str(exc))
+        return summary
+
+    residuals.sort()
+    count = len(residuals)
+    summary.update({
+        "status": "present",
+        "row_count": row_count,
+        "ok_count": count,
+        "median_residual_px": residuals[count // 2] if count else None,
+        "p90_residual_px": residuals[int(0.9 * (count - 1))] if count else None,
+        "max_residual_px": residuals[-1] if count else None,
+    })
     return summary
 
 
@@ -989,15 +1087,20 @@ def infer_outer_intrinsics(data_root):
     return candidates[0].resolve(strict=False)
 
 
-def infer_outer_intrinsic_metrics_tsv(outer_intrinsics):
+def infer_outer_intrinsic_metrics_tsv(outer_intrinsics, data_root=None):
     if not outer_intrinsics:
         return Path("")
     outer_intrinsics = Path(outer_intrinsics)
+    calib_root = Path(data_root).parent if data_root else outer_intrinsics.parents[0]
     candidates = [
         outer_intrinsics / "camera_metrics.tsv",
         outer_intrinsics.parent / "camera_metrics.tsv",
         outer_intrinsics.parent / "outer24_intrinsic_report_large_marker_v1/camera_metrics.tsv",
         outer_intrinsics.parent.parent / "outer24_intrinsic_report_large_marker_v1/camera_metrics.tsv",
+        calib_root / "current_calibration/reports/06_outer_intrinsics_outer_large_marker/camera_metrics.tsv",
+        calib_root / "calib_2026_06_04_outer_large_marker_v2"
+        / "outer_large_marker_20260604_passing_images_only_min1_bycam"
+        / "outer24_intrinsic_report_large_marker_v1/camera_metrics.tsv",
     ]
     for candidate in candidates:
         if candidate.is_file():
@@ -1049,6 +1152,13 @@ def csv_ints(values):
 def bridge_all32_layout(large_scan):
     cameras = large_scan.get("cameras", [])
     by_index = {row.get("index"): row for row in cameras}
+    expected_outer_labels = [camera_id for _machine, camera_id in OUTER_CAMERAS]
+    observed_outer_labels = []
+    outer_rows = []
+    for index in range(BRIDGE_ALL32_OUTER_COUNT):
+        row = by_index.get(index)
+        outer_rows.append(row)
+        observed_outer_labels.append(row.get("camera_id") if row else None)
     observed_topdown = {}
     for row in cameras:
         camera_id = row.get("camera_id")
@@ -1069,6 +1179,10 @@ def bridge_all32_layout(large_scan):
         observed_index = observed_topdown.get(label)
         if observed_index != expected_index:
             warnings.append(f"topdown_{label}_expected_index_{expected_index}_got_{observed_index}")
+    if any(row is None or row.get("kind") != "outer" for row in outer_rows):
+        warnings.append("outer_bridge_indices_0_23_do_not_all_resolve_to_outer_cameras")
+    if observed_outer_labels != expected_outer_labels:
+        warnings.append("outer_bridge_indices_0_23_camera_order_mismatch_fixed_intrinsics_would_misindex")
     inner_rows = [by_index.get(index) for index in BRIDGE_ALL32_INNER_INDICES]
     if any(row is None or row.get("kind") != "inner" for row in inner_rows):
         warnings.append("inner_bridge_indices_24_31_do_not_all_resolve_to_inner_cameras")
@@ -1076,7 +1190,8 @@ def bridge_all32_layout(large_scan):
     ready = (
         large_scan.get("camera_count") == BRIDGE_ALL32_CAMERA_COUNT
         and large_scan.get("usable_camera_count") == BRIDGE_ALL32_CAMERA_COUNT
-        and all(observed_topdown.get(label) == expected_index for label, expected_index in expected_topdown.items())
+        and all(row is not None and row.get("kind") == "outer" for row in outer_rows)
+        and observed_outer_labels == expected_outer_labels
         and all(row is not None and row.get("kind") == "inner" for row in inner_rows)
     )
     return {
@@ -1086,14 +1201,16 @@ def bridge_all32_layout(large_scan):
         "outer_count": BRIDGE_ALL32_OUTER_COUNT,
         "inner_count": BRIDGE_ALL32_INNER_COUNT,
         "inner_indices": list(BRIDGE_ALL32_INNER_INDICES),
-        "outer_indices": list(BRIDGE_ALL32_TOPDOWN_INDICES),
-        "outer_labels": list(TOPDOWN_BRIDGE_LABEL_ORDER),
+        "outer_indices": list(range(BRIDGE_ALL32_OUTER_COUNT)),
+        "outer_labels": expected_outer_labels,
         "observed_camera_count": large_scan.get("camera_count"),
+        "observed_outer_labels": observed_outer_labels,
         "observed_topdown_indices": observed_topdown,
         "warnings": warnings,
         "index_convention": (
             "bridge all32 order is outer cameras 0..23 followed by inner cameras 24..31; "
-            "inner0..inner7 map to bridge indices 24..31."
+            "inner0..inner7 map to bridge indices 24..31. "
+            "4-1/4-2/4-3 remain top-down cameras but are not the only bridge anchors."
         ),
     }
 
@@ -1181,25 +1298,22 @@ def bridge_candidates(large_scan):
     usable = [row for row in large_scan["cameras"] if row["status"] == "usable"]
     usable_inner = [row for row in usable if row["kind"] == "inner"]
     usable_outer = [row for row in usable if row["kind"] == "outer"]
-    topdown = [row for row in usable_outer if row["camera_id"] in TOPDOWN_BRIDGE_LABELS]
     candidates = []
-    topdown_labels = sorted(row["camera_id"] for row in topdown)
-    if len(topdown) == 3 and len(usable_inner) >= 4:
+    if len(usable_outer) == BRIDGE_ALL32_OUTER_COUNT and len(usable_inner) == BRIDGE_ALL32_INNER_COUNT:
         status = "candidate"
-        reason = "topdown_bridge_anchors_and_inner_cameras_present"
+        reason = "all_outer_and_inner_cameras_present_for_large_marker_bridge_ba"
     else:
         status = "blocked"
-        reason = "need_4-1_4-2_4-3_and_at_least_4_inner_cameras"
+        reason = "need_all_24_outer_and_8_inner_cameras_for_final_all32_bridge"
     candidates.append({
-        "name": "large_marker_topdown_outer_bridge",
+        "name": "large_marker_all32_bridge",
         "status": status,
         "reason": reason,
         "usable_inner_count": len(usable_inner),
         "usable_outer_count": len(usable_outer),
-        "topdown_labels": topdown_labels,
     })
     candidates.append({
-        "name": "large_marker_all32_diagnostic",
+        "name": "large_marker_partial_diagnostic",
         "status": "candidate" if len(usable) >= 16 else "weak",
         "reason": "diagnostic_all_visible_cameras_from_large_marker",
         "usable_camera_count": len(usable),
@@ -1464,6 +1578,7 @@ def build_pipeline_stages(
     bridge_layout,
     bridge_intrinsics,
 ):
+    camera_binary = str(args.camera_calibration_binary)
     small_input = planned_inputs["small_marker"]["image_directories_file"]
     small_manifest = planned_inputs["small_marker"]["manifest"]
     large_inner_input = planned_inputs["large_inner_marker"]["image_directories_file"]
@@ -1548,9 +1663,14 @@ def build_pipeline_stages(
     large_features = large_out / "features_parallel_pattern0_bridge_v1.bin"
     large_stride_features = large_out / f"features_parallel_pattern0_bridge_stride{args.large_frame_stride}_v1.bin"
     large_bridge_pnp = large_out / f"fixed_intrinsic_bridge_pnp_stride{args.large_frame_stride}_v1"
+    large_bridge_joint_ba = (
+        large_out /
+        f"fixed_points_joint_ba_stride{args.large_frame_stride}_{args.large_bridge_schur_mode}_v1"
+    )
     large_inner_correspondence = large_inner_init_state / "correspondence_residuals.tsv"
     small_correspondence = small_fixed_rig_quality / "correspondence_residuals.tsv"
-    large_bridge_correspondence = large_bridge_pnp / "correspondence_residuals.tsv"
+    large_bridge_pnp_correspondence = large_bridge_pnp / "correspondence_residuals.tsv"
+    large_bridge_correspondence = large_bridge_joint_ba / "correspondence_residuals.tsv"
 
     inner_prior_ready = Path(effective_inner_prior).exists() or large_inner_init_dependency_ready
     small_quality_requested = stage_requested(args, "small-fixed-rig-quality")
@@ -1571,12 +1691,13 @@ def build_pipeline_stages(
         final_inner_ready = large_inner_init_dependency_ready
     else:
         final_inner_ready = final_inner_state.exists()
-    bridge_summary_json = bridge_out / "bridge_summary.json"
-    bridge_pose_yaml = bridge_out / "camera_tr_inner_refined_plus_outer_topdown.yaml"
-    bridge_ready = (
-        (bridge_summary_json.exists() and bridge_pose_yaml.exists())
-        or (large_bridge_requested and outer_prior_ready)
+    legacy_bridge_summary_json = bridge_out / "bridge_summary.json"
+    legacy_bridge_pose_yaml = bridge_out / "camera_tr_inner_refined_plus_outer_topdown.yaml"
+    large_bridge_joint_ba_ready = (
+        (large_bridge_joint_ba / "camera_tr_rig.yaml").exists()
+        or (large_bridge_requested and bridge_input_ready and bridge_intrinsics_ready)
     )
+    bridge_ready = large_bridge_joint_ba_ready
     final_report_dataset_ready = (
         large_inner_ready if final_inner_state == large_inner_init_state else small_ready
     )
@@ -1591,7 +1712,7 @@ def build_pipeline_stages(
         small_quality_notes.extend(small_canonical["notes"])
 
     combined_viewer_inputs = {
-        "inner_bridge_pose_yaml": str(bridge_out / "camera_tr_inner_refined_plus_outer_topdown.yaml"),
+        "inner_bridge_pose_yaml": str(large_bridge_joint_ba / "camera_tr_rig.yaml"),
         "bridge_summary_json": str(bridge_out / "bridge_summary.json"),
         "outer_colmap_images_txt": priors["outer_prior"],
         "outer_final_pose_yaml": outer_final_pose_yaml,
@@ -1599,18 +1720,19 @@ def build_pipeline_stages(
         "combined_image_directories_file": large_input,
         "whole_coverage_tsv": str(data_root / "whole_outer24_filtered_min4_hybrid_min4cam" / "per_camera_stats.tsv"),
         "large_marker_pnp_summary_tsv": str(large_bridge_pnp / "camera_pnp_summary.tsv"),
+        "large_marker_correspondence_tsv": str(large_bridge_correspondence),
         "small_marker_pnp_summary_tsv": str(small_fixed_rig_quality / "camera_pnp_summary.tsv"),
         "inner_intrinsic_metrics_tsv": str(inner_reproj / "camera_metrics.tsv"),
         "outer_intrinsic_metrics_tsv": str(outer_intrinsic_metrics_tsv) if outer_intrinsic_metrics_tsv else "",
         "large_marker_board_pose_yaml": str(large_inner_init_state / "rig_tr_global.yaml"),
         "small_marker_board_pose_yaml": str(small_fixed_rig_quality / "rig_tr_global.yaml"),
-        "bridge_marker_board_pose_yaml": str(large_bridge_pnp / "rig_tr_global.yaml"),
+        "bridge_marker_board_pose_yaml": str(large_bridge_joint_ba / "rig_tr_global.yaml"),
         "inner_bridge_indices": csv_ints(bridge_layout["inner_indices"]),
         "topdown_bridge_indices": csv_ints(bridge_layout["outer_indices"]),
     }
     combined_viewer_argv = [
         DEFAULT_T0_PYTHON, str(repo_root / "scripts/calib/generate_combined_studio_rig_viewer.py"),
-        "--inner_bridge_pose_yaml", str(bridge_out / "camera_tr_inner_refined_plus_outer_topdown.yaml"),
+        "--inner_bridge_pose_yaml", str(large_bridge_joint_ba / "camera_tr_rig.yaml"),
         "--bridge_summary_json", str(bridge_out / "bridge_summary.json"),
         "--outer_colmap_images_txt", priors["outer_prior"],
         "--combined_image_directories_file", large_input,
@@ -1625,10 +1747,11 @@ def build_pipeline_stages(
         "--inner_intrinsic_metrics_tsv", str(inner_reproj / "camera_metrics.tsv"),
         "--whole_coverage_tsv", str(data_root / "whole_outer24_filtered_min4_hybrid_min4cam" / "per_camera_stats.tsv"),
         "--large_marker_pnp_summary_tsv", str(large_bridge_pnp / "camera_pnp_summary.tsv"),
+        "--large_marker_correspondence_tsv", str(large_bridge_correspondence),
         "--small_marker_pnp_summary_tsv", str(small_fixed_rig_quality / "camera_pnp_summary.tsv"),
         "--large_marker_board_pose_yaml", str(large_inner_init_state / "rig_tr_global.yaml"),
         "--small_marker_board_pose_yaml", str(small_fixed_rig_quality / "rig_tr_global.yaml"),
-        "--bridge_marker_board_pose_yaml", str(large_bridge_pnp / "rig_tr_global.yaml"),
+        "--bridge_marker_board_pose_yaml", str(large_bridge_joint_ba / "rig_tr_global.yaml"),
     ]
     if outer_intrinsic_metrics_tsv and Path(outer_intrinsic_metrics_tsv).is_file():
         combined_viewer_argv.extend(["--outer_intrinsic_metrics_tsv", str(outer_intrinsic_metrics_tsv)])
@@ -1706,7 +1829,7 @@ def build_pipeline_stages(
             argv=[
                 DEFAULT_T0_PYTHON,
                 str(DEFAULT_T0_REPO / "scripts/calib/parallel_extract_features.py"),
-                "--binary", DEFAULT_T0_BINARY,
+                "--binary", camera_binary,
                 "--repo-root", str(DEFAULT_T0_REPO),
                 "--image-directories-file", large_inner_input,
                 "--pattern-files", LARGE_MARKER_PATTERN,
@@ -1724,7 +1847,7 @@ def build_pipeline_stages(
             {"dataset": str(large_inner_features), "frame_stride": args.large_inner_frame_stride},
             {"dataset": str(large_inner_stride_features)},
             argv=[
-                DEFAULT_T0_BINARY,
+                camera_binary,
                 "--subsample_dataset",
                 "--dataset_files", str(large_inner_features),
                 "--dataset_output_path", str(large_inner_stride_features),
@@ -1752,7 +1875,7 @@ def build_pipeline_stages(
                 "dataset": str(large_inner_stride_features),
             },
             argv=[
-                DEFAULT_T0_BINARY,
+                camera_binary,
                 "--estimate_fixed_intrinsic_rig",
                 "--dataset_files", str(large_inner_stride_features),
                 "--fixed_intrinsics_directory", priors["inner_intrinsics"],
@@ -1812,7 +1935,7 @@ def build_pipeline_stages(
             argv=[
                 DEFAULT_T0_PYTHON,
                 str(DEFAULT_T0_REPO / "scripts/calib/parallel_extract_features.py"),
-                "--binary", DEFAULT_T0_BINARY,
+                "--binary", camera_binary,
                 "--repo-root", str(DEFAULT_T0_REPO),
                 "--image-directories-file", small_input,
                 "--pattern-files", SMALL_MARKER_PATTERN,
@@ -1830,7 +1953,7 @@ def build_pipeline_stages(
             {"dataset": str(small_features)},
             {"dataset": str(small_grid), "frame_stride": args.small_frame_stride},
             argv=[
-                DEFAULT_T0_BINARY,
+                camera_binary,
                 "--subsample_dataset",
                 "--dataset_files", str(small_features),
                 "--dataset_output_path", str(small_grid),
@@ -1863,7 +1986,7 @@ def build_pipeline_stages(
                 "camera_pnp_summary": str(small_fixed_rig_quality / "camera_pnp_summary.tsv"),
             },
             argv=[
-                DEFAULT_T0_BINARY,
+                camera_binary,
                 "--estimate_fixed_intrinsic_rig",
                 "--dataset_files", str(small_grid),
                 "--fixed_intrinsics_directory", priors["inner_intrinsics"],
@@ -1935,7 +2058,7 @@ def build_pipeline_stages(
                 "dataset": str(fixed_refine_dataset),
             },
             argv=[
-                DEFAULT_T0_BINARY,
+                camera_binary,
                 "--dataset_files", str(small_grid),
                 "--state_directory", str(effective_inner_prior),
                 "--output_directory", str(inner_fixed_refine),
@@ -1978,7 +2101,7 @@ def build_pipeline_stages(
                 "dataset": str(joint_refine_dataset),
             },
             argv=[
-                DEFAULT_T0_BINARY,
+                camera_binary,
                 "--dataset_files", str(joint_input_dataset),
                 "--state_directory", str(inner_plan["joint_input_state"]),
                 "--output_directory", str(inner_joint_refine),
@@ -2082,7 +2205,7 @@ def build_pipeline_stages(
             argv=[
                 DEFAULT_T0_PYTHON,
                 str(DEFAULT_T0_REPO / "scripts/calib/parallel_extract_features.py"),
-                "--binary", DEFAULT_T0_BINARY,
+                "--binary", camera_binary,
                 "--repo-root", str(DEFAULT_T0_REPO),
                 "--image-directories-file", large_input,
                 "--pattern-files", LARGE_MARKER_PATTERN,
@@ -2105,7 +2228,7 @@ def build_pipeline_stages(
             {"dataset": str(large_features), "frame_stride": args.large_frame_stride},
             {"dataset": str(large_stride_features)},
             argv=[
-                DEFAULT_T0_BINARY,
+                camera_binary,
                 "--subsample_dataset",
                 "--dataset_files", str(large_features),
                 "--dataset_output_path", str(large_stride_features),
@@ -2129,7 +2252,7 @@ def build_pipeline_stages(
                 "camera_pnp_summary": str(large_bridge_pnp / "camera_pnp_summary.tsv"),
             },
             argv=[
-                DEFAULT_T0_BINARY,
+                camera_binary,
                 "--estimate_fixed_intrinsic_rig",
                 "--dataset_files", str(large_stride_features),
                 "--fixed_intrinsics_directory", priors["bridge_intrinsics"],
@@ -2145,6 +2268,53 @@ def build_pipeline_stages(
             allow_failure=True,
         ),
         make_stage(
+            "refine_large_marker_bridge_joint_ba",
+            stage_status(
+                args,
+                bridge_input_ready and bridge_intrinsics_ready,
+                stage_requested(args, "large-bridge"),
+                large_bridge_joint_ba / "camera_tr_rig.yaml",
+            ),
+            {
+                "dataset": str(large_stride_features),
+                "warm_start_state_dir": str(large_bridge_pnp),
+                "model": args.large_bridge_model,
+                "max_ba_iterations": args.large_bridge_max_ba_iterations,
+                "schur_mode": args.large_bridge_schur_mode,
+                "fixed_known_board_points": True,
+                "localize_only": False,
+                "manifest": large_manifest,
+                "index_convention": bridge_layout["index_convention"],
+            },
+            {
+                "state_dir": str(large_bridge_joint_ba),
+                "camera_tr_rig": str(large_bridge_joint_ba / "camera_tr_rig.yaml"),
+                "rig_tr_global": str(large_bridge_joint_ba / "rig_tr_global.yaml"),
+            },
+            argv=[
+                camera_binary,
+                "--dataset_files", str(large_stride_features),
+                "--state_directory", str(large_bridge_pnp),
+                "--output_directory", str(large_bridge_joint_ba),
+                "--model", args.large_bridge_model,
+                "--debug_fix_points",
+                "--num_pyramid_levels", "1",
+                "--outlier_removal_factor", "0",
+                "--max_ba_iterations", str(args.large_bridge_max_ba_iterations),
+                "--schur_mode", args.large_bridge_schur_mode,
+                "--skip_calibration_report",
+            ],
+            notes=(
+                [
+                    "runs direct BA from all32 PnP initializer; does not use --localize_only, "
+                    "because that path re-localizes per camera and can reset disconnected cameras"
+                ]
+                if bridge_intrinsics_ready else
+                [f"missing_{bridge_intrinsics['missing_count']}_bridge_intrinsics_files"]
+            ),
+            group="large-bridge",
+        ),
+        make_stage(
             "export_large_marker_bridge_correspondence_residuals",
             stage_status(
                 args,
@@ -2154,7 +2324,8 @@ def build_pipeline_stages(
             ),
             {
                 "dataset": str(large_stride_features),
-                "state_dir": str(large_bridge_pnp),
+                "state_dir": str(large_bridge_joint_ba),
+                "initializer_state_dir": str(large_bridge_pnp),
                 "manifest": large_manifest,
                 "index_convention": bridge_layout["index_convention"],
             },
@@ -2165,7 +2336,7 @@ def build_pipeline_stages(
                 repo_root,
                 "large_marker_bridge",
                 large_stride_features,
-                large_bridge_pnp,
+                large_bridge_joint_ba,
                 large_manifest,
                 large_bridge_correspondence,
             ),
@@ -2178,7 +2349,7 @@ def build_pipeline_stages(
             allow_failure=True,
         ),
         make_stage(
-            "evaluate_topdown_bridge",
+            "evaluate_inner_outer_bridge_alignment",
             stage_status(args, bridge_input_ready and outer_prior_ready, stage_requested(args, "large-bridge"), bridge_out / "bridge_summary.json"),
             {
                 "pnp_views": str(large_bridge_pnp / "pnp_views.tsv"),
@@ -2191,7 +2362,7 @@ def build_pipeline_stages(
             },
             {
                 "bridge_summary": str(bridge_out / "bridge_summary.json"),
-                "bridge_pose_yaml": str(bridge_out / "camera_tr_inner_refined_plus_outer_topdown.yaml"),
+                "legacy_bridge_pose_yaml": str(legacy_bridge_pose_yaml),
                 "index_html": str(bridge_out / "index.html"),
             },
             argv=[
@@ -2255,8 +2426,13 @@ def build_pipeline_stages(
         "inner_intrinsic_feature_coverage_report": str(inner_reproj / "index.html"),
         "inner_reprojection_correspondence_residuals_tsv": str(inner_reprojection_correspondence),
         "inner_interactive_viewer": str(inner_viewer / "index.html"),
-        "bridge_pose_yaml": str(bridge_out / "camera_tr_inner_refined_plus_outer_topdown.yaml"),
-        "bridge_summary_json": str(bridge_out / "bridge_summary.json"),
+        "bridge_pose_yaml": str(large_bridge_joint_ba / "camera_tr_rig.yaml"),
+        "bridge_summary_json": str(legacy_bridge_summary_json),
+        "legacy_bridge_pose_yaml": str(legacy_bridge_pose_yaml),
+        "large_marker_bridge_initializer_state_dir": str(large_bridge_pnp),
+        "large_marker_bridge_initializer_correspondence_residuals_tsv": str(large_bridge_pnp_correspondence),
+        "large_marker_bridge_joint_ba_state_dir": str(large_bridge_joint_ba),
+        "large_marker_bridge_joint_ba_camera_tr_rig_yaml": str(large_bridge_joint_ba / "camera_tr_rig.yaml"),
         "large_marker_bridge_correspondence_residuals_tsv": str(large_bridge_correspondence),
         "bridge_all32_fixed_intrinsics_dir": priors["bridge_intrinsics"],
         "outer_final_pose_yaml": outer_final_pose_yaml,
@@ -2427,6 +2603,8 @@ def write_index_html(path, summary):
     small_quality = summary.get("small_fixed_rig_quality_probe", {})
     joint_quality = summary.get("inner_joint_intrinsics_quality", {})
     bridge_quality = summary.get("bridge_quality", {})
+    bridge_residual = summary.get("bridge_correspondence_quality", {})
+    bridge_residual = summary.get("bridge_correspondence_quality", {})
     provenance = summary.get("provenance", {})
     git_info = provenance.get("git", {})
     git_dirty = "dirty" if git_info.get("dirty") else "clean"
@@ -2496,7 +2674,7 @@ def write_index_html(path, summary):
     <div class="card"><span>large inner marker</span><strong>{html.escape(large_inner["status"])}</strong><p>{large_inner["usable_camera_count"]} usable / {large_inner["camera_count"]} scanned, common frames {large_inner["common_frame_count"]}</p></div>
     <div class="card"><span>small fixed-rig quality</span><strong>{html.escape(str(small_quality.get("status", "missing")))}</strong><p>{html.escape(str(small_quality.get("connected_count", 0)))} connected / {html.escape(str(small_quality.get("camera_count", 0)))} summarized; disconnected {html.escape(",".join(small_quality.get("disconnected_cameras", [])))}</p></div>
     <div class="card"><span>large bridge marker</span><strong>{html.escape(large["status"])}</strong><p>{large["usable_camera_count"]} usable / {large["camera_count"]} scanned, common frames {large["common_frame_count"]}</p></div>
-    <div class="card"><span>bridge metric gate</span><strong>{html.escape(str(bridge_quality.get("metric_bridge_gate", "missing")))}</strong><p>{html.escape(str(bridge_quality.get("outer_vote_count_min")))} min votes; p90 center {html.escape(str(bridge_quality.get("max_outer_center_residual_p90_m")))} m; p90 rot {html.escape(str(bridge_quality.get("max_outer_rotation_residual_p90_deg")))} deg</p></div>
+    <div class="card"><span>bridge BA residual</span><strong>{html.escape(str(bridge_residual.get("median_residual_px", "missing")))}</strong><p>{html.escape(str(bridge_residual.get("ok_count", 0)))} ok obs; p90 {html.escape(str(bridge_residual.get("p90_residual_px")))} px; max {html.escape(str(bridge_residual.get("max_residual_px")))} px</p></div>
     <div class="card"><span>output root</span><code>{html.escape(summary["output_root"])}</code></div>
   </div>
 
@@ -2514,14 +2692,18 @@ def write_index_html(path, summary):
     <li>Use the large-marker fixed-intrinsic inner initializer as the production inner extrinsic baseline when <code>--run-stage large-inner-init</code>, <code>--run-large-inner-init</code>, or <code>--run-all</code> is explicit or when its output already exists. Its default frame stride is <code>1</code>.</li>
     <li>Run the small-marker fixed-intrinsic rig estimate as a quality probe when <code>--run-stage small-fixed-rig-quality</code>, <code>--run-small-fixed-rig-quality</code>, or <code>--run-all</code> is explicit. This probe writes <code>camera_pnp_summary.tsv</code> and never replaces the final large-inner baseline.</li>
     <li>Keep <code>fixed</code>, <code>joint</code>, and <code>fixed_then_joint</code> small-marker refinement as explicit diagnostic modes. <code>joint</code> first builds a fixed-localize warm start on the current small-marker dataset; direct joint BA from a stale state is avoided. Joint output must pass the intrinsics sanity gate below before it is considered trustworthy.</li>
-    <li>Optionally run all32 large-marker bridge fixed-intrinsic PnP/evaluation when <code>--run-stage large-bridge</code> or <code>--run-all</code> is explicit. The bridge index convention is outer <code>0..23</code>, inner <code>24..31</code>; top-down anchors <code>4-1/4-2/4-3</code> are indices <code>9/10/11</code>.</li>
+    <li>Optionally run all32 large-marker bridge PnP initializer and direct joint BA when <code>--run-stage large-bridge</code> or <code>--run-all</code> is explicit. The bridge index convention is outer <code>0..23</code>, inner <code>24..31</code>; top-down cameras <code>4-1/4-2/4-3</code> are metadata only, not the only bridge anchors.</li>
     <li>Generate report/viewer links from existing or newly produced outputs.</li>
   </ol>
 
   <h2>Bridge all32 Convention</h2>
-  <p>{html.escape(summary["bridge_layout"]["index_convention"])} The wrapper prepares <code>{html.escape(summary["priors"]["bridge_intrinsics"])}</code> by copying outer intrinsics <code>0..23</code> and remapping compact inner intrinsics <code>0..7</code> to <code>24..31</code>. This stage is fixed-intrinsic PnP plus top-down anchor evaluation; full combined BA/refinement is a later pipeline stage.</p>
+  <p>{html.escape(summary["bridge_layout"]["index_convention"])} The wrapper prepares <code>{html.escape(summary["priors"]["bridge_intrinsics"])}</code> by copying outer intrinsics <code>0..23</code> and remapping compact inner intrinsics <code>0..7</code> to <code>24..31</code>. The PnP stage is an initializer; the production bridge quality is the all32 direct joint BA correspondence residual.</p>
 
-  <h2>Bridge Metric Quality</h2>
+  <h2>Bridge BA Correspondence Quality</h2>
+  <p>Status: <strong>{html.escape(str(bridge_residual.get("status", "missing")))}</strong>. OK observations: <code>{html.escape(str(bridge_residual.get("ok_count", 0)))}</code>; median: <code>{html.escape(str(bridge_residual.get("median_residual_px")))}</code> px; p90: <code>{html.escape(str(bridge_residual.get("p90_residual_px")))}</code> px; max: <code>{html.escape(str(bridge_residual.get("max_residual_px")))}</code> px.</p>
+  <p>Residual TSV: <code>{html.escape(str(bridge_residual.get("path", "")))}</code>. Summary JSON: <code>{html.escape(str(bridge_residual.get("summary_json", "")))}</code>.</p>
+
+  <h2>Legacy Bridge Metric Diagnostic</h2>
   <p>Status: <strong>{html.escape(str(bridge_quality.get("metric_bridge_gate", "missing")))}</strong>. COLMAP prior diagnostic: <strong>{html.escape(str(bridge_quality.get("colmap_prior_diagnostic", "missing")))}</strong>. Bridge pose ready: <strong>{html.escape(str(bridge_quality.get("prior_output_ready", False)))}</strong>. Summary JSON: <code>{html.escape(str(bridge_quality.get("path", "")))}</code>.</p>
   <p>Inner board frames: <code>{html.escape(str(bridge_quality.get("inner_board_frame_count")))}</code>; median inner support: <code>{html.escape(str(bridge_quality.get("inner_support_median")))}</code>; min outer votes: <code>{html.escape(str(bridge_quality.get("outer_vote_count_min")))}</code>; max center p90: <code>{html.escape(str(bridge_quality.get("max_outer_center_residual_p90_m")))}</code> m; max rotation p90: <code>{html.escape(str(bridge_quality.get("max_outer_rotation_residual_p90_deg")))}</code> deg.</p>
   <p>Notes: <code>{html.escape(json.dumps(bridge_quality.get("notes", []), ensure_ascii=False))}</code></p>
@@ -2603,6 +2785,7 @@ def write_report_entrypoints(output_root, summary):
     small_quality = summary.get("small_fixed_rig_quality_probe", {})
     joint_quality = summary.get("inner_joint_intrinsics_quality", {})
     bridge_quality = summary.get("bridge_quality", {})
+    bridge_residual = summary.get("bridge_correspondence_quality", {})
     outer_pose_source = summary["final_yaml_candidates"].get(
         "combined_bridge_outer_pose_source",
         "unknown",
@@ -2655,7 +2838,8 @@ def write_report_entrypoints(output_root, summary):
   <p>Small fixed-rig quality probe: {html.escape(str(small_quality.get("status", "missing")))}; {html.escape(str(small_quality.get("connected_count", 0)))} connected / {html.escape(str(small_quality.get("camera_count", 0)))} summarized; disconnected cameras: {html.escape(",".join(small_quality.get("disconnected_cameras", [])))}.</p>
   <p>Large inner marker: {html.escape(large_inner["status"])}; {large_inner["usable_camera_count"]}/{large_inner["camera_count"]} usable cameras; frame spread {html.escape(str(large_inner["frame_count_spread"]))}.</p>
   <p>Large bridge marker: {html.escape(large["status"])}; {large["usable_camera_count"]}/{large["camera_count"]} usable cameras; frame spread {html.escape(str(large["frame_count_spread"]))}.</p>
-  <p>Bridge metric gate: {html.escape(str(bridge_quality.get("metric_bridge_gate", "missing")))}; COLMAP prior diagnostic {html.escape(str(bridge_quality.get("colmap_prior_diagnostic", "missing")))}; min votes {html.escape(str(bridge_quality.get("outer_vote_count_min")))}; max center p90 {html.escape(str(bridge_quality.get("max_outer_center_residual_p90_m")))} m; max rotation p90 {html.escape(str(bridge_quality.get("max_outer_rotation_residual_p90_deg")))} deg.</p>
+  <p>Bridge BA residual: status {html.escape(str(bridge_residual.get("status", "missing")))}; ok observations {html.escape(str(bridge_residual.get("ok_count", 0)))}; median {html.escape(str(bridge_residual.get("median_residual_px")))} px; p90 {html.escape(str(bridge_residual.get("p90_residual_px")))} px; max {html.escape(str(bridge_residual.get("max_residual_px")))} px.</p>
+  <p>Legacy bridge metric gate: {html.escape(str(bridge_quality.get("metric_bridge_gate", "missing")))}; COLMAP prior diagnostic {html.escape(str(bridge_quality.get("colmap_prior_diagnostic", "missing")))}; min votes {html.escape(str(bridge_quality.get("outer_vote_count_min")))}; max center p90 {html.escape(str(bridge_quality.get("max_outer_center_residual_p90_m")))} m; max rotation p90 {html.escape(str(bridge_quality.get("max_outer_rotation_residual_p90_deg")))} deg.</p>
   <p>Tail-only offsets up to {small["max_tail_trim"]} frames are acceptable. Interior gaps or larger spreads should be treated as camera-drop evidence.</p>
 """,
     )
@@ -2675,9 +2859,10 @@ def write_report_entrypoints(output_root, summary):
   <p>The final inner extrinsic baseline is <code>{html.escape(summary["final_yaml_candidates"]["inner_final_baseline_camera_tr_rig_yaml"])}</code>. Small-marker fixed-rig output is reported only as a quality probe and does not replace this baseline.</p>
   <p>Inner intrinsic feature coverage is the same product as <code>inner_reprojection_report</code>: one plot per inner camera with accumulated detected board corners and reprojection-error arrows.</p>
   <p>Small-marker joint intrinsic/extrinsic output is diagnostic unless its intrinsics sanity gate passes. Current joint sanity status: <strong>{html.escape(str(joint_quality.get("status", "missing_joint_output")))}</strong>; accepted: <strong>{html.escape(str(joint_quality.get("accepted_by_sanity_gate", False)))}</strong>.</p>
-  <p>Bridge all32 uses outer indices <code>0..23</code>, inner indices <code>24..31</code>, and top-down anchors <code>4-1/4-2/4-3</code> at indices <code>9/10/11</code>. The current bridge product is fixed-intrinsic PnP plus top-down evaluation; combined BA/refine remains a follow-up.</p>
+  <p>Bridge all32 uses outer indices <code>0..23</code> and inner indices <code>24..31</code>. Top-down cameras <code>4-1/4-2/4-3</code> remain indices <code>9/10/11</code>, but they are not the only bridge anchors. The PnP stage is an initializer; the current bridge product is direct all32 joint BA with fixed known board points.</p>
+  <p>Bridge BA residual: <strong>{html.escape(str(bridge_residual.get("median_residual_px", "missing")))}</strong> px median, <strong>{html.escape(str(bridge_residual.get("p90_residual_px", "missing")))}</strong> px p90 over <strong>{html.escape(str(bridge_residual.get("ok_count", 0)))}</strong> ok observations. Residual TSV: <code>{html.escape(str(bridge_residual.get("path", "")))}</code>.</p>
   <p>Combined 24+8 viewer outer pose source: <strong>{html.escape(str(outer_pose_source))}</strong>. Outer final pose YAML: <code>{html.escape(str(outer_final_pose))}</code>. If this source is <code>outer_final_pose_yaml</code>, the 24 outer camera frustums come from the latest outer tower accepted rig instead of the old first-frame COLMAP Sim(3) diagnostic.</p>
-  <p>Bridge metric gate: <strong>{html.escape(str(bridge_quality.get("metric_bridge_gate", "missing")))}</strong>. Bridge pose ready: <strong>{html.escape(str(bridge_quality.get("prior_output_ready", False)))}</strong>. COLMAP prior diagnostic: <strong>{html.escape(str(bridge_quality.get("colmap_prior_diagnostic", "missing")))}</strong>.</p>
+  <p>Legacy bridge metric gate: <strong>{html.escape(str(bridge_quality.get("metric_bridge_gate", "missing")))}</strong>. Bridge pose ready: <strong>{html.escape(str(bridge_quality.get("prior_output_ready", False)))}</strong>. COLMAP prior diagnostic: <strong>{html.escape(str(bridge_quality.get("colmap_prior_diagnostic", "missing")))}</strong>.</p>
   <h2>Existing inner products</h2>
   <ul>{inner_links}</ul>
   <h2>Existing bridge products</h2>
@@ -2786,6 +2971,16 @@ def parse_args():
         help="Optional outer intrinsic report camera_metrics.tsv, usually from the outer-large-marker intrinsic calibration report.",
     )
     parser.add_argument(
+        "--camera-calibration-binary",
+        type=Path,
+        default=default_camera_calibration_binary(),
+        help=(
+            "camera_calibration C++ binary used for repo board feature extraction, "
+            "dataset subsampling, and fixed-intrinsic rig estimation. Defaults to "
+            "the current checkout build_t0 binary when present, then known T0 release builds."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Only scan data and write the plan/report; do not run recalibration commands.",
@@ -2879,6 +3074,27 @@ def parse_args():
         help="Frame stride for large-marker bridge PnP after feature extraction. Use 1 by default because all32 bridge connectivity is sensitive to camera0 support.",
     )
     parser.add_argument(
+        "--large-bridge-model",
+        default="central_opencv",
+        help="Camera model used for the all32 large-marker bridge joint BA stage.",
+    )
+    parser.add_argument(
+        "--large-bridge-max-ba-iterations",
+        type=int,
+        default=80,
+        help="Maximum BA iterations for the all32 large-marker bridge joint BA stage.",
+    )
+    parser.add_argument(
+        "--large-bridge-schur-mode",
+        choices=["dense", "dense_cuda", "dense_onthefly", "sparse", "sparse_onthefly"],
+        default="dense",
+        help=(
+            "Schur complement mode for all32 large-marker bridge joint BA. "
+            "The fixed-points diagnostic path is known to be compatible with dense; "
+            "sparse_onthefly is kept for explicit experiments only."
+        ),
+    )
+    parser.add_argument(
         "--large-inner-frame-stride",
         type=int,
         default=1,
@@ -2921,6 +3137,8 @@ def parse_args():
         parser.error("--small-frame-stride must be >= 1")
     if args.large_frame_stride < 1:
         parser.error("--large-frame-stride must be >= 1")
+    if args.large_bridge_max_ba_iterations < 0:
+        parser.error("--large-bridge-max-ba-iterations must be non-negative")
     if args.large_inner_frame_stride < 1:
         parser.error("--large-inner-frame-stride must be >= 1")
     return args
@@ -2933,6 +3151,7 @@ def main():
     repo_root = script_repo_root()
     data_root = resolve_user_path(args.data_root, Path.cwd())
     output_root = resolve_user_path(args.output_root, Path.cwd())
+    args.camera_calibration_binary = resolve_user_path(args.camera_calibration_binary, Path.cwd())
 
     if output_root.exists() and not output_root.is_dir():
         raise SystemExit(f"--output-root exists but is not a directory: {output_root}")
@@ -2979,7 +3198,7 @@ def main():
     outer_intrinsic_metrics_tsv = resolve_user_path(
         args.outer_intrinsic_metrics_tsv,
         data_root,
-    ) if args.outer_intrinsic_metrics_tsv else infer_outer_intrinsic_metrics_tsv(outer_intrinsics)
+    ) if args.outer_intrinsic_metrics_tsv else infer_outer_intrinsic_metrics_tsv(outer_intrinsics, data_root)
     bridge_layout = bridge_all32_layout(large_scan)
     bridge_intrinsics_started_at = utc_now()
     bridge_intrinsics_started_perf = time.time()
@@ -3034,6 +3253,9 @@ def main():
     )
     bridge_quality = summarize_bridge_quality(
         final_candidates["bridge_summary_json"],
+    )
+    bridge_correspondence_quality = summarize_correspondence_residuals(
+        final_candidates["large_marker_bridge_correspondence_residuals_tsv"],
     )
     annotate_small_quality_stage(stages, small_fixed_rig_quality)
 
@@ -3095,6 +3317,7 @@ def main():
             "outer_prior": priors["outer_prior"],
             "outer_intrinsics": priors["outer_intrinsics"],
             "bridge_intrinsics": priors["bridge_intrinsics"],
+            "camera_calibration_binary": str(args.camera_calibration_binary),
             "inner_refine_mode": args.inner_refine_mode,
             "inner_model": args.inner_model,
             "inner_fixed_max_ba_iterations": args.inner_fixed_max_ba_iterations,
@@ -3104,6 +3327,9 @@ def main():
             "small_frame_stride": args.small_frame_stride,
             "large_inner_frame_stride": args.large_inner_frame_stride,
             "large_frame_stride": args.large_frame_stride,
+            "large_bridge_model": args.large_bridge_model,
+            "large_bridge_max_ba_iterations": args.large_bridge_max_ba_iterations,
+            "large_bridge_schur_mode": args.large_bridge_schur_mode,
             "dry_run": bool(args.dry_run),
             "force": bool(args.force),
             "run_stage": args.run_stage,
@@ -3127,6 +3353,7 @@ def main():
         "small_fixed_rig_quality_probe": small_fixed_rig_quality,
         "inner_joint_intrinsics_quality": inner_joint_intrinsics_quality,
         "bridge_quality": bridge_quality,
+        "bridge_correspondence_quality": bridge_correspondence_quality,
         "existing_inner_reports": discover_existing_inner_links(data_root, repo_root, http_root, args.report_url_base),
         "existing_bridge_reports": discover_existing_bridge_links(data_root, args.large_marker_sequence, http_root, args.report_url_base),
         "bridge_layout": bridge_layout,

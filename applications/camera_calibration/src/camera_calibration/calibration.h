@@ -66,6 +66,7 @@ bool Calibrate(
     float outlier_removal_factor,
     bool localize_only,
     bool skip_bundle_adjustment,
+    bool debug_fix_points,
     int max_ba_iterations,
     CalibrationWindow* calibration_window,
     BAState* state,
@@ -91,6 +92,7 @@ void CalibrateBatch(
     float outlier_removal_factor,
     bool localize_only,
     bool skip_bundle_adjustment,
+    bool debug_fix_points,
     int max_ba_iterations,
     SchurMode schur_mode,
     CalibrationWindow* calibration_window);
@@ -116,6 +118,7 @@ int BatchCalibrationWithGUI(
     float outlier_removal_factor,
     bool localize_only,
     bool skip_bundle_adjustment,
+    bool debug_fix_points,
     int max_ba_iterations,
     SchurMode schur_mode,
     bool show_visualizations);

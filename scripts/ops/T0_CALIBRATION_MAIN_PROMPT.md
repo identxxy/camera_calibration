@@ -10,12 +10,6 @@
 http://192.168.2.0:9899/
 ```
 
-机器可读 registry：
-
-```text
-http://192.168.2.0:9899/current_calibration/report_registry.json
-```
-
 t0 文件路径：
 
 ```text
@@ -40,21 +34,30 @@ t0 文件路径：
 - 更新了 9898 Operation Panel 后端：
   `scripts/calib/calibration_panel_server.py`
 
-## 当前首页分类
+## 当前首页结构
 
-9899 根入口只面向 canonical report categories，不再把 operation、dated scratch
-HTML、source/debug viewer 或 raw pipeline directories 提升成额外首页组：
+9899 根入口只放当前 production artifacts，不再把 operation、dated scratch HTML、
+source/debug viewer、registry/debug JSON、standalone correspondence viewer 或 raw
+pipeline directories 提升成首页组：
 
-1. inner capture QC
-   - `small_marker`, `large_marker` calib board 数据采集报告。
-2. inner solve result
-   - inner8 3D viewer / reprojection report。
-3. outer capture QC
-   - `whole` / tower AprilTag 数据采集报告。
-4. outer solve diagnostics/result
-   - outer tower frame-face refine / COLMAP audit diagnostics。
-5. combined bridge / 32-camera result
-   - unified 3D viewer + `studio_32_cameras.yaml`。
+1. final YAML:
+   `http://192.168.2.0:9899/current_calibration/artifacts/studio_32_cameras.yaml`
+2. overall 3D viewer:
+   `http://192.168.2.0:9899/current_calibration/reports/01_3d_viewer/index.html`
+3. inner 数据采集报告:
+   `02_inner_capture_small_marker`
+4. inner 内参报告:
+   `03_inner_intrinsic_small_marker`
+5. inner 外参报告:
+   `04_inner_extrinsic_small_marker`
+6. outer 数据采集报告:
+   `05_outer_capture_whole_and_outer_large_marker`
+7. outer 内参报告:
+   `06_outer_intrinsic_outer_large_marker`
+8. outer 外参报告:
+   `07_outer_extrinsic_whole`
+9. bridge 结果报告:
+   `09_bridge_result_large_marker`
 
 ## 三类数据采集语义
 
@@ -68,7 +71,8 @@ Operation/backend 仍按 capture data type 分成三类：
    - 主要目的：bridge inner cameras 和 outer cameras。
    - 当前包含 `large_marker_inner8` 和 `large_marker_bridge_all32`。
    - 当前 all32 contract：outer cameras indices `0..23`，inner cameras indices `24..31`。
-   - 当前 production bridge anchors：top-down cameras `4-1`, `4-2`, `4-3`，indices `9`, `10`, `11`。
+   - `4-1`, `4-2`, `4-3` 是 top-down hardware/layout metadata 和 legacy
+     diagnostics，不再是 production bridge 的唯一 anchors。
 
 3. `small marker`
    - 主要目的：标定 inner cameras。
@@ -79,8 +83,8 @@ Operation/backend 仍按 capture data type 分成三类：
 首页报告分类回答“当前标定结果和数据质量在哪里看”。Operation 页面回答“采集后如何
 启动受控处理”。两者必须分层：
 
-- 首页只列五个 canonical report categories。
-- Operation 页面仍在 `report_registry.json` 的 `operation_entries` 中注册。
+- 首页只列 final YAML、one unified 3D viewer、seven curated reports。
+- Operation 页面不作为首页报告链接；需要启动处理时去 9898 panel。
 - 报告 HTML 不直接执行命令，也不嵌入任意 shell command。
 - 后端只能通过 panel/server 白名单 mode 调用 CLI。
 
@@ -125,13 +129,14 @@ t0-calib operate small-marker --inner-sequence <small_marker_inner8> --output-ro
 当前过渡状态：
 
 - canonical current combined viewer:
-  `http://192.168.2.0:9899/studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50/inner_bridge/combined_studio_rig_viewer_v1/index.html`
+  `http://192.168.2.0:9899/current_calibration/reports/01_3d_viewer/index.html`
 - inner-only / outer-only:
   use the toggles inside the canonical combined viewer instead of linking separate legacy viewers.
 - canonical machine-readable 32-camera artifact:
-  `http://192.168.2.0:9899/studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50/calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml`
+  `http://192.168.2.0:9899/current_calibration/artifacts/studio_32_cameras.yaml`
 
-后续如果生成新 viewer，必须通过 `report_registry.json` promotion，而不是直接把新 HTML 链到主入口。
+后续如果生成新 viewer，必须通过 `publish_t0_clean_calib_reports.py` promotion 到
+`current_calibration`，而不是直接把新 HTML 链到主入口。
 
 ## 当前 re-calib audit 结论
 
@@ -141,13 +146,17 @@ inner re-calib pipeline 当前是 `usable_with_caveats`：
 - `large_marker_inner8` 数据采集质量 OK：8/8 cameras，305 common frames，spread 0。
 - `large_marker_bridge_all32` 数据采集质量 OK：32/32 cameras，305 common frames，spread 0。
 - large-inner fixed-intrinsic initializer 成功，8/8 connected。
-- all32 bridge 的 metric bridge gate 通过：
-  - min topdown outer votes: 75
-  - max center p90 residual: 0.156 m
-  - max rotation p90 residual: 2.96 deg
+- all32 bridge 的 primary quality 来自 fixed-known-point joint BA 后的
+  correspondence residual summary：
+  - ok_count / median / p90 / max residual 必须从
+    `large_marker_bridge_all32/fixed_points_joint_ba_*/correspondence_residual_summary.json`
+    或 wrapper `bridge_correspondence_quality` 读取。
+  - legacy top-down metric bridge gate 只作为 diagnostic。
 - caveat：small-marker fixed-rig quality probe 中 camera `22463691` 较弱 / disconnected。
-- caveat：all32 PnP command 返回 1，是因为 28/32 connected，不是所有 camera 都连通；但 top-down anchors 和 inner support 足够，bridge evaluator 成功。
-- caveat：COLMAP prior diagnostic weak/inconsistent，但不是当前 production bridge gate。
+- caveat：all32 PnP initializer connectivity 只说明初始化覆盖率；最终报告不能用
+  PnP initializer residual 冒充 BA residual。
+- caveat：COLMAP prior / legacy bridge evaluator diagnostic weak/inconsistent 时，不自动否定
+  all32 BA residual，但必须看 bridge-to-outer alignment diagnostic。
 
 ## 标准报告需求草案
 
@@ -178,10 +187,9 @@ inner re-calib pipeline 当前是 `usable_with_caveats`：
 
 必须回答：
 
-- bridge input contract：outer / inner camera index order、参与 bridge 的 anchors、accepted frames。
-- inner-to-outer transform 来源和版本。
-- top-down / outer anchor vote count。
-- metric residual gate：translation/rotation residual 的 p50/p90/max。
+- bridge input contract：outer / inner camera index order、accepted frames、all32 correspondence count。
+- all32 PnP initializer、fixed-known-point joint BA、post-BA reprojection residual。
+- bridge-to-outer alignment diagnostic：center/rotation RMS、scale/gauge caveat。
 - 哪些 cameras 没有参与或失败，是否影响 bridge。
 - 最终 combined viewer 链接。
 - 明确 pass/fail gates 和 caveats。
@@ -200,10 +208,12 @@ inner re-calib pipeline 当前是 `usable_with_caveats`：
 /home/ubuntu/calib_data/<capture_root>/recalib_pipelines/<pipeline_id>/latest/
 ```
 
-但不能随意把 HTML 链接塞进主入口。production-capable run 应输出 artifact manifest，并由 report/UI owner promote 到：
+但不能随意把 HTML 链接塞进主入口。production-capable run 应输出 artifact
+manifest，并由 report/UI owner 通过 `publish_t0_clean_calib_reports.py`
+promote 到：
 
 ```text
-/home/ubuntu/calib_data/current_calibration/report_registry.json
+/home/ubuntu/calib_data/current_calibration/
 ```
 
 artifact manifest 至少包含：
@@ -222,10 +232,11 @@ artifact manifest 至少包含：
 
 ## 对后续 Codex 的要求
 
-- 不要创建新的零散 report 首页；更新 `current_calibration` 和 `report_registry.json`。
+- 不要创建新的零散 report 首页；更新 curated `current_calibration`。
 - 不要物理删除历史产物，除非用户明确确认。
-- 新 homepage report 必须归属到五个 canonical report categories 之一；backend
-  operation 才按 `whole`、`large marker`、`small marker` 三类组织。
+- 新 homepage report 必须维持 final YAML + one unified viewer + seven curated
+  reports 的结构；backend operation 才按 `whole`、`large marker`、`small marker`
+  三类组织。
 - 新 operation 必须通过 9898 panel 白名单 mode 或未来 `t0-calib operate ...` CLI。
 - 新 viewer 必须服务最终 canonical viewer contract。
 - repo 内不要在 source/script 目录保留 generated report HTML；需要保留时归档到

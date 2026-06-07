@@ -243,6 +243,65 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
             self.assertIn("correspondence_data.json", html)
             self.assertIn("feature-level observed/projected/world correspondences", html)
 
+    def test_marker_correspondence_counts_loaded_observations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            correspondence = root / "large_correspondences.tsv"
+            fieldnames = [
+                "dataset", "imageset_index", "camera_index", "camera_label",
+                "filename", "feature_id", "point_index",
+                "world_x", "world_y", "world_z",
+                "camera_center_x", "camera_center_y", "camera_center_z",
+                "observed_x", "observed_y", "projected_x", "projected_y",
+                "residual_x_px", "residual_y_px", "residual_px",
+                "projection_status",
+            ]
+            with correspondence.open("w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, delimiter="\t", fieldnames=fieldnames)
+                writer.writeheader()
+                for feature_id, residual in [(10, 0.25), (11, 0.5)]:
+                    writer.writerow({
+                        "dataset": "large",
+                        "imageset_index": "3",
+                        "camera_index": "0",
+                        "camera_label": "1-1",
+                        "filename": "000003.jpg",
+                        "feature_id": str(feature_id),
+                        "point_index": str(feature_id - 10),
+                        "world_x": str(0.1 * feature_id),
+                        "world_y": "0.0",
+                        "world_z": "1.0",
+                        "camera_center_x": "0.0",
+                        "camera_center_y": "0.0",
+                        "camera_center_z": "0.0",
+                        "observed_x": "100.0",
+                        "observed_y": "101.0",
+                        "projected_x": "100.1",
+                        "projected_y": "101.1",
+                        "residual_x_px": "0.1",
+                        "residual_y_px": "0.2",
+                        "residual_px": str(residual),
+                        "projection_status": "ok",
+                    })
+
+            data = viewer.load_marker_correspondences(
+                "large",
+                correspondence,
+                max_rows=10,
+                cameras=[{
+                    "index": 0,
+                    "label": "1-1",
+                    "camera_id": "1-1",
+                    "center": [0.0, 0.0, 0.0],
+                }],
+            )
+
+            self.assertEqual(data["point_count"], 2)
+            self.assertEqual(data["view_count"], 1)
+            self.assertEqual(len(data["sample_points_three"]), 2)
+            self.assertEqual(data["summary"]["observation_count"], 2)
+            self.assertEqual(data["summary"]["loaded_observation_count"], 2)
+
     def test_pipeline_dry_run_includes_advanced_correspondence_viewer_stage(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

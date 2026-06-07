@@ -8,17 +8,56 @@ import json
 import shutil
 from pathlib import Path
 import statistics
+import argparse
 
 
 ROOT = Path("/home/ubuntu/calib_data")
 BASE_URL = "http://192.168.2.0:9899"
-RUN_TAG = "recalib_20260604_outer_large_intrinsics_v1"
+RUN_TAG = "recalib_20260605_whole_fullres_probe_v1"
 RUN = ROOT / "studio_calibration_runs" / RUN_TAG
 CURRENT = ROOT / "current_calibration"
 REPORTS = CURRENT / "reports"
 FINAL_YAML = RUN / "calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml"
+CURRENT_FINAL_YAML = CURRENT / "artifacts/studio_32_cameras.yaml"
 CORRESPONDENCE_JSON = RUN / "advanced_correspondence_viewer_v1/correspondence_data.json"
 CURRENT_CORRESPONDENCE_JSON = CURRENT / "advanced_correspondence_viewer_v1/correspondence_data.json"
+OUTER_LARGE_INTRINSIC_REPORT = (
+    ROOT
+    / "calib_2026_06_04_outer_large_marker_v2"
+    / "outer_large_marker_20260604_passing_images_only_min1_bycam"
+    / "outer24_intrinsic_report_large_marker_v1"
+)
+OUTER_LARGE_QC_ROOT = (
+    ROOT
+    / "calib_2026_06_04_outer_large_marker_v2"
+    / "outer_large_marker_20260604_distributed_filtered_min1_bycam"
+)
+WHOLE_QC_ROOT = (
+    ROOT
+    / "calib_2026_05_31_fullres_probe_v1"
+    / "whole_outer24_filtered_min4_fullres_min4cam"
+)
+
+
+def configure(args):
+    global ROOT, BASE_URL, RUN_TAG, RUN, CURRENT, REPORTS
+    global FINAL_YAML, CURRENT_FINAL_YAML
+    global CORRESPONDENCE_JSON, CURRENT_CORRESPONDENCE_JSON
+    global OUTER_LARGE_INTRINSIC_REPORT, OUTER_LARGE_QC_ROOT, WHOLE_QC_ROOT
+
+    ROOT = Path(args.root).resolve()
+    BASE_URL = args.base_url.rstrip("/")
+    RUN_TAG = args.run_tag
+    RUN = ROOT / "studio_calibration_runs" / RUN_TAG
+    CURRENT = Path(args.current_dir).resolve() if args.current_dir else ROOT / "current_calibration"
+    REPORTS = CURRENT / "reports"
+    FINAL_YAML = RUN / "calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml"
+    CURRENT_FINAL_YAML = CURRENT / "artifacts/studio_32_cameras.yaml"
+    CORRESPONDENCE_JSON = RUN / "advanced_correspondence_viewer_v1/correspondence_data.json"
+    CURRENT_CORRESPONDENCE_JSON = CURRENT / "advanced_correspondence_viewer_v1/correspondence_data.json"
+    OUTER_LARGE_INTRINSIC_REPORT = Path(args.outer_large_intrinsic_report).resolve()
+    OUTER_LARGE_QC_ROOT = Path(args.outer_large_qc_root).resolve()
+    WHOLE_QC_ROOT = Path(args.whole_qc_root).resolve()
 
 
 def rel_url(path):
@@ -149,6 +188,24 @@ def copy_report(src, dst):
     shutil.copytree(src, dst)
 
 
+def require_path(path, label):
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"{label} is missing: {path}")
+    return path
+
+
+def publish_final_yaml():
+    require_path(FINAL_YAML, "final 32-camera YAML")
+    CURRENT_FINAL_YAML.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(FINAL_YAML, CURRENT_FINAL_YAML)
+    return {
+        "source_path": str(FINAL_YAML),
+        "path": str(CURRENT_FINAL_YAML),
+        "url": rel_url(CURRENT_FINAL_YAML),
+    }
+
+
 def publish_correspondence_data():
     if CORRESPONDENCE_JSON.is_file():
         CURRENT_CORRESPONDENCE_JSON.parent.mkdir(parents=True, exist_ok=True)
@@ -194,7 +251,10 @@ def publish_inner_intrinsic_wrapper(report_dir):
     report_dir = Path(report_dir)
     rows = read_tsv(report_dir / "camera_metrics.tsv")
     summary = load_json(report_dir / "summary.json")
-    images = list(report_dir.glob("camera*_feature_coverage_reprojection.png"))
+    images = (
+        list(report_dir.glob("camera*_feature_coverage_reprojection.png"))
+        + list(report_dir.glob("camera*_reprojection_arrows_log.png"))
+    )
     write_page(
         report_dir / "index.html",
         "Inner 内参报告 - small_marker",
@@ -319,6 +379,12 @@ def publish_reports():
             "3D viewer source index.html is missing. Regenerate "
             f"{RUN / 'inner_bridge/combined_studio_rig_viewer_v1/index.html'} first."
         )
+    require_path(RUN / "inner_bridge/reports/inner_reprojection", "inner intrinsic/reprojection report source")
+    require_path(RUN / "inner_bridge/reports/rig_extrinsics", "inner extrinsic report source")
+    require_path(OUTER_LARGE_INTRINSIC_REPORT, "outer large-marker intrinsic report source")
+    require_path(OUTER_LARGE_QC_ROOT / "per_camera_stats.tsv", "outer large-marker QC stats")
+    require_path(WHOLE_QC_ROOT / "per_camera_stats.tsv", "whole QC stats")
+    final_yaml = publish_final_yaml()
 
     if REPORTS.exists():
         shutil.rmtree(REPORTS)
@@ -326,16 +392,14 @@ def publish_reports():
 
     copy_report(viewer_source, REPORTS / "01_3d_viewer")
     copy_report(
-        RUN / "inner_bridge/reports/inner8_intrinsic_feature_coverage_small_marker",
+        RUN / "inner_bridge/reports/inner_reprojection",
         REPORTS / "03_inner_intrinsics_small_marker",
     )
     publish_inner_intrinsic_wrapper(REPORTS / "03_inner_intrinsics_small_marker")
     copy_report(RUN / "inner_bridge/reports/rig_extrinsics", REPORTS / "04_inner_extrinsics_small_marker")
     publish_inner_extrinsic_wrapper(REPORTS / "04_inner_extrinsics_small_marker")
     copy_report(
-        ROOT / "calib_2026_06_04_outer_large_marker_v2"
-        / "outer_large_marker_20260604_passing_images_only_min1_bycam"
-        / "outer24_intrinsic_report_large_marker_v1",
+        OUTER_LARGE_INTRINSIC_REPORT,
         REPORTS / "06_outer_intrinsics_outer_large_marker",
     )
     publish_outer_intrinsic_wrapper(REPORTS / "06_outer_intrinsics_outer_large_marker")
@@ -384,15 +448,9 @@ def publish_reports():
         ],
     )
 
-    outer_large_summary = load_json(
-        ROOT
-        / "calib_2026_06_04_outer_large_marker_v2/outer_large_marker_20260604_distributed_filtered_min1_bycam/summary.json"
-    )
-    outer_large_stats = read_tsv(
-        ROOT
-        / "calib_2026_06_04_outer_large_marker_v2/outer_large_marker_20260604_distributed_filtered_min1_bycam/per_camera_stats.tsv"
-    )
-    whole_stats = read_tsv(ROOT / "calib_2026_05_31_v3/whole_outer24_filtered_min4_hybrid_min4cam/per_camera_stats.tsv")
+    outer_large_summary = load_json(OUTER_LARGE_QC_ROOT / "summary.json")
+    outer_large_stats = read_tsv(OUTER_LARGE_QC_ROOT / "per_camera_stats.tsv")
+    whole_stats = read_tsv(WHOLE_QC_ROOT / "per_camera_stats.tsv")
     write_page(
         REPORTS / "05_outer_capture_outer_large_marker_whole/index.html",
         "Outer 数据采集报告 - outer_large_marker + whole",
@@ -491,25 +549,32 @@ def publish_reports():
     large_pnp = read_tsv(
         RUN / "inner_bridge/large_marker_bridge_all32/fixed_intrinsic_bridge_pnp_stride1_v1/camera_pnp_summary.tsv"
     )
+    inner_bridge_summary = load_json(RUN / "inner_bridge/summary.json")
+    bridge_corr = inner_bridge_summary.get("bridge_correspondence_quality", {})
+    bridge_intrinsics = inner_bridge_summary.get("bridge_intrinsics", {})
+    bridge_layout = inner_bridge_summary.get("bridge_layout", {})
     write_page(
-        REPORTS / "08_bridge_capture_large_marker/index.html",
-        "Bridge 数据采集报告 - large_marker",
+        REPORTS / "09_bridge_result_large_marker/index.html",
+        "Bridge 结果报告 - large_marker",
         [
             (
                 "Summary",
                 f"""
 <div class="grid">
-  <div class="metric"><strong>{len(large_manifest)}</strong><span>staged cameras</span></div>
-  <div class="metric"><strong>{stat_count(large_manifest, lambda r: r.get('status') == 'usable')}</strong><span>usable camera sequences</span></div>
-  <div class="metric"><strong>{int(stat_sum(large_manifest, 'frame_count'))}</strong><span>staged frames across cameras</span></div>
-  <div class="metric"><strong>{stat_count(large_pnp, lambda r: r.get('connected') == 'yes')}</strong><span>large-marker connected cameras</span></div>
-  <div class="metric"><strong>{int(stat_sum(large_pnp, 'total_inliers'))}</strong><span>large-marker PnP inliers</span></div>
-  <div class="metric"><strong>{fnum(median_field(large_pnp, 'median_view_error_px'))} px</strong><span>median per-camera PnP median error</span></div>
+  <div class="metric"><strong>{bridge_corr.get('status', '-')}</strong><span>all32 bridge BA residual status</span></div>
+  <div class="metric"><strong>{bridge_corr.get('ok_count', '-')}</strong><span>post-BA correspondences</span></div>
+  <div class="metric"><strong>{fnum(bridge_corr.get('median_residual_px'))} px</strong><span>large-marker dataset median px</span></div>
+  <div class="metric"><strong>{fnum(bridge_corr.get('p90_residual_px'))} px</strong><span>large-marker dataset p90 px</span></div>
+  <div class="metric"><strong>{fnum(bridge_corr.get('max_residual_px'))} px</strong><span>large-marker dataset max px</span></div>
+  <div class="metric"><strong>{bridge_intrinsics.get('ready_count', '-')} / {bridge_intrinsics.get('expected_count', '-')}</strong><span>fixed intrinsics available</span></div>
+  <div class="metric"><strong>{bridge_layout.get('observed_camera_count', '-')} / {bridge_layout.get('expected_camera_count', '-')}</strong><span>observed cameras in bridge</span></div>
+  <div class="metric"><strong>{stat_count(large_pnp, lambda r: r.get('connected') == 'yes')}</strong><span>PnP initializer connected cameras</span></div>
 </div>
+<p class="muted">This report is based on the current production all32 fixed-known-point joint BA. The older top-down-anchor bridge summary remains in the run directory as a diagnostic, but it is not the current bridge quality gate.</p>
 """,
             ),
             (
-                "Staged Cameras",
+                "Large Marker Staging",
                 table(
                     ["camera_index", "stage_name", "machine", "camera_id", "kind", "frame_count", "status", "reason"],
                     large_manifest,
@@ -517,7 +582,7 @@ def publish_reports():
                 ),
             ),
             (
-                "Large Marker PnP Coverage",
+                "All32 PnP Initializer Coverage",
                 table(
                     [
                         "camera_index",
@@ -536,118 +601,71 @@ def publish_reports():
         ],
     )
 
-    bridge = load_json(RUN / "inner_bridge/bridge_colmap_inner_refined_v1/bridge_summary.json")
-    metric = bridge.get("quality_gates", {}).get("metric_summary", {})
-    anchor_rows = []
-    for item in bridge.get("outer_camera_summaries", []):
-        anchor_rows.append(
-            {
-                "label": item.get("label"),
-                "vote_count": item.get("vote_count"),
-                "center_residual_median_m": fnum(item.get("center_residual_median_m"), 4),
-                "center_residual_p90_m": fnum(item.get("center_residual_p90_m"), 4),
-                "rotation_residual_median_deg": fnum(item.get("rotation_residual_median_deg"), 3),
-                "rotation_residual_p90_deg": fnum(item.get("rotation_residual_p90_deg"), 3),
-            }
-        )
-    write_page(
-        REPORTS / "09_bridge_result_large_marker/index.html",
-        "Bridge 结果报告 - large_marker",
-        [
-            (
-                "Summary",
-                f"""
-<div class="grid">
-  <div class="metric"><strong>{bridge.get('quality_gates', {}).get('metric_bridge', {}).get('status', '-')}</strong><span>metric bridge gate</span></div>
-  <div class="metric"><strong>{metric.get('min_outer_votes', '-')}</strong><span>minimum top-down anchor votes</span></div>
-  <div class="metric"><strong>{fnum(metric.get('max_outer_center_residual_p90_m'), 4)} m</strong><span>max top-down center residual p90</span></div>
-  <div class="metric"><strong>{fnum(metric.get('max_outer_rotation_residual_p90_deg'), 3)} deg</strong><span>max top-down rotation residual p90</span></div>
-</div>
-<p>{esc(bridge.get('conclusion', ''))}</p>
-""",
-            ),
-            (
-                "Top-Down Anchor Consistency",
-                table(
-                    [
-                        "label",
-                        "vote_count",
-                        "center_residual_median_m",
-                        "center_residual_p90_m",
-                        "rotation_residual_median_deg",
-                        "rotation_residual_p90_deg",
-                    ],
-                    anchor_rows,
-                ),
-            ),
-        ],
-    )
-
     reports = [
-        ("1", "3D viewer", REPORTS / "01_3d_viewer/index.html", "Unified 32-camera interactive 3D viewer."),
         (
-            "2",
+            "1",
             "inner 数据采集报告 (small marker)",
             REPORTS / "02_inner_capture_small_marker/index.html",
             "Small-marker staged data and PnP coverage for inner8.",
         ),
         (
-            "3",
+            "2",
             "inner 内参报告 (small marker)",
             REPORTS / "03_inner_intrinsics_small_marker/index.html",
             "Inner8 intrinsic feature coverage and residual distribution.",
         ),
         (
-            "4",
+            "3",
             "inner 外参报告 (small marker)",
             REPORTS / "04_inner_extrinsics_small_marker/index.html",
             "Inner rig extrinsic layout report.",
         ),
         (
-            "5",
+            "4",
             "outer 数据采集报告",
             REPORTS / "05_outer_capture_outer_large_marker_whole/index.html",
             "Outer-large-marker intrinsic capture plus whole tower extrinsic capture QC.",
         ),
         (
-            "6",
+            "5",
             "outer 内参报告 (outer large marker)",
             REPORTS / "06_outer_intrinsics_outer_large_marker/index.html",
             "Outer24 large-marker intrinsic residual/coverage report.",
         ),
         (
-            "7",
+            "6",
             "outer 外参报告 (whole)",
             REPORTS / "07_outer_extrinsics_whole/index.html",
             "Whole/tower outer extrinsic refinement residual report.",
         ),
         (
-            "8",
-            "bridge 数据采集报告 (large marker)",
-            REPORTS / "08_bridge_capture_large_marker/index.html",
-            "Large-marker bridge capture/staging/PnP coverage.",
-        ),
-        (
-            "9",
+            "7",
             "bridge 结果报告 (large marker)",
             REPORTS / "09_bridge_result_large_marker/index.html",
             "Large-marker inner/outer bridge result and anchor consistency.",
         ),
     ]
 
+    viewer_card = (
+        f"<a class='card viewer-card' href='{esc(rel_url(REPORTS / '01_3d_viewer/index.html'))}'>"
+        "<strong>Overall 3D Viewer</strong>"
+        "<span>Unified 32-camera interactive viewer with intrinsic residuals, "
+        "final dataset/extrinsic residuals, camera filters, and correspondence loading.</span>"
+        "</a>"
+    )
     cards = []
     for number, title, path, description in reports:
         cards.append(
             f"<a class='card' href='{esc(rel_url(path))}'><strong>{esc(number)}. {esc(title)}</strong>"
             f"<span>{esc(description)}</span></a>"
         )
-    final_yaml_url = rel_url(FINAL_YAML)
+    final_yaml_url = final_yaml["url"]
     artifact_card = (
         f"<a class='artifact-card' href='{esc(final_yaml_url)}'>"
         "<strong>Final 32-camera YAML</strong>"
         "<span>Machine-readable intrinsics, distortion, and "
         "T_camera_studio extrinsics for all 24 outer + 8 inner cameras.</span>"
-        f"<code>{esc(str(FINAL_YAML))}</code>"
+        f"<code>{esc(str(CURRENT_FINAL_YAML))}</code>"
         "</a>"
     )
     index_style = """
@@ -658,10 +676,12 @@ main { padding: 26px 38px 48px; max-width: 1180px; }
 h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: 0; }
 p { color: #62666b; line-height: 1.45; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.viewer-grid { display: grid; grid-template-columns: minmax(280px, 520px); gap: 12px; margin-bottom: 22px; }
 .card { display: flex; flex-direction: column; gap: 6px; min-height: 86px; padding: 16px; border: 1px solid #ddd9cf; border-radius: 8px; background: #fff; color: #222; text-decoration: none; }
 .card:hover { border-color: #8aa0b7; }
 .card strong { font-size: 17px; }
 .card span { color: #62666b; font-size: 13px; line-height: 1.35; }
+.viewer-card { border-color: #b6c5d2; background: #fbfdff; }
 .artifact-card { display: flex; flex-direction: column; gap: 8px; padding: 16px; margin-bottom: 18px; border: 1px solid #b9c6d4; border-radius: 8px; background: #f7fbff; color: #222; text-decoration: none; }
 .artifact-card:hover { border-color: #5f83a9; }
 .artifact-card strong { font-size: 18px; }
@@ -681,10 +701,10 @@ code { background: #eeece5; padding: 1px 4px; border-radius: 4px; }
 <body>
 <header>
 <h1>Studio Calibration Reports</h1>
-<p>当前 32-camera 标定只保留 9 个 canonical report 入口。历史探索报告、advanced/debug/audit 页面已从 9899 公开入口清理。</p>
+<p>当前 32-camera 标定只保留一个 overall viewer 和七个 canonical report 入口。历史探索报告、advanced/debug/audit 页面不在 9899 首页展示。</p>
 <p>Current run: <code>{esc(RUN_TAG)}</code></p>
 </header>
-<main>{artifact_card}<div class="grid">{''.join(cards)}</div></main>
+<main>{artifact_card}<h2>Overall Viewer</h2><div class="viewer-grid">{viewer_card}</div><h2>Reports</h2><div class="grid">{''.join(cards)}</div></main>
 </body>
 </html>
 """
@@ -692,25 +712,56 @@ code { background: #eeece5; padding: 1px 4px; border-radius: 4px; }
     (CURRENT / "index.html").write_text(index_html, encoding="utf-8")
 
     allowed = {ROOT / "index.html", CURRENT / "index.html"}
+    allowed.add(REPORTS / "01_3d_viewer/index.html")
     allowed.update(path for _number, _title, path, _description in reports)
-    removed = []
-    for path in sorted(ROOT.rglob("*.html")):
+    removed_current_html = []
+    for path in sorted(CURRENT.rglob("*.html")):
         if path in allowed:
             continue
         path.unlink()
-        removed.append(str(path))
+        removed_current_html.append(str(path))
+    for stale in [
+        CURRENT / "operations",
+        CURRENT / "reports/08_bridge_capture_large_marker",
+    ]:
+        if stale.exists():
+            if stale.is_dir():
+                shutil.rmtree(stale)
+            else:
+                stale.unlink()
+    for pattern in [
+        "report_cleanup_manifest_*.json",
+        "report_refresh_manifest_*.json",
+        "report_registry.json",
+        "inner_recalib_audit.json",
+        "README.md",
+    ]:
+        for path in CURRENT.glob(pattern):
+            path.unlink()
+    if CURRENT_CORRESPONDENCE_JSON.parent.is_dir():
+        for path in CURRENT_CORRESPONDENCE_JSON.parent.iterdir():
+            if path != CURRENT_CORRESPONDENCE_JSON:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+    manifest_path = CURRENT / "report_cleanup_manifest_latest.json"
     manifest = {
         "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "root_url": BASE_URL + "/",
-        "final_yaml": {"path": str(FINAL_YAML), "url": final_yaml_url},
+        "final_yaml": final_yaml,
         "correspondence_data": correspondence_data,
+        "overall_viewer": {
+            "path": str(REPORTS / "01_3d_viewer/index.html"),
+            "url": rel_url(REPORTS / "01_3d_viewer/index.html"),
+        },
         "allowed_reports": [
             {"number": n, "title": t, "path": str(p), "url": rel_url(p)} for n, t, p, _d in reports
         ],
-        "removed_html_count": len(removed),
-        "removed_html": removed,
+        "removed_current_html_count": len(removed_current_html),
+        "removed_current_html": removed_current_html,
     }
-    (CURRENT / "report_cleanup_manifest_20260604.json").write_text(
+    manifest_path.write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     if temp_viewer_source.exists():
@@ -718,7 +769,20 @@ code { background: #eeece5; padding: 1px 4px; border-radius: 4px; }
     return manifest
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", default=str(ROOT))
+    parser.add_argument("--base-url", default=BASE_URL)
+    parser.add_argument("--run-tag", default=RUN_TAG)
+    parser.add_argument("--current-dir", default="")
+    parser.add_argument("--outer-large-intrinsic-report", default=str(OUTER_LARGE_INTRINSIC_REPORT))
+    parser.add_argument("--outer-large-qc-root", default=str(OUTER_LARGE_QC_ROOT))
+    parser.add_argument("--whole-qc-root", default=str(WHOLE_QC_ROOT))
+    return parser.parse_args()
+
+
 def main():
+    configure(parse_args())
     manifest = publish_reports()
     print(
         json.dumps(
@@ -726,8 +790,8 @@ def main():
                 "root_url": BASE_URL + "/",
                 "final_yaml_url": manifest["final_yaml"]["url"],
                 "allowed_report_count": len(manifest["allowed_reports"]),
-                "removed_html_count": manifest["removed_html_count"],
-                "manifest": str(CURRENT / "report_cleanup_manifest_20260604.json"),
+                "removed_current_html_count": manifest["removed_current_html_count"],
+                "manifest": str(CURRENT / "report_cleanup_manifest_latest.json"),
             },
             indent=2,
             ensure_ascii=False,

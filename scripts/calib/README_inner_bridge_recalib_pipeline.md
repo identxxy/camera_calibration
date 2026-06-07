@@ -33,33 +33,34 @@ inner all32 manifest order.
 
 ## Bridge Capture Protocol
 
-When the goal is to bind the top-down outer cameras (`4-1`, `4-2`, `4-3`) to
-the movable inner-ring rig, use the larger low-density calibration board instead
-of the AprilTag tower. The tower mainly constrains the horizontally inward
-outer cameras; the top-down cameras see little or none of the vertical tower
-faces, so they need a tabletop board bridge.
+When the goal is to bind the movable inner-ring rig to the fixed outer studio
+frame, use the larger low-density calibration board instead of the AprilTag
+tower. The tower constrains the outer-ring extrinsics from `whole`; the large
+board bridge is the cross-rig observation that can be seen by both inner and
+outer cameras, including the top-down cameras when the board is moved on the
+table/workspace.
 
 Capture the board around the inner working volume with these requirements:
 
-- Keep `4-1`, `4-2`, and `4-3` active in the same synchronized sequence as the
-  inner 8 cameras.
+- Keep all usable outer cameras and the inner 8 cameras active in the same
+  synchronized sequence. `4-1`, `4-2`, and `4-3` are top-down cameras, but they
+  are metadata only, not the only bridge anchors.
 - Move the board through the desktop/workspace area, not only at the center.
 - Include yaw rotation around gravity and a few moderate roll/pitch tilts so
   the bridge is not close to a planar fronto-parallel degeneracy.
-- Ensure many frames are jointly visible by at least one top-down camera and
-  at least three inner cameras. More joint visibility is better than simply
-  accumulating single-camera detections.
+- Ensure many frames are jointly visible by multiple outer and inner cameras.
+  More cross-camera overlap is better than simply accumulating single-camera
+  detections.
 - Keep the board fully or mostly inside the image for a subset of frames, but
   partial board observations are acceptable if the detector returns enough
   corners and the frame has cross-camera overlap.
 - Use this bridge sequence to estimate/update extrinsics. Reuse existing
   intrinsics unless resolution, focus, lens, or distortion convention changed.
 
-The intended solve is fixed-intrinsic first: use the current refined inner
-intrinsics, the current outer/top-down intrinsics, and estimate the relative
-transform between the inner rig and the outer/top-down studio frame. Joint
-intrinsic/extrinsic refinement is a later validation stage, not the default
-bridge solve.
+The intended solve uses the all32 large-board PnP state as an initializer, then
+runs direct all32 joint BA with known board points fixed. The production bridge
+quality is the post-BA correspondence reprojection residual. The PnP summary is
+kept as initializer/connectivity metadata only.
 
 ## Bridge all32 camera convention
 
@@ -70,8 +71,8 @@ The all32 bridge manifest order is part of the contract:
 - Bridge indices `24..31` are the original inner cameras `inner0..inner7`.
 - Original inner camera indices remain `0..7` in the compact inner-only
   calibration products and intrinsics directory.
-- Top-down outer bridge anchors are `4-1`, `4-2`, and `4-3`, which correspond
-  to bridge / outer indices `9`, `10`, and `11`.
+- Top-down outer cameras `4-1`, `4-2`, and `4-3` correspond to bridge / outer
+  indices `9`, `10`, and `11`, but they are not the only bridge anchors.
 
 For all32 fixed-intrinsic PnP, the wrapper prepares a combined intrinsics
 directory under:
@@ -115,15 +116,19 @@ The wrapper keeps heavy compute opt-in:
    grid/subsampled small-marker dataset. It writes `camera_pnp_summary.tsv` and
    is allowed to flag disconnected cameras; it does not replace the large-inner
    baseline.
-4. Plan a large-marker all32 fixed-intrinsic PnP solve, then evaluate the bridge
-   using compact inner poses remapped to bridge indices `24..31` and top-down
-   outer anchors `4-1/4-2/4-3` at indices `9/10/11`.
+4. Plan a large-marker all32 PnP initializer, then run direct all32 joint BA
+   with fixed known board points. The final bridge residual is exported from
+   the BA state, not from the PnP initializer.
 5. Generate stable entrypoint reports for panel links.
 
-The bridge stage is currently a fixed-intrinsic PnP plus top-down anchor
-evaluation/check. Full combined inner+outer bundle adjustment/refinement is
-deliberately left as the next stage once this data flow and camera-index
-contract are stable.
+The legacy inner/outer bridge evaluator remains as a diagnostic for historical
+products. It must not be used as the production all32 bridge quality gate.
+
+Viewer/report rule: the unified 3D viewer's `large_marker` dataset mode must
+display per-camera residuals from the all32 fixed-known-point BA summary
+(`median_error_px`, `p90_error_px`, `max_error_px`). Do not fall back to the
+PnP initializer field `median_view_error_px` for production residual tables;
+that field only describes initialization/connectivity.
 
 ## Fast Recalib Usage
 
@@ -159,27 +164,26 @@ python3 scripts/calib/run_inner_bridge_recalib_pipeline.py \
   --force
 ```
 
-This keeps inner intrinsics fixed, uses the selected inner extrinsic prior, and
-evaluates the bridge against the top-down outer anchors. Re-run
+This reuses the selected intrinsics, initializes from all32 PnP, then refines
+the all32 bridge state with fixed known board points. Re-run
 `--run-large-inner-init` first when the inner cameras were physically moved
 relative to each other or the prior inner extrinsics are suspect.
 
-The bridge evaluator now writes machine-readable quality gates into
+The legacy bridge evaluator writes machine-readable diagnostic gates into
 `bridge_summary.json`:
 
-- `quality_gates.metric_bridge`: production signal based on large-board PnP vote
-  stability in metric inner-rig space. Defaults require at least 50 inner-board
-  frames, median inner support of 3 cameras, each top-down outer anchor with at
-  least 10 votes, max center p90 `<= 0.25 m`, max rotation p90 `<= 5 deg`, and
-  non-degenerate top-down triangle area `>= 0.02 m^2`.
+- `quality_gates.metric_bridge`: legacy diagnostic based on large-board PnP
+  vote stability in metric inner-rig space. It is not the production all32
+  bridge gate because it was designed for three top-down anchors.
 - `quality_gates.colmap_prior_diagnostic`: diagnostic signal only. A
   three-camera COLMAP Sim(3) alignment is weakly constrained, so a weak COLMAP
-  diagnostic does not invalidate a passing metric bridge gate. It warns when the
-  first-frame COLMAP top-down anchors have too few tracks, inconsistent pairwise
-  scale, or large orientation residuals.
+  diagnostic does not invalidate a low all32 BA correspondence residual by
+  itself. It warns when the first-frame COLMAP top-down anchors have too few
+  tracks, inconsistent pairwise scale, or large orientation residuals.
 
-The fast pipeline surfaces these gate results in both `summary.json` and the
-quality/final HTML reports.
+The fast pipeline surfaces these diagnostic gate results, but the production
+bridge quality is the all32 BA correspondence residual exported next to
+`fixed_points_joint_ba_stride*_*/correspondence_residuals.tsv`.
 
 Without `--dry-run`, heavy stages still do not execute unless an explicit switch
 is passed:

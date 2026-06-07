@@ -69,10 +69,9 @@ class T0CalibReportHttpServerTest(unittest.TestCase):
             self.assertTrue(primary_paths.issubset(handler._curated_paths()))
 
             write_text(
-                root
-                / report_server.FAST_INNER_BRIDGE_LATEST
-                / "combined_studio_rig_viewer_v1/rig_data.json",
+                root / report_server.UNIFIED_VIEWER.replace("index.html", "rig_data.json"),
                 report_server.json.dumps({
+                    "cameras": [{"label": "1-1"}],
                     "inputs": {
                         "outer_final_pose_yaml": str(
                             root
@@ -93,7 +92,7 @@ class T0CalibReportHttpServerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             handler = make_handler(root)
-            item = find_report_item(path_suffix="combined_studio_rig_viewer_v1/index.html")
+            item = find_report_item(path_suffix="01_3d_viewer/index.html")
             write_text(root / item["path"], "<html>combined viewer</html>")
 
             rendered = handler._render_report_item(item)
@@ -105,11 +104,12 @@ class T0CalibReportHttpServerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             handler = make_handler(root)
-            item = find_report_item(path_suffix="combined_studio_rig_viewer_v1/index.html")
+            item = find_report_item(path_suffix="01_3d_viewer/index.html")
             write_text(root / item["path"], "<html>combined viewer</html>")
             write_json(
                 root / item["path"].replace("index.html", "rig_data.json"),
                 {
+                    "cameras": [{"label": "1-1"}],
                     "inputs": {"outer_final_pose_yaml": ""},
                     "metrics": {"outer_pose_source": "colmap_sim3_approx"},
                 },
@@ -124,11 +124,12 @@ class T0CalibReportHttpServerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             handler = make_handler(root)
-            item = find_report_item(path_suffix="combined_studio_rig_viewer_v1/index.html")
+            item = find_report_item(path_suffix="01_3d_viewer/index.html")
             write_text(root / item["path"], "<html>combined viewer</html>")
             write_json(
                 root / item["path"].replace("index.html", "rig_data.json"),
                 {
+                    "cameras": [{"label": "1-1"}],
                     "inputs": {
                         "outer_final_pose_yaml": str(
                             root
@@ -155,6 +156,23 @@ class T0CalibReportHttpServerTest(unittest.TestCase):
         self.assertNotIn("Report inventory / cleanup audit", labels)
         self.assertNotIn("Stable 2026-05-26 outer tower viewer", labels)
         self.assertNotIn("Inner solve 3D viewer", labels)
+        self.assertNotIn("Bridge summary.json", labels)
+        self.assertNotIn("Outer solve summary.json", labels)
+
+    def test_fallback_groups_are_one_viewer_and_seven_reports(self):
+        titles = [group["title"] for group in report_server.REPORT_GROUPS]
+
+        self.assertEqual(len(titles), 8)
+        self.assertEqual(titles[0], "Overall Viewer")
+        self.assertEqual(titles[1:], [
+            "1. Inner Capture Report",
+            "2. Inner Intrinsic Report",
+            "3. Inner Extrinsic Report",
+            "4. Outer Capture Report",
+            "5. Outer Intrinsic Report",
+            "6. Outer Extrinsic Report",
+            "7. Bridge Result Report",
+        ])
 
 
 if __name__ == "__main__":

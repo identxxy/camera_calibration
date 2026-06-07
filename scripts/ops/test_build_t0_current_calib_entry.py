@@ -86,14 +86,32 @@ class BuildT0CurrentCalibEntryTest(unittest.TestCase):
                 f"http://t0.example/{studio32_yaml_rel}",
             )
             index_html = (output_dir / "index.html").read_text(encoding="utf-8")
-            self.assertIn("canonical reports + controlled operations", index_html)
-            self.assertIn("1. Inner Capture QC", index_html)
-            self.assertIn("5. Combined Bridge / 32-Camera Result", index_html)
-            self.assertIn("采集后处理入口", index_html)
-            self.assertIn("mode=run_studio_calibration_pipeline", index_html)
-            self.assertIn("operations/whole.html", index_html)
+            expected_entries = [
+                "Overall 3D Viewer",
+                "Inner Capture Report",
+                "Inner Intrinsic Report",
+                "Inner Extrinsic Report",
+                "Outer Capture Report",
+                "Outer Intrinsic Report",
+                "Outer Extrinsic Report",
+                "Bridge Result Report",
+            ]
+            for entry in expected_entries:
+                self.assertIn(entry, index_html)
+            self.assertIn("Final 32-camera YAML", index_html)
+            self.assertIn(studio32_yaml_rel, index_html)
+            self.assertIn("one viewer + seven reports", index_html)
+            self.assertIn("reports/01_3d_viewer/index.html", index_html)
+            self.assertIn("reports/09_bridge_result_large_marker/index.html", index_html)
+            self.assertNotIn("report_registry.json", index_html)
+            self.assertNotIn("采集后处理入口", index_html)
+            self.assertNotIn("mode=run_studio_calibration_pipeline", index_html)
+            self.assertNotIn("operations/whole.html", index_html)
+            self.assertNotIn("reports/08_bridge_capture_large_marker/index.html", index_html)
             root_index_html = (root / "index.html").read_text(encoding="utf-8")
-            self.assertIn("canonical reports + controlled operations", root_index_html)
+            self.assertIn("one viewer + seven reports", root_index_html)
+            self.assertIn("Final 32-camera YAML", root_index_html)
+            self.assertNotIn("report_registry.json", root_index_html)
             operations = {entry["id"]: entry for entry in registry["operation_entries"]}
             self.assertIn("mode=operate_whole_outer_cage", operations["whole"]["operation"]["panel_url"])
             self.assertIn("mode=operate_large_marker_bridge", operations["large_marker"]["operation"]["panel_url"])

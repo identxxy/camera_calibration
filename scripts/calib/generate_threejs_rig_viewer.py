@@ -1182,6 +1182,16 @@ HTML_TEMPLATE = """<!doctype html>
             <button id="load-correspondence">Load Corr</button>
           </div>
           <div class="correspondence-controls" id="correspondence-controls">
+            <label>Group by
+              <select id="correspondence-group-mode">
+                <option value="rigid_tower">Timeline</option>
+                <option value="face_id">Face ID</option>
+              </select>
+            </label>
+            <label class="checkbox-row" id="correspondence-timeline-trail-row">
+              <input id="correspondence-timeline-trail" type="checkbox" checked>
+              <span>Timeline trail</span>
+            </label>
             <label class="checkbox-row">
               <input id="correspondence-all-frames" type="checkbox">
               <span>All frames</span>
@@ -1189,7 +1199,7 @@ HTML_TEMPLATE = """<!doctype html>
             <label>Frame <span class="correspondence-value" id="correspondence-frame-value"></span>
               <input id="correspondence-frame-slider" type="range" min="0" max="0" step="1" value="0">
             </label>
-            <label>Point group
+            <label><span id="correspondence-point-group-title">Point group</span>
               <select id="correspondence-point-group"></select>
             </label>
             <div class="correspondence-grid">
@@ -1347,9 +1357,14 @@ let correspondenceLoaded = false;
 let correspondenceVisible = false;
 let correspondenceSelectedFrameByDataset = {};
 let correspondenceAllFramesByDataset = {};
+let correspondenceGroupModeByDataset = {};
 let correspondenceSelectedPointGroupByDataset = {};
+let correspondenceTimelineTrailVisible = true;
 let correspondenceMaxShown = 8000;
 let correspondenceResidualMax = 200;
+const RIGID_TOWER_FACE_COUNT = 8;
+const RIGID_TOWER_FACE_WIDTH_M = 0.25;
+const RIGID_TOWER_TAG_AREA_HEIGHT_M = 16 * 0.08 + 15 * 0.02;
 const worldGizmoDragAnchor = new THREE.Vector3();
 
 function createOrbitControls(target) {
@@ -1859,6 +1874,18 @@ function correspondenceUsesAllFrames(name) {
   return correspondenceAllFramesByDataset[name] === true;
 }
 
+function correspondenceGroupModeName() {
+  const name = correspondenceDatasetName();
+  if (name !== "whole") return "frame";
+  return correspondenceGroupModeByDataset[name] || "rigid_tower";
+}
+
+function correspondenceGroupModeLabel(mode) {
+  if (mode === "rigid_tower") return "timeline";
+  if (mode === "face_id") return "face ID";
+  return "frame feature debug";
+}
+
 function correspondenceDefaultFrame(name, dataset) {
   if (correspondenceSelectedFrameByDataset[name] !== undefined
       && correspondenceSelectedFrameByDataset[name] !== "__all__") {
@@ -1902,6 +1929,254 @@ function correspondencePointLabel(obs, includeFrame) {
   return prefix + "feature " + String(obs.feature_id);
 }
 
+function correspondenceGroupKey(obs, includeFrame) {
+  const name = correspondenceDatasetName();
+  const mode = correspondenceGroupModeName();
+  const framePrefix = includeFrame ? ("frame:" + String(obs.frame_index) + "|") : "";
+  if (name === "whole" && mode === "face_id") {
+    const face = obs.face_id === undefined || obs.face_id === null ? "unknown" : String(obs.face_id);
+    return "face:" + face;
+  }
+  if (name === "whole" && mode === "rigid_tower") {
+    const face = obs.face_id === undefined || obs.face_id === null ? "unknown" : String(obs.face_id);
+    return framePrefix + "face:" + face;
+  }
+  return correspondencePointKey(obs, includeFrame);
+}
+
+function correspondenceGroupLabel(obs, includeFrame) {
+  const name = correspondenceDatasetName();
+  const mode = correspondenceGroupModeName();
+  const prefix = includeFrame ? ("F" + String(obs.frame_index) + " ") : "";
+  if (name === "whole" && mode === "face_id") {
+    const face = obs.face_id === undefined || obs.face_id === null ? "unknown" : String(obs.face_id);
+    return "face " + face;
+  }
+  if (name === "whole" && mode === "rigid_tower") {
+    const face = obs.face_id === undefined || obs.face_id === null ? "unknown" : String(obs.face_id);
+    return prefix + "anchor face " + face;
+  }
+  return correspondencePointLabel(obs, includeFrame);
+}
+
+function validVec3(value) {
+  return Array.isArray(value) && value.length === 3 && value.every((item) => Number.isFinite(Number(item)));
+}
+
+function solveLinear3x3(matrix, rhs) {
+  const a = matrix.map((row, i) => row.map(Number).concat([Number(rhs[i])]));
+  for (let col = 0; col < 3; ++col) {
+    let pivot = col;
+    for (let row = col + 1; row < 3; ++row) {
+      if (Math.abs(a[row][col]) > Math.abs(a[pivot][col])) pivot = row;
+    }
+    if (Math.abs(a[pivot][col]) < 1e-10) return null;
+    if (pivot !== col) {
+      const tmp = a[col];
+      a[col] = a[pivot];
+      a[pivot] = tmp;
+    }
+    const scale = a[col][col];
+    for (let j = col; j < 4; ++j) a[col][j] /= scale;
+    for (let row = 0; row < 3; ++row) {
+      if (row === col) continue;
+      const factor = a[row][col];
+      for (let j = col; j < 4; ++j) a[row][j] -= factor * a[col][j];
+    }
+  }
+  return [a[0][3], a[1][3], a[2][3]];
+}
+
+function fitFaceLocalToDisplay(observations) {
+  const usable = observations.filter((obs) => validVec3(obs.local) && validVec3(obs.three));
+  if (usable.length < 3) return null;
+  const normal = [
+    [1e-9, 0, 0],
+    [0, 1e-9, 0],
+    [0, 0, 1e-9],
+  ];
+  const rhs = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+  for (const obs of usable) {
+    const y = Number(obs.local[1]);
+    const z = Number(obs.local[2]);
+    const basis = [1, y, z];
+    for (let r = 0; r < 3; ++r) {
+      for (let c = 0; c < 3; ++c) normal[r][c] += basis[r] * basis[c];
+      for (let dim = 0; dim < 3; ++dim) rhs[r][dim] += basis[r] * Number(obs.three[dim]);
+    }
+  }
+  const coeff = [];
+  for (let dim = 0; dim < 3; ++dim) {
+    const solved = solveLinear3x3(normal, [rhs[0][dim], rhs[1][dim], rhs[2][dim]]);
+    if (!solved) return null;
+    coeff.push(solved);
+  }
+  const origin = new THREE.Vector3(coeff[0][0], coeff[1][0], coeff[2][0]);
+  const axisY = new THREE.Vector3(coeff[0][1], coeff[1][1], coeff[2][1]);
+  const axisZ = new THREE.Vector3(coeff[0][2], coeff[1][2], coeff[2][2]);
+  if (axisY.lengthSq() < 1e-8 || axisZ.lengthSq() < 1e-8) return null;
+  const ey = axisY.clone().normalize();
+  const ez = axisZ.clone().addScaledVector(ey, -axisZ.dot(ey));
+  if (ez.lengthSq() < 1e-8) return null;
+  ez.normalize();
+  const ex = new THREE.Vector3().crossVectors(ey, ez);
+  if (ex.lengthSq() < 1e-8) return null;
+  ex.normalize();
+  return {origin, ex, ey, ez, observationCount: usable.length};
+}
+
+function transformAnchorLocalPoint(fit, localPoint) {
+  return fit.origin.clone()
+    .addScaledVector(fit.ex, Number(localPoint[0] || 0))
+    .addScaledVector(fit.ey, Number(localPoint[1] || 0))
+    .addScaledVector(fit.ez, Number(localPoint[2] || 0));
+}
+
+function nominalTowerPoint(faceId, localPoint) {
+  const face = ((Number(faceId) % RIGID_TOWER_FACE_COUNT) + RIGID_TOWER_FACE_COUNT) % RIGID_TOWER_FACE_COUNT;
+  const angle = face * 2.0 * Math.PI / RIGID_TOWER_FACE_COUNT;
+  const apothem = RIGID_TOWER_FACE_WIDTH_M / (2.0 * Math.tan(Math.PI / RIGID_TOWER_FACE_COUNT));
+  const localX = Number(localPoint[0] || 0);
+  const localY = Number(localPoint[1] || 0);
+  const localZ = Number(localPoint[2] || 0);
+  const faceX = apothem + localX;
+  const faceY = localY;
+  const ca = Math.cos(angle);
+  const sa = Math.sin(angle);
+  return new THREE.Vector3(
+    ca * faceX - sa * faceY,
+    sa * faceX + ca * faceY,
+    localZ
+  );
+}
+
+function nominalTowerPointInAnchorFaceLocal(faceId, localPoint, anchorFaceId) {
+  const point = nominalTowerPoint(faceId, localPoint);
+  const anchor = ((Number(anchorFaceId) % RIGID_TOWER_FACE_COUNT) + RIGID_TOWER_FACE_COUNT) % RIGID_TOWER_FACE_COUNT;
+  const angle = anchor * 2.0 * Math.PI / RIGID_TOWER_FACE_COUNT;
+  const apothem = RIGID_TOWER_FACE_WIDTH_M / (2.0 * Math.tan(Math.PI / RIGID_TOWER_FACE_COUNT));
+  const normal = new THREE.Vector3(Math.cos(angle), Math.sin(angle), 0);
+  const tangent = new THREE.Vector3(-Math.sin(angle), Math.cos(angle), 0);
+  const origin = normal.clone().multiplyScalar(apothem);
+  const delta = point.clone().sub(origin);
+  return [delta.dot(normal), delta.dot(tangent), delta.z];
+}
+
+function nominalTowerCenterInAnchorFaceLocal(anchorFaceId) {
+  const anchor = ((Number(anchorFaceId) % RIGID_TOWER_FACE_COUNT) + RIGID_TOWER_FACE_COUNT) % RIGID_TOWER_FACE_COUNT;
+  const angle = anchor * 2.0 * Math.PI / RIGID_TOWER_FACE_COUNT;
+  const apothem = RIGID_TOWER_FACE_WIDTH_M / (2.0 * Math.tan(Math.PI / RIGID_TOWER_FACE_COUNT));
+  const normal = new THREE.Vector3(Math.cos(angle), Math.sin(angle), 0);
+  const tangent = new THREE.Vector3(-Math.sin(angle), Math.cos(angle), 0);
+  const origin = normal.clone().multiplyScalar(apothem);
+  const delta = new THREE.Vector3(0, 0, 0).sub(origin);
+  return [delta.dot(normal), delta.dot(tangent), 0];
+}
+
+function parseFaceFromGroupKey(key) {
+  const match = String(key || "").match(/(?:^|[|])face:([^|]+)/);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildRigidTowerContext(observations, frame, selectedGroupKey) {
+  const byFace = new Map();
+  for (const obs of observations) {
+    if (String(obs.frame_index) !== String(frame)) continue;
+    if (!validVec3(obs.local) || !validVec3(obs.three)) continue;
+    const face = Number(obs.face_id);
+    if (!Number.isFinite(face)) continue;
+    if (!byFace.has(face)) byFace.set(face, []);
+    byFace.get(face).push(obs);
+  }
+  if (!byFace.size) return null;
+  let anchorFace = parseFaceFromGroupKey(selectedGroupKey);
+  if (anchorFace === null || !byFace.has(anchorFace)) {
+    anchorFace = Array.from(byFace.entries())
+      .sort((a, b) => b[1].length - a[1].length)[0][0];
+  }
+  const fit = fitFaceLocalToDisplay(byFace.get(anchorFace) || []);
+  if (!fit) return null;
+  return {
+    anchorFace,
+    fit,
+    faceCount: byFace.size,
+    anchorObservationCount: (byFace.get(anchorFace) || []).length,
+  };
+}
+
+function appendColoredLine(linePositions, lineColors, a, b, color) {
+  linePositions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+  lineColors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+}
+
+function appendColoredPoint(pointPositions, pointColors, p, color) {
+  pointPositions.push(p.x, p.y, p.z);
+  pointColors.push(color.r, color.g, color.b);
+}
+
+function rigidTowerCenterForContext(context) {
+  const centerLocal = nominalTowerCenterInAnchorFaceLocal(context.anchorFace);
+  return transformAnchorLocalPoint(context.fit, centerLocal);
+}
+
+function rigidTowerFaceOutlinePoints(context, faceId) {
+  const halfWidth = RIGID_TOWER_FACE_WIDTH_M * 0.5;
+  const halfHeight = RIGID_TOWER_TAG_AREA_HEIGHT_M * 0.5;
+  return [
+    [0, -halfWidth, -halfHeight],
+    [0, halfWidth, -halfHeight],
+    [0, halfWidth, halfHeight],
+    [0, -halfWidth, halfHeight],
+  ].map((local) => {
+    const anchorLocal = nominalTowerPointInAnchorFaceLocal(faceId, local, context.anchorFace);
+    return transformAnchorLocalPoint(context.fit, anchorLocal);
+  });
+}
+
+function appendRigidTowerOutline(context, linePositions, lineColors) {
+  const outlineColor = new THREE.Color(0x4fd1c5);
+  for (let face = 0; face < RIGID_TOWER_FACE_COUNT; ++face) {
+    const pts = rigidTowerFaceOutlinePoints(context, face);
+    for (let i = 0; i < pts.length; ++i) {
+      appendColoredLine(linePositions, lineColors, pts[i], pts[(i + 1) % pts.length], outlineColor);
+    }
+  }
+}
+
+function frameNumbersFromObservations(observations) {
+  const frames = new Set();
+  observations.forEach((obs) => {
+    const value = Number(obs.frame_index);
+    if (Number.isFinite(value)) frames.add(value);
+  });
+  return Array.from(frames).sort((a, b) => a - b);
+}
+
+function appendRigidTowerTimelineTrail(observations, currentFrame, linePositions, lineColors, pointPositions, pointColors) {
+  if (!correspondenceTimelineTrailVisible) return {count: 0};
+  const trailColor = new THREE.Color(0xf6ad55);
+  const currentColor = new THREE.Color(0xffffff);
+  const frames = frameNumbersFromObservations(observations);
+  let previous = null;
+  let count = 0;
+  for (const frame of frames) {
+    const context = buildRigidTowerContext(observations, frame, "__auto__");
+    if (!context) continue;
+    const center = rigidTowerCenterForContext(context);
+    appendColoredPoint(pointPositions, pointColors, center, String(frame) === String(currentFrame) ? currentColor : trailColor);
+    if (previous) appendColoredLine(linePositions, lineColors, previous, center, trailColor);
+    previous = center;
+    count += 1;
+  }
+  return {count};
+}
+
 function selectedCorrespondencePointGroupKey() {
   const name = correspondenceDatasetName();
   const key = correspondenceSelectedPointGroupByDataset[name];
@@ -1913,6 +2188,10 @@ function syncCorrespondenceControlValues() {
   const residualInput = document.getElementById("correspondence-residual-max");
   const maxValue = document.getElementById("correspondence-max-value");
   const residualValue = document.getElementById("correspondence-residual-max-value");
+  const groupModeSelect = document.getElementById("correspondence-group-mode");
+  const pointGroupTitle = document.getElementById("correspondence-point-group-title");
+  const timelineTrailRow = document.getElementById("correspondence-timeline-trail-row");
+  const timelineTrailInput = document.getElementById("correspondence-timeline-trail");
   if (maxInput) {
     correspondenceMaxShown = Math.max(1, Number(maxInput.value || correspondenceMaxShown));
   }
@@ -1921,6 +2200,27 @@ function syncCorrespondenceControlValues() {
   }
   if (maxValue) maxValue.textContent = String(correspondenceMaxShown);
   if (residualValue) residualValue.textContent = correspondenceResidualMax >= 200 ? "200+ px" : correspondenceResidualMax + " px";
+  if (groupModeSelect) {
+    const name = correspondenceDatasetName();
+    groupModeSelect.disabled = name !== "whole";
+    groupModeSelect.value = correspondenceGroupModeName();
+  }
+  if (pointGroupTitle) {
+    const mode = correspondenceGroupModeName();
+    if (mode === "rigid_tower") {
+      pointGroupTitle.textContent = "Anchor face";
+    } else if (mode === "face_id") {
+      pointGroupTitle.textContent = "Face ID";
+    } else {
+      pointGroupTitle.textContent = "Point group";
+    }
+  }
+  if (timelineTrailRow) {
+    timelineTrailRow.style.display = correspondenceGroupModeName() === "rigid_tower" ? "inline-flex" : "none";
+  }
+  if (timelineTrailInput) {
+    timelineTrailInput.checked = correspondenceTimelineTrailVisible;
+  }
 }
 
 function populateCorrespondenceFrameControl() {
@@ -1936,6 +2236,7 @@ function populateCorrespondenceFrameControl() {
   const name = correspondenceDatasetName();
   const dataset = correspondenceDataset();
   const frames = correspondenceFrameNumbers(dataset);
+  const groupMode = correspondenceGroupModeName();
   controlsEl.classList.add("active");
   const minFrame = frames.length ? frames[0] : 0;
   const maxFrame = frames.length ? frames[frames.length - 1] : 0;
@@ -1947,10 +2248,18 @@ function populateCorrespondenceFrameControl() {
   selected = Math.max(minFrame, Math.min(maxFrame, selected));
   slider.value = String(Math.round(selected));
   correspondenceSelectedFrameByDataset[name] = slider.value;
+  if (groupMode === "rigid_tower") {
+    correspondenceAllFramesByDataset[name] = false;
+  } else if (groupMode === "face_id") {
+    correspondenceAllFramesByDataset[name] = true;
+  }
   allFramesCheckbox.checked = correspondenceUsesAllFrames(name);
-  slider.disabled = allFramesCheckbox.checked || !frames.length;
+  allFramesCheckbox.disabled = groupMode === "rigid_tower" || groupMode === "face_id";
+  slider.disabled = allFramesCheckbox.checked || !frames.length || groupMode === "face_id";
   const obsCount = correspondenceFrameObservationCount(dataset, slider.value);
-  frameValue.textContent = allFramesCheckbox.checked
+  frameValue.textContent = groupMode === "face_id"
+    ? "all frames"
+    : allFramesCheckbox.checked
     ? "all"
     : String(slider.value) + " (" + obsCount + " obs)";
   if (!frames.length) {
@@ -1964,6 +2273,7 @@ function populateCorrespondencePointGroupControl() {
   const select = document.getElementById("correspondence-point-group");
   if (!select || !correspondenceLoaded || !correspondenceData) return;
   const name = correspondenceDatasetName();
+  const groupMode = correspondenceGroupModeName();
   const dataset = correspondenceDataset();
   const frame = correspondenceDefaultFrame(name, dataset);
   const allFrames = correspondenceUsesAllFrames(name);
@@ -1973,33 +2283,44 @@ function populateCorrespondencePointGroupControl() {
   for (const obs of observations) {
     if (!allFrames && frame !== null && frame !== undefined && String(obs.frame_index) !== String(frame)) continue;
     frameObservationCount += 1;
-    const key = correspondencePointKey(obs, allFrames);
+    const key = correspondenceGroupKey(obs, allFrames);
     let item = groups.get(key);
     if (!item) {
-      item = {key, label: correspondencePointLabel(obs, allFrames), count: 0};
+      item = {key, label: correspondenceGroupLabel(obs, allFrames), count: 0};
       groups.set(key, item);
     }
     item.count += 1;
   }
-  const previous = selectedCorrespondencePointGroupKey();
+  const previous = correspondenceSelectedPointGroupByDataset[name];
   select.innerHTML = "";
   const allOption = document.createElement("option");
   allOption.value = "__all__";
-  allOption.textContent = "All points (" + frameObservationCount + " obs)";
-  select.appendChild(allOption);
-  Array.from(groups.values())
+  allOption.textContent = (name === "whole" && (groupMode === "face_id" || groupMode === "rigid_tower") ? "All faces" : "All points")
+    + " (" + frameObservationCount + " obs)";
+  if (groupMode !== "rigid_tower" && groupMode !== "face_id") {
+    select.appendChild(allOption);
+  }
+  const sortedGroups = Array.from(groups.values())
     .sort((a, b) => {
       if (b.count !== a.count) return b.count - a.count;
       return a.label.localeCompare(b.label);
     })
-    .slice(0, 512)
-    .forEach((item) => {
-      const option = document.createElement("option");
-      option.value = item.key;
-      option.textContent = item.label + " (" + item.count + " obs)";
-      select.appendChild(option);
-    });
-  select.value = Array.from(select.options).some((option) => option.value === previous) ? previous : "__all__";
+    .slice(0, 512);
+  sortedGroups.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item.key;
+    option.textContent = item.label + " (" + item.count + " obs)";
+    select.appendChild(option);
+  });
+  const hasPrevious = previous !== undefined
+    && Array.from(select.options).some((option) => option.value === previous);
+  if (hasPrevious) {
+    select.value = previous;
+  } else if (name === "whole" && (groupMode === "face_id" || groupMode === "rigid_tower") && sortedGroups.length) {
+    select.value = sortedGroups[0].key;
+  } else {
+    select.value = "__all__";
+  }
   correspondenceSelectedPointGroupByDataset[name] = select.value;
 }
 
@@ -2036,21 +2357,45 @@ function updateCorrespondenceOverlay() {
   }
   const frame = correspondenceDefaultFrame(name, dataset);
   const allFrames = correspondenceUsesAllFrames(name);
+  const groupMode = correspondenceGroupModeName();
   const pointGroupKey = selectedCorrespondencePointGroupKey();
+  const rigidTowerContext = groupMode === "rigid_tower"
+    ? buildRigidTowerContext(observations, frame, pointGroupKey)
+    : null;
+  if (groupMode === "rigid_tower" && !rigidTowerContext) {
+    correspondenceGroup.visible = false;
+    status.textContent = name + " rigid tower hypothesis frame " + frame
+      + ": no face has enough local/world points to anchor the nominal tower.";
+    return;
+  }
   const cameraLabelById = new Map(RIG_DATA.cameras.map((cam) => [String(cam.label), cam]));
   const cameraIdByIndex = new Map(RIG_DATA.cameras.map((cam) => [Number(cam.index), cam]));
   const selected = [];
   let available = 0;
   for (const obs of observations) {
     if (!allFrames && frame !== null && frame !== undefined && String(obs.frame_index) !== String(frame)) continue;
-    if (pointGroupKey !== "__all__" && correspondencePointKey(obs, allFrames) !== pointGroupKey) continue;
+    if (groupMode !== "rigid_tower"
+        && pointGroupKey !== "__all__"
+        && correspondenceGroupKey(obs, allFrames) !== pointGroupKey) continue;
     if (Number(obs.residual_px || 0) > correspondenceResidualMax) continue;
     const cam = cameraLabelById.get(String(obs.viewer_camera_label || ""))
       || cameraLabelById.get(String(obs.camera_id))
       || cameraIdByIndex.get(Number(obs.camera_index));
     if (cam && !cameraIsVisible(cam)) continue;
+    let displayPoint = obs.three;
+    if (groupMode === "rigid_tower") {
+      const face = Number(obs.face_id);
+      if (!Number.isFinite(face) || !validVec3(obs.local)) continue;
+      const anchorLocal = nominalTowerPointInAnchorFaceLocal(
+        face,
+        obs.local,
+        rigidTowerContext.anchorFace
+      );
+      displayPoint = transformAnchorLocalPoint(rigidTowerContext.fit, anchorLocal).toArray();
+    }
+    if (!validVec3(displayPoint)) continue;
     available += 1;
-    if (selected.length < correspondenceMaxShown) selected.push({obs, cam});
+    if (selected.length < correspondenceMaxShown) selected.push({obs, cam, point: displayPoint});
   }
   if (!selected.length) {
     correspondenceGroup.visible = false;
@@ -2062,10 +2407,14 @@ function updateCorrespondenceOverlay() {
   const pointColors = [];
   const linePositions = [];
   const lineColors = [];
+  const diagnosticPointPositions = [];
+  const diagnosticPointColors = [];
+  const diagnosticLinePositions = [];
+  const diagnosticLineColors = [];
   for (const item of selected) {
     const obs = item.obs;
     const cam = item.cam;
-    const point = obs.three;
+    const point = item.point;
     const line = obs.line_three;
     if (!point || point.length !== 3) continue;
     const color = residualColor(obs.residual_px);
@@ -2077,6 +2426,18 @@ function updateCorrespondenceOverlay() {
       linePositions.push(lineStart[0], lineStart[1], lineStart[2], lineEnd[0], lineEnd[1], lineEnd[2]);
       lineColors.push(color.r, color.g, color.b, color.r, color.g, color.b);
     }
+  }
+  let trailInfo = {count: 0};
+  if (groupMode === "rigid_tower" && rigidTowerContext) {
+    appendRigidTowerOutline(rigidTowerContext, diagnosticLinePositions, diagnosticLineColors);
+    trailInfo = appendRigidTowerTimelineTrail(
+      observations,
+      frame,
+      diagnosticLinePositions,
+      diagnosticLineColors,
+      diagnosticPointPositions,
+      diagnosticPointColors
+    );
   }
 
   if (pointPositions.length) {
@@ -2105,12 +2466,52 @@ function updateCorrespondenceOverlay() {
     }));
     correspondenceGroup.add(lines);
   }
+  if (diagnosticLinePositions.length) {
+    const lineGeometry = new THREE.BufferGeometry();
+    lineGeometry.setAttribute("position", new THREE.Float32BufferAttribute(diagnosticLinePositions, 3));
+    lineGeometry.setAttribute("color", new THREE.Float32BufferAttribute(diagnosticLineColors, 3));
+    const lines = new THREE.LineSegments(lineGeometry, new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.72,
+      depthWrite: false,
+    }));
+    correspondenceGroup.add(lines);
+  }
+  if (diagnosticPointPositions.length) {
+    const pointGeometry = new THREE.BufferGeometry();
+    pointGeometry.setAttribute("position", new THREE.Float32BufferAttribute(diagnosticPointPositions, 3));
+    pointGeometry.setAttribute("color", new THREE.Float32BufferAttribute(diagnosticPointColors, 3));
+    const points = new THREE.Points(pointGeometry, new THREE.PointsMaterial({
+      size: Math.max(0.012, radius * 0.010),
+      sizeAttenuation: true,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: true,
+    }));
+    correspondenceGroup.add(points);
+  }
   correspondenceGroup.visible = true;
-  status.textContent = name + " " + (allFrames ? "all frames" : "frame " + frame) + ": "
+  const pointSelect = document.getElementById("correspondence-point-group");
+  const selectedGroupLabel = pointSelect && pointSelect.selectedOptions && pointSelect.selectedOptions.length
+    ? pointSelect.selectedOptions[0].textContent
+    : (pointGroupKey === "__all__" ? "all" : pointGroupKey);
+  let modeNote = name === "whole" && groupMode === "face_id"
+    ? " Face ID mode arranges the whole capture by one tower face across all selected frames using final independent face-plane poses."
+    : "";
+  if (name === "whole" && groupMode === "rigid_tower" && rigidTowerContext) {
+    modeNote = " Timeline mode shows one synchronized frame as a nominal rigid tower with 8 faces, 0.25 m face width, and the existing 8 cm tag / 2 cm spacing local corners; anchor face "
+      + rigidTowerContext.anchorFace + " fitted from " + rigidTowerContext.anchorObservationCount
+      + " points. Cyan outline is the current frame tower; orange trail has "
+      + trailInfo.count + " frame centers. Diagnostic only, not a BA constraint.";
+  }
+  status.textContent = name + " " + correspondenceGroupModeLabel(groupMode)
+    + " " + (allFrames ? "all frames" : "frame " + frame) + ": "
     + selected.length + "/" + available + " correspondences shown; residual <= "
     + (correspondenceResidualMax >= 200 ? "200+" : correspondenceResidualMax)
-    + " px; point group = " + (pointGroupKey === "__all__" ? "all" : pointGroupKey)
-    + "; color = log residual px.";
+    + " px; group = " + selectedGroupLabel
+    + "; color = log residual px." + modeNote;
 }
 
 async function loadOrToggleCorrespondence() {
@@ -2773,6 +3174,8 @@ function setupCorrespondenceControls() {
   const status = document.getElementById("correspondence-status");
   const frameSlider = document.getElementById("correspondence-frame-slider");
   const allFramesCheckbox = document.getElementById("correspondence-all-frames");
+  const groupModeSelect = document.getElementById("correspondence-group-mode");
+  const timelineTrailInput = document.getElementById("correspondence-timeline-trail");
   const pointSelect = document.getElementById("correspondence-point-group");
   const maxInput = document.getElementById("correspondence-max");
   const residualInput = document.getElementById("correspondence-residual-max");
@@ -2786,7 +3189,7 @@ function setupCorrespondenceControls() {
     frameSlider.addEventListener("input", () => {
       const name = correspondenceDatasetName();
       correspondenceSelectedFrameByDataset[name] = frameSlider.value;
-      correspondenceSelectedPointGroupByDataset[name] = "__all__";
+      delete correspondenceSelectedPointGroupByDataset[name];
       correspondenceAllFramesByDataset[name] = false;
       if (allFramesCheckbox) allFramesCheckbox.checked = false;
       populateCorrespondenceFrameControl();
@@ -2797,9 +3200,25 @@ function setupCorrespondenceControls() {
     allFramesCheckbox.addEventListener("change", () => {
       const name = correspondenceDatasetName();
       correspondenceAllFramesByDataset[name] = allFramesCheckbox.checked;
-      correspondenceSelectedPointGroupByDataset[correspondenceDatasetName()] = "__all__";
+      delete correspondenceSelectedPointGroupByDataset[name];
       populateCorrespondenceFrameControl();
       populateCorrespondencePointGroupControl();
+      updateCorrespondenceOverlay();
+    });
+  }
+  if (groupModeSelect) {
+    groupModeSelect.addEventListener("change", () => {
+      const name = correspondenceDatasetName();
+      correspondenceGroupModeByDataset[name] = groupModeSelect.value;
+      delete correspondenceSelectedPointGroupByDataset[name];
+      populateCorrespondenceFrameControl();
+      updateCorrespondenceOverlay();
+    });
+  }
+  if (timelineTrailInput) {
+    timelineTrailInput.addEventListener("change", () => {
+      correspondenceTimelineTrailVisible = timelineTrailInput.checked;
+      syncCorrespondenceControlValues();
       updateCorrespondenceOverlay();
     });
   }
