@@ -38,6 +38,51 @@ WHOLE_QC_ROOT = (
     / "whole_outer24_filtered_min4_fullres_min4cam"
 )
 
+CANONICAL_REPORTS = [
+    {
+        "number": "1",
+        "title": "inner 数据采集报告 (small marker)",
+        "relative_index": "02_inner_capture_small_marker/index.html",
+        "description": "Small-marker staged data and PnP coverage for inner8.",
+    },
+    {
+        "number": "2",
+        "title": "inner 内参报告 (small marker)",
+        "relative_index": "03_inner_intrinsics_small_marker/index.html",
+        "description": "Inner8 intrinsic feature coverage and residual distribution.",
+    },
+    {
+        "number": "3",
+        "title": "inner 外参报告 (small marker)",
+        "relative_index": "04_inner_extrinsics_small_marker/index.html",
+        "description": "Inner8 small-marker fixed-rig pixel reprojection residual report.",
+    },
+    {
+        "number": "4",
+        "title": "outer 数据采集报告",
+        "relative_index": "05_outer_capture_outer_large_marker_whole/index.html",
+        "description": "Outer-large-marker intrinsic capture plus whole tower extrinsic capture QC.",
+    },
+    {
+        "number": "5",
+        "title": "outer 内参报告 (outer large marker)",
+        "relative_index": "06_outer_intrinsics_outer_large_marker/index.html",
+        "description": "Outer24 large-marker intrinsic residual/coverage report.",
+    },
+    {
+        "number": "6",
+        "title": "outer 外参报告 (whole)",
+        "relative_index": "07_outer_extrinsics_whole/index.html",
+        "description": "Whole/tower outer extrinsic refinement residual report.",
+    },
+    {
+        "number": "7",
+        "title": "bridge 结果报告 (large marker)",
+        "relative_index": "09_bridge_result_large_marker/index.html",
+        "description": "Large-marker inner/outer bridge result and anchor consistency.",
+    },
+]
+
 
 def configure(args):
     global ROOT, BASE_URL, RUN_TAG, RUN, CURRENT, REPORTS
@@ -62,6 +107,20 @@ def configure(args):
 
 def rel_url(path):
     return BASE_URL + "/" + str(Path(path).relative_to(ROOT)).replace("\\", "/")
+
+
+def canonical_report_path(report):
+    return REPORTS / report["relative_index"]
+
+
+def canonical_report_entries():
+    return [
+        {
+            **report,
+            "path": canonical_report_path(report),
+        }
+        for report in CANONICAL_REPORTS
+    ]
 
 
 def esc(value):
@@ -656,50 +715,7 @@ def publish_reports():
         ],
     )
 
-    reports = [
-        (
-            "1",
-            "inner 数据采集报告 (small marker)",
-            REPORTS / "02_inner_capture_small_marker/index.html",
-            "Small-marker staged data and PnP coverage for inner8.",
-        ),
-        (
-            "2",
-            "inner 内参报告 (small marker)",
-            REPORTS / "03_inner_intrinsics_small_marker/index.html",
-            "Inner8 intrinsic feature coverage and residual distribution.",
-        ),
-        (
-            "3",
-            "inner 外参报告 (small marker)",
-            REPORTS / "04_inner_extrinsics_small_marker/index.html",
-            "Inner8 small-marker fixed-rig pixel reprojection residual report.",
-        ),
-        (
-            "4",
-            "outer 数据采集报告",
-            REPORTS / "05_outer_capture_outer_large_marker_whole/index.html",
-            "Outer-large-marker intrinsic capture plus whole tower extrinsic capture QC.",
-        ),
-        (
-            "5",
-            "outer 内参报告 (outer large marker)",
-            REPORTS / "06_outer_intrinsics_outer_large_marker/index.html",
-            "Outer24 large-marker intrinsic residual/coverage report.",
-        ),
-        (
-            "6",
-            "outer 外参报告 (whole)",
-            REPORTS / "07_outer_extrinsics_whole/index.html",
-            "Whole/tower outer extrinsic refinement residual report.",
-        ),
-        (
-            "7",
-            "bridge 结果报告 (large marker)",
-            REPORTS / "09_bridge_result_large_marker/index.html",
-            "Large-marker inner/outer bridge result and anchor consistency.",
-        ),
-    ]
+    reports = canonical_report_entries()
 
     viewer_card = (
         f"<a class='card viewer-card' href='{esc(rel_url(REPORTS / '01_3d_viewer/index.html'))}'>"
@@ -709,10 +725,11 @@ def publish_reports():
         "</a>"
     )
     cards = []
-    for number, title, path, description in reports:
+    for report in reports:
         cards.append(
-            f"<a class='card' href='{esc(rel_url(path))}'><strong>{esc(number)}. {esc(title)}</strong>"
-            f"<span>{esc(description)}</span></a>"
+            f"<a class='card' href='{esc(rel_url(report['path']))}'>"
+            f"<strong>{esc(report['number'])}. {esc(report['title'])}</strong>"
+            f"<span>{esc(report['description'])}</span></a>"
         )
     final_yaml_url = final_yaml["url"]
     artifact_card = (
@@ -768,7 +785,7 @@ code { background: #eeece5; padding: 1px 4px; border-radius: 4px; }
 
     allowed = {ROOT / "index.html", CURRENT / "index.html"}
     allowed.add(REPORTS / "01_3d_viewer/index.html")
-    allowed.update(path for _number, _title, path, _description in reports)
+    allowed.update(report["path"] for report in reports)
     removed_current_html = []
     for path in sorted(CURRENT.rglob("*.html")):
         if path in allowed:
@@ -811,7 +828,13 @@ code { background: #eeece5; padding: 1px 4px; border-radius: 4px; }
             "url": rel_url(REPORTS / "01_3d_viewer/index.html"),
         },
         "allowed_reports": [
-            {"number": n, "title": t, "path": str(p), "url": rel_url(p)} for n, t, p, _d in reports
+            {
+                "number": report["number"],
+                "title": report["title"],
+                "path": str(report["path"]),
+                "url": rel_url(report["path"]),
+            }
+            for report in reports
         ],
         "removed_current_html_count": len(removed_current_html),
         "removed_current_html": removed_current_html,

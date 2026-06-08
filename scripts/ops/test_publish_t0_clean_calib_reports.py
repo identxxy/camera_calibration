@@ -14,6 +14,19 @@ SPEC.loader.exec_module(publisher)
 
 
 class PublishT0CleanCalibReportsTest(unittest.TestCase):
+    def test_canonical_report_contract_is_explicit_and_unique(self):
+        reports = publisher.CANONICAL_REPORTS
+        self.assertEqual(len(reports), 7)
+        self.assertEqual([report["number"] for report in reports], [str(i) for i in range(1, 8)])
+        self.assertEqual(
+            len({report["relative_index"] for report in reports}),
+            len(reports),
+        )
+        self.assertTrue(all(report["relative_index"].endswith("/index.html") for report in reports))
+        inner_extrinsic = next(report for report in reports if report["number"] == "3")
+        self.assertIn("pixel reprojection residual", inner_extrinsic["description"])
+        self.assertNotIn("layout report", inner_extrinsic["description"])
+
     def test_intrinsic_wrappers_document_fixed_log_colormap_range(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
