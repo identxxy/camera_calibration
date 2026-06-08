@@ -232,7 +232,16 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
             data = json.loads((output_dir / "correspondence_data.json").read_text(encoding="utf-8"))
             self.assertEqual(len(data["cameras"]), 2)
             self.assertEqual(data["summary"]["outer"]["observation_count"], 1)
+            self.assertEqual(data["summary"]["outer"]["frame_face_pose_count"], 1)
             self.assertEqual(data["outer"]["observations"][0]["world"], [0.5, 0.25, 0.0])
+            self.assertEqual(len(data["outer"]["frame_face_poses"]), 1)
+            frame_face_pose = data["outer"]["frame_face_poses"][0]
+            self.assertEqual(frame_face_pose["frame_index"], 0)
+            self.assertEqual(frame_face_pose["face_id"], 0)
+            self.assertEqual(frame_face_pose["origin_three"], [0.0, -0.0, -0.0])
+            self.assertEqual(frame_face_pose["axis_x_three"], [1.0, -0.0, -0.0])
+            self.assertEqual(frame_face_pose["axis_y_three"], [0.0, -1.0, -0.0])
+            self.assertEqual(frame_face_pose["axis_z_three"], [0.0, -0.0, -1.0])
             self.assertEqual(
                 data["viewer_options"]["coordinate_transform"]["aligned_coordinate_frame"],
                 "studio_rig_y_down_z_forward",
@@ -338,7 +347,7 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
                 summary["outputs"]["advanced_correspondence_viewer"],
                 str(output_root / "advanced_correspondence_viewer_v1" / "index.html"),
             )
-            self.assertEqual(summary["run_timing"]["stage_count"], 7)
+            self.assertEqual(summary["run_timing"]["stage_count"], 8)
 
 
 if __name__ == "__main__":

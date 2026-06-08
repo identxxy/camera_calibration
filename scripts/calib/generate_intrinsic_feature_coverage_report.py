@@ -22,6 +22,10 @@ except ModuleNotFoundError:
     from scripts.calib import generate_inner_calibration_report as inner_report
 
 
+REPROJECTION_COLORMAP_VMIN_PX = 1e-1
+REPROJECTION_COLORMAP_VMAX_PX = 1e1
+
+
 def finite_float(value, default=float("nan")):
     try:
         result = float(value)
@@ -229,9 +233,12 @@ def plot_feature_coverage(camera_index, camera_label, intrinsics, residuals, out
         indices = sample_indices(len(observed), max_arrows)
         obs = observed[indices]
         err = errors[indices]
-        mag = np.clip(magnitudes[indices], 1e-3, None)
-        vmax = max(0.5, float(np.percentile(np.clip(magnitudes, 1e-3, None), 99)))
-        norm = LogNorm(vmin=0.01, vmax=vmax)
+        mag = np.clip(
+            magnitudes[indices],
+            REPROJECTION_COLORMAP_VMIN_PX,
+            REPROJECTION_COLORMAP_VMAX_PX,
+        )
+        norm = LogNorm(vmin=REPROJECTION_COLORMAP_VMIN_PX, vmax=REPROJECTION_COLORMAP_VMAX_PX)
         lengths = np.linalg.norm(err, axis=1)
         scale_factor = np.ones_like(lengths)
         nonzero = lengths > 1e-9
@@ -256,7 +263,7 @@ def plot_feature_coverage(camera_index, camera_label, intrinsics, residuals, out
             alpha=0.92,
         )
         cbar = fig.colorbar(quiver, ax=ax, shrink=0.82)
-        cbar.set_label("reprojection error [px], log scale")
+        cbar.set_label("reprojection error [px], log scale, 1e-1..1e1")
         cbar.ax.tick_params(labelsize=7)
         cbar.ax.yaxis.label.set_size(7)
         ax.text(
@@ -399,7 +406,7 @@ def write_html(path, title, summary, camera_rows):
     <h1>{html.escape(title)}</h1>
     <p>Source type: <code>{html.escape(summary['source_type'])}</code></p>
     <p>Source: <code>{html.escape(summary['source'])}</code></p>
-    <p>Each plot shows accumulated observed feature locations as a log-density background; arrows show projected minus observed residual and use log-level reprojection-error color.</p>
+    <p>Each plot shows accumulated observed feature locations as a log-density background; arrows show projected minus observed residual. The residual colormap is fixed to log scale from <code>10^-1</code> to <code>10^1</code> px for cross-camera comparison.</p>
   </header>
   <main>
     <table>

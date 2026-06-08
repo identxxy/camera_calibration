@@ -48,6 +48,14 @@ class GenerateInnerCalibrationReportDatasetTest(unittest.TestCase):
         self.assertEqual(parsed["known_geometries"][0]["feature_id_to_position"], {})
         self.assertEqual(parsed["known_geometries"][0]["feature_id_to_position3d"], {})
 
+    def test_report_uses_fixed_log_colormap_contract(self):
+        self.assertEqual(report.REPROJECTION_COLORMAP_VMIN_PX, 1e-1)
+        self.assertEqual(report.REPROJECTION_COLORMAP_VMAX_PX, 1e1)
+        source = SCRIPT_PATH.read_text(encoding="utf-8")
+        self.assertIn("10^-1", source)
+        self.assertIn("10^1", source)
+        self.assertIn("grid-template-columns: repeat(8", source)
+
 
 if __name__ == "__main__":
     unittest.main()

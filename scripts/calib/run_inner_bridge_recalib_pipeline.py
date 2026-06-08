@@ -27,11 +27,15 @@ DEFAULT_T0_BINARY = Path(
 DEFAULT_T0_BINARY_FALLBACKS = [
     DEFAULT_T0_BINARY,
     Path(
+        "/home/ubuntu/camera_calibration_integration_build/build_t0_codex/"
+        "applications/camera_calibration/camera_calibration",
+    ),
+    Path(
         "/home/ubuntu/camera_calibration_release_1771ad3/build_t0/"
         "applications/camera_calibration/camera_calibration",
     ),
     Path(
-        "/home/ubuntu/camera_calibration_integration_build/build_t0_codex/"
+        "/home/ubuntu/camera_calibration_release_e89bd3d/build_t0/"
         "applications/camera_calibration/camera_calibration",
     ),
 ]
@@ -1769,6 +1773,8 @@ def build_pipeline_stages(
         combined_viewer_argv.extend(["--outer_final_pose_yaml", outer_final_pose_yaml])
         outer_final_parent = Path(outer_final_pose_yaml).parent
         outer_tower_pose_yaml = outer_final_parent / "rig_tr_global.yaml"
+        if not outer_tower_pose_yaml.is_file():
+            outer_tower_pose_yaml = outer_final_parent / "rig_tr_frame_face.yaml"
         if outer_tower_pose_yaml.is_file():
             combined_viewer_argv.extend(["--tower_pose_yaml", str(outer_tower_pose_yaml)])
         outer_reprojection_tsv = outer_final_parent / "diagnostics/camera_reprojection.tsv"
@@ -3370,7 +3376,11 @@ def main():
     write_index_html(index_path, summary)
     write_report_entrypoints(output_root, summary)
 
-    print(json.dumps({
+    hard_failed_stages = [
+        stage for stage in stages
+        if stage.get("status") == "failed" and not stage.get("allow_failure")
+    ]
+    result = {
         "summary_json": str(summary_path),
         "run_manifest_json": str(manifest_path),
         "index_html": str(index_path),
@@ -3379,8 +3389,11 @@ def main():
         "large_inner_marker_status": large_inner_scan["status"],
         "large_marker_status": large_scan["status"],
         "mode": summary["mode"],
-    }, indent=2, sort_keys=True))
-    return 0
+    }
+    if hard_failed_stages:
+        result["failed_stages"] = [stage.get("name", "") for stage in hard_failed_stages]
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 1 if hard_failed_stages else 0
 
 
 if __name__ == "__main__":

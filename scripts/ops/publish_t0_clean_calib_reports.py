@@ -269,6 +269,11 @@ def publish_inner_intrinsic_wrapper(report_dir):
                 ]),
             ),
             (
+                "Color Scale",
+                "<p class='muted'>Coverage plots use a fixed log reprojection-error colormap "
+                "from <code>10^-1</code> to <code>10^1</code> px, shared across inner and outer intrinsic reports.</p>",
+            ),
+            (
                 "Per-Camera Intrinsic Residuals",
                 table(
                     [
@@ -307,6 +312,11 @@ def publish_outer_intrinsic_wrapper(report_dir):
                 ]),
             ),
             (
+                "Color Scale",
+                "<p class='muted'>Coverage plots use a fixed log reprojection-error colormap "
+                "from <code>10^-1</code> to <code>10^1</code> px, shared across inner and outer intrinsic reports.</p>",
+            ),
+            (
                 "Per-Camera Intrinsic Residuals",
                 table(
                     [
@@ -328,11 +338,42 @@ def publish_outer_intrinsic_wrapper(report_dir):
     )
 
 
-def publish_inner_extrinsic_wrapper(report_dir):
+def index_rows_by_camera(rows):
+    result = {}
+    for row in rows:
+        value = row.get("camera_index", row.get("camera", ""))
+        try:
+            result[int(value)] = row
+        except Exception:
+            continue
+    return result
+
+
+def publish_inner_extrinsic_wrapper(report_dir, residual_metrics_tsv=None, pnp_summary_tsv=None):
     report_dir = Path(report_dir)
     summary = load_json(report_dir / "summary.json")
-    rows = read_tsv(report_dir / "camera_tr_camera0.tsv")
-    images = [image for image in [report_dir / "rig_layout_3d.png", report_dir / "rig_layout_topdown.png"] if image.is_file()]
+    residual_rows = read_tsv(residual_metrics_tsv) if residual_metrics_tsv else []
+    pnp_rows = index_rows_by_camera(read_tsv(pnp_summary_tsv)) if pnp_summary_tsv else {}
+    table_rows_data = []
+    for row in residual_rows:
+        try:
+            camera_index = int(row.get("camera_index", ""))
+        except Exception:
+            camera_index = None
+        pnp = pnp_rows.get(camera_index, {}) if camera_index is not None else {}
+        table_rows_data.append({
+            "camera_index": row.get("camera_index", ""),
+            "camera_label": row.get("camera_label", pnp.get("user_id", "")),
+            "connected": pnp.get("connected", ""),
+            "positive_views": pnp.get("positive_views", ""),
+            "solved_views": pnp.get("solved_views", ""),
+            "residual_count": row.get("residual_count", ""),
+            "frame_count": row.get("frame_count", ""),
+            "median_error_px": row.get("median_error_px", ""),
+            "mean_error_px": row.get("mean_error_px", ""),
+            "p90_error_px": row.get("p90_error_px", ""),
+            "max_error_px": row.get("max_error_px", ""),
+        })
     write_page(
         report_dir / "index.html",
         "Inner 外参报告 - small_marker",
@@ -340,28 +381,38 @@ def publish_inner_extrinsic_wrapper(report_dir):
             (
                 "Summary",
                 summary_metrics_grid([
-                    ("camera count", summary.get("camera_count", len(rows)), "inner rig cameras"),
-                    ("reference", summary.get("reference_camera", "camera0"), "relative pose reference"),
-                    ("pose table rows", len(rows), "camera_tr_camera0.tsv entries"),
+                    ("camera count", summary.get("camera_count", len(table_rows_data)), "inner rig cameras"),
+                    ("residual observations", int(stat_sum(table_rows_data, "residual_count")), "small-marker fixed-rig reprojections"),
+                    ("median per-camera median error", f"{fnum(median_field(table_rows_data, 'median_error_px'))} px", "small-marker reprojection median"),
+                    ("median per-camera p90 error", f"{fnum(median_field(table_rows_data, 'p90_error_px'))} px", "small-marker reprojection p90"),
                 ]),
             ),
             (
-                "Relative Camera Poses",
+                "Per-Camera Pixel Reprojection Error",
                 table(
                     [
                         "camera_index",
-                        "tx_m",
-                        "ty_m",
-                        "tz_m",
-                        "roll_deg",
-                        "pitch_deg",
-                        "yaw_deg",
+                        "camera_label",
+                        "connected",
+                        "positive_views",
+                        "solved_views",
+                        "residual_count",
+                        "frame_count",
+                        "median_error_px",
+                        "mean_error_px",
+                        "p90_error_px",
+                        "max_error_px",
                     ],
-                    rows,
+                    table_rows_data,
                     limit=40,
                 ),
             ),
-            ("Rig Layout Plots", image_grid(images)),
+            (
+                "Definition",
+                "<p class='muted'>This extrinsic report intentionally does not include static layout plots. "
+                "It summarizes the final small-marker fixed-rig reprojection residuals in pixels; "
+                "spatial layout inspection belongs to the Overall 3D Viewer.</p>",
+            ),
         ],
     )
 
@@ -397,7 +448,11 @@ def publish_reports():
     )
     publish_inner_intrinsic_wrapper(REPORTS / "03_inner_intrinsics_small_marker")
     copy_report(RUN / "inner_bridge/reports/rig_extrinsics", REPORTS / "04_inner_extrinsics_small_marker")
-    publish_inner_extrinsic_wrapper(REPORTS / "04_inner_extrinsics_small_marker")
+    publish_inner_extrinsic_wrapper(
+        REPORTS / "04_inner_extrinsics_small_marker",
+        REPORTS / "03_inner_intrinsics_small_marker/camera_metrics.tsv",
+        RUN / "inner_bridge/small_marker_inner8/fixed_intrinsic_small_grid4_quality_probe_v1/camera_pnp_summary.tsv",
+    )
     copy_report(
         OUTER_LARGE_INTRINSIC_REPORT,
         REPORTS / "06_outer_intrinsics_outer_large_marker",
@@ -618,7 +673,7 @@ def publish_reports():
             "3",
             "inner 外参报告 (small marker)",
             REPORTS / "04_inner_extrinsics_small_marker/index.html",
-            "Inner rig extrinsic layout report.",
+            "Inner8 small-marker fixed-rig pixel reprojection residual report.",
         ),
         (
             "4",

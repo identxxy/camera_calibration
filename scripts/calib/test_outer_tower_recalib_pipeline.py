@@ -84,6 +84,49 @@ class OuterTowerRecalibPipelineTest(unittest.TestCase):
             self.assertEqual(summary["inputs"]["frame_face_prior_pose_yaml"]["path"], str(prior.resolve()))
             self.assertEqual(summary["inputs"]["frame_face_intrinsics_dir"]["path"], str(intrinsics.resolve()))
 
+    def test_frame_face_default_discovers_fullres_filtered_stage_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "calib_2026_05_31_fullres_probe_v1"
+            output_root = root / "out"
+            stage_root = data_root / "whole_outer24_filtered_min4_fullres_min4cam"
+            dataset = stage_root / "opencv_tower_dataset_fullres.bin"
+            manifest = stage_root / "manifest.tsv"
+            prior = root / "prior.yaml"
+            intrinsics = root / "intrinsics"
+            stage_root.mkdir(parents=True)
+            intrinsics.mkdir()
+            dataset.write_bytes(b"")
+            manifest.write_text("camera_index\tcamera_id\n", encoding="utf-8")
+            prior.write_text("poses: []\n", encoding="utf-8")
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--data-root", str(data_root),
+                    "--output-root", str(output_root),
+                    "--dry-run",
+                    "--run-frame-face-refine",
+                    "--frame-face-prior-pose-yaml", str(prior),
+                    "--frame-face-intrinsics-dir", str(intrinsics),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
+            stages = {stage["name"]: stage for stage in summary["stages"]}
+            command = stages["frame_face_refine"]["commands"][0]
+
+            self.assertIn(f"--dataset {dataset}", command)
+            self.assertIn(f"--manifest {manifest}", command)
+            self.assertEqual(summary["inputs"]["frame_face_dataset"]["path"], str(dataset.resolve()))
+            self.assertEqual(summary["inputs"]["frame_face_manifest"]["path"], str(manifest.resolve()))
+
     def test_frame_face_wide50_gate4_refine_stage_is_planned(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

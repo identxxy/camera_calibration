@@ -331,11 +331,18 @@ def build_paths(args):
             whole_dir / "intrinsics_tower_safe_rms5_v1",
         )
     )
-    default_frame_face_stage_root = data_root / "whole_outer24_filtered_min4_hybrid_min4cam"
-    default_frame_face_root = (
-        data_root
-        / "whole_outer24_filtered_min4_hybrid_min4cam"
-        / "pnp_inlier_filter_facewidth025_optwidth_v1"
+    frame_face_stage_roots = [
+        data_root / "whole_outer24_filtered_min4_fullres_min4cam",
+        data_root / "whole_outer24_filtered_min4_hybrid_min4cam",
+        whole_dir,
+    ]
+    default_frame_face_stage_root = choose_first_existing(
+        [root / "opencv_tower_dataset_fullres.bin" for root in frame_face_stage_roots],
+        frame_face_stage_roots[0] / "opencv_tower_dataset_fullres.bin",
+    ).parent
+    default_frame_face_root = choose_first_existing(
+        [root / "pnp_inlier_filter_facewidth025_optwidth_v1" for root in frame_face_stage_roots],
+        default_frame_face_stage_root / "pnp_inlier_filter_facewidth025_optwidth_v1",
     )
     frame_face_dataset = (
         as_abs(args.frame_face_dataset)
@@ -343,13 +350,16 @@ def build_paths(args):
         else choose_first_existing(
             [
                 whole_dir / "opencv_tower_dataset_fullres.bin",
-                default_frame_face_stage_root / "opencv_tower_dataset_fullres.bin",
                 whole_dir / "opencv_tower_dataset_fullres_corner_offset2.bin",
-                default_frame_face_stage_root / "opencv_tower_dataset_fullres_corner_offset2.bin",
                 whole_dir / "pnp_inlier_filter_facewidth025_optwidth_ransac1000_probe" / "tower_pnp_inliers.bin",
-                default_frame_face_stage_root / "pnp_inlier_filter_facewidth025_optwidth_ransac1000_probe" / "tower_pnp_inliers.bin",
                 default_frame_face_root / "tower_pnp_inliers.bin",
                 whole_dir / "pnp_inlier_filter_facewidth025_optwidth_v1" / "tower_pnp_inliers.bin",
+                *[root / "opencv_tower_dataset_fullres.bin" for root in frame_face_stage_roots],
+                *[root / "opencv_tower_dataset_fullres_corner_offset2.bin" for root in frame_face_stage_roots],
+                *[
+                    root / "pnp_inlier_filter_facewidth025_optwidth_ransac1000_probe" / "tower_pnp_inliers.bin"
+                    for root in frame_face_stage_roots
+                ],
             ],
             default_frame_face_stage_root / "opencv_tower_dataset_fullres.bin",
         )
@@ -359,11 +369,12 @@ def build_paths(args):
         if args.frame_face_manifest
         else choose_first_existing(
             [
+                frame_face_dataset.parent / "manifest.tsv",
                 frame_face_dataset.parent.parent / "manifest.tsv",
                 whole_dir / "manifest.tsv",
                 manifest,
             ],
-            frame_face_dataset.parent.parent / "manifest.tsv",
+            frame_face_dataset.parent / "manifest.tsv",
         )
     )
     frame_face_prior_pose_yaml = (

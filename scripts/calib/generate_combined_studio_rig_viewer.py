@@ -53,7 +53,7 @@ DEFAULT_COMBINED_IMAGE_DIRS = CURRENT_INNER_BRIDGE_ROOT / "planned_inputs/large_
 DEFAULT_VIEWER_ASSETS_DIR = LEGACY_STAGE_ROOT / "final_inner8_calibration_v1/reports/interactive_rig_viewer_v1"
 DEFAULT_OUTPUT_HTML = CURRENT_INNER_BRIDGE_ROOT / "combined_studio_rig_viewer_v1/index.html"
 DEFAULT_OUTER_OUTPUT_HTML = CURRENT_OUTER_FRAME_FACE_ROOT / "outer24_rig_viewer_v1/index.html"
-DEFAULT_TOWER_POSE_YAML = CURRENT_OUTER_FRAME_FACE_ROOT / "rig_tr_global.yaml"
+DEFAULT_TOWER_POSE_YAML = None
 DEFAULT_WHOLE_COVERAGE_TSV = Path(
     "/home/ubuntu/calib_data/calib_2026_05_31_v3/"
     "whole_outer24_filtered_min4_hybrid_min4cam/per_camera_stats.tsv"
@@ -1305,6 +1305,21 @@ def local_tower_face_normals():
     return normals
 
 
+def is_frame_face_pose_path(path):
+    if not path:
+        return False
+    path = Path(path)
+    if path.name in {"rig_tr_frame_face.yaml", "frame_face_tr_rig.yaml"}:
+        return True
+    if not path.is_file():
+        return False
+    try:
+        head = path.read_text(encoding="utf-8", errors="ignore")[:512]
+    except OSError:
+        return False
+    return "frame_index" in head and "face_id" in head
+
+
 def board_horizontal_stats(normals, gravity):
     if normals.size == 0 or gravity is None:
         return {
@@ -1340,12 +1355,25 @@ def estimate_board_orientation_alignment(args, gravity_alignment):
     gravity = None
     if gravity_alignment:
         gravity = np.asarray(gravity_alignment["metric_up_vector"], dtype=np.float64)
+    tower_pose_path = getattr(args, "tower_pose_yaml", None)
+    if is_frame_face_pose_path(tower_pose_path):
+        tower_local_normals = [[1.0, 0.0, 0.0]]
+        tower_description = (
+            "AprilTag tower independent frame-face plane normals from rig_tr_frame_face; "
+            "they should be horizontal when each tag face is vertical."
+        )
+    else:
+        tower_local_normals = local_tower_face_normals()
+        tower_description = (
+            "AprilTag rigid tower face normals; they should be horizontal when the tower "
+            "vertical axis is aligned with gravity."
+        )
     sources = [
         (
             "whole_tower_faces",
-            getattr(args, "tower_pose_yaml", None),
-            local_tower_face_normals(),
-            "AprilTag tower face normals; they should be horizontal when the tower vertical axis is aligned with gravity.",
+            tower_pose_path,
+            tower_local_normals,
+            tower_description,
         ),
         (
             "large_marker_inner8_board",

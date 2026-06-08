@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 
@@ -133,6 +134,21 @@ class RefineOuterTowerFrameFacePlanesTest(unittest.TestCase):
 
         self.assertTrue(refine_ff.base.np.allclose(optimized["deltas"][0], initial_delta))
         self.assertTrue(refine_ff.base.np.allclose(optimized["camera_poses"][0], initial_delta @ prior))
+
+    def test_frame_face_pose_yaml_writes_explicit_transform_type(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rig_tr_frame_face.yaml"
+
+            refine_ff.write_frame_face_pose_yaml(
+                path,
+                {(244, 0): refine_ff.base.np.eye(4, dtype=refine_ff.base.np.float64)},
+                "rig_tr_frame_face",
+            )
+
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("type: rig_tr_frame_face", text)
+            self.assertIn("frame_index: 244", text)
+            self.assertIn("face_id: 0", text)
 
 
 if __name__ == "__main__":

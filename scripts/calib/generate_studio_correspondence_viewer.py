@@ -171,6 +171,36 @@ def apply_coordinate_transform(point, coordinate_transform):
     return [float(v) for v in transform_point_to_aligned(point, coordinate_transform)]
 
 
+def normalized_three_delta(origin, endpoint):
+    delta = np.asarray(endpoint, dtype=np.float64) - np.asarray(origin, dtype=np.float64)
+    three = np.asarray([delta[0], -delta[1], -delta[2]], dtype=np.float64)
+    norm = np.linalg.norm(three)
+    if norm <= 0:
+        return None
+    return [float(v) for v in three / norm]
+
+
+def frame_face_pose_to_viewer_entry(frame_index, face_id, pose, coordinate_transform):
+    origin = apply_coordinate_transform(transform_point(pose, [0.0, 0.0, 0.0]), coordinate_transform)
+    axis_x_endpoint = apply_coordinate_transform(transform_point(pose, [1.0, 0.0, 0.0]), coordinate_transform)
+    axis_y_endpoint = apply_coordinate_transform(transform_point(pose, [0.0, 1.0, 0.0]), coordinate_transform)
+    axis_z_endpoint = apply_coordinate_transform(transform_point(pose, [0.0, 0.0, 1.0]), coordinate_transform)
+    axis_x = normalized_three_delta(origin, axis_x_endpoint)
+    axis_y = normalized_three_delta(origin, axis_y_endpoint)
+    axis_z = normalized_three_delta(origin, axis_z_endpoint)
+    if axis_x is None or axis_y is None or axis_z is None:
+        return None
+    return {
+        "frame_index": int(frame_index),
+        "face_id": int(face_id),
+        "origin_world": [float(v) for v in origin],
+        "origin_three": to_three(origin),
+        "axis_x_three": axis_x,
+        "axis_y_three": axis_y,
+        "axis_z_three": axis_z,
+    }
+
+
 def estimate_rigid_transform(source_points, target_points):
     source = np.asarray(source_points, dtype=np.float64)
     target = np.asarray(target_points, dtype=np.float64)
@@ -311,7 +341,13 @@ def residual_color_value(residual_px):
 def load_outer_observations(path, frame_face_pose_yaml, cameras, coordinate_transform=None):
     path = Path(path)
     if not path.is_file():
-        return {"observations": [], "frames": [], "camera_ids": [], "summary": empty_summary()}
+        return {
+            "observations": [],
+            "frames": [],
+            "camera_ids": [],
+            "frame_face_poses": [],
+            "summary": empty_summary(),
+        }
 
     camera_by_index = {int(camera["index"]): camera for camera in cameras}
     camera_by_id = {camera["camera_id"]: camera for camera in cameras}
@@ -320,6 +356,7 @@ def load_outer_observations(path, frame_face_pose_yaml, cameras, coordinate_tran
     residuals = []
     frames = set()
     camera_ids = set()
+    used_frame_faces = set()
     missing_pose = 0
 
     with path.open("r", encoding="utf-8", newline="") as stream:
@@ -340,6 +377,7 @@ def load_outer_observations(path, frame_face_pose_yaml, cameras, coordinate_tran
                 missing_pose += 1
                 world = local
             else:
+                used_frame_faces.add((frame_index, face_id))
                 world = transform_point(pose, local).tolist()
             world = apply_coordinate_transform(world, coordinate_transform)
             camera = camera_by_index.get(camera_index) or camera_by_id.get(str(row.get("camera_id")))
@@ -383,11 +421,23 @@ def load_outer_observations(path, frame_face_pose_yaml, cameras, coordinate_tran
                 "projection_status": str(row.get("projection_status") or ""),
             })
 
+    frame_face_pose_entries = []
+    for frame_index, face_id in sorted(used_frame_faces):
+        pose = frame_face_poses.get((frame_index, face_id))
+        if pose is None:
+            continue
+        entry = frame_face_pose_to_viewer_entry(frame_index, face_id, pose, coordinate_transform)
+        if entry:
+            frame_face_pose_entries.append(entry)
+
+    summary = summarize_residuals(residuals, len(observations), missing_pose)
+    summary["frame_face_pose_count"] = len(frame_face_pose_entries)
     return {
         "observations": observations,
         "frames": sorted(frames),
         "camera_ids": sorted(camera_ids),
-        "summary": summarize_residuals(residuals, len(observations), missing_pose),
+        "frame_face_poses": frame_face_pose_entries,
+        "summary": summary,
     }
 
 

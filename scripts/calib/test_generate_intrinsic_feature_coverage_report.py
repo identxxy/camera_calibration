@@ -78,6 +78,10 @@ class IntrinsicFeatureCoverageReportTest(unittest.TestCase):
             self.assertNotIn("background: #111", html)
             self.assertIn("camera00_feature_coverage_reprojection.png", html)
             self.assertIn("accumulated observed feature locations", html)
+            self.assertIn("10^-1", html)
+            self.assertIn("10^1", html)
+            self.assertEqual(report.REPROJECTION_COLORMAP_VMIN_PX, 1e-1)
+            self.assertEqual(report.REPROJECTION_COLORMAP_VMAX_PX, 1e1)
 
     def test_intrinsics_lookup_accepts_camera_id_suffix(self):
         with tempfile.TemporaryDirectory() as tmp:

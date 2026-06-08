@@ -1963,6 +1963,41 @@ function validVec3(value) {
   return Array.isArray(value) && value.length === 3 && value.every((item) => Number.isFinite(Number(item)));
 }
 
+function unitVectorFromArray(value) {
+  if (!validVec3(value)) return null;
+  const vector = new THREE.Vector3(Number(value[0]), Number(value[1]), Number(value[2]));
+  if (vector.lengthSq() < 1e-12) return null;
+  return vector.normalize();
+}
+
+function frameFacePoseForDataset(dataset, frame, face) {
+  if (!dataset) return null;
+  if (!dataset._frameFacePoseMap) {
+    dataset._frameFacePoseMap = new Map();
+    const poses = Array.isArray(dataset.frame_face_poses) ? dataset.frame_face_poses : [];
+    poses.forEach((pose) => {
+      dataset._frameFacePoseMap.set(String(pose.frame_index) + "|" + String(pose.face_id), pose);
+    });
+  }
+  return dataset._frameFacePoseMap.get(String(frame) + "|" + String(face)) || null;
+}
+
+function fitFromFrameFacePose(pose) {
+  if (!pose || !validVec3(pose.origin_three)) return null;
+  const ex = unitVectorFromArray(pose.axis_x_three);
+  const ey = unitVectorFromArray(pose.axis_y_three);
+  const ez = unitVectorFromArray(pose.axis_z_three);
+  if (!ex || !ey || !ez) return null;
+  return {
+    origin: new THREE.Vector3(Number(pose.origin_three[0]), Number(pose.origin_three[1]), Number(pose.origin_three[2])),
+    ex,
+    ey,
+    ez,
+    observationCount: 0,
+    source: "frame_face_pose",
+  };
+}
+
 function solveLinear3x3(matrix, rhs) {
   const a = matrix.map((row, i) => row.map(Number).concat([Number(rhs[i])]));
   for (let col = 0; col < 3; ++col) {
@@ -1990,6 +2025,11 @@ function solveLinear3x3(matrix, rhs) {
 function fitFaceLocalToDisplay(observations) {
   const usable = observations.filter((obs) => validVec3(obs.local) && validVec3(obs.three));
   if (usable.length < 3) return null;
+  const localY = usable.map((obs) => Number(obs.local[1]));
+  const localZ = usable.map((obs) => Number(obs.local[2]));
+  const spanY = Math.max(...localY) - Math.min(...localY);
+  const spanZ = Math.max(...localZ) - Math.min(...localZ);
+  if (spanY < 0.015 || spanZ < 0.015) return null;
   const normal = [
     [1e-9, 0, 0],
     [0, 1e-9, 0],
@@ -2026,7 +2066,7 @@ function fitFaceLocalToDisplay(observations) {
   const ex = new THREE.Vector3().crossVectors(ey, ez);
   if (ex.lengthSq() < 1e-8) return null;
   ex.normalize();
-  return {origin, ex, ey, ez, observationCount: usable.length};
+  return {origin, ex, ey, ez, observationCount: usable.length, source: "local_point_fit"};
 }
 
 function transformAnchorLocalPoint(fit, localPoint) {
@@ -2084,7 +2124,7 @@ function parseFaceFromGroupKey(key) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function buildRigidTowerContext(observations, frame, selectedGroupKey) {
+function buildRigidTowerContext(dataset, observations, frame, selectedGroupKey) {
   const byFace = new Map();
   for (const obs of observations) {
     if (String(obs.frame_index) !== String(frame)) continue;
@@ -2100,11 +2140,13 @@ function buildRigidTowerContext(observations, frame, selectedGroupKey) {
     anchorFace = Array.from(byFace.entries())
       .sort((a, b) => b[1].length - a[1].length)[0][0];
   }
-  const fit = fitFaceLocalToDisplay(byFace.get(anchorFace) || []);
+  const poseFit = fitFromFrameFacePose(frameFacePoseForDataset(dataset, frame, anchorFace));
+  const fit = poseFit || fitFaceLocalToDisplay(byFace.get(anchorFace) || []);
   if (!fit) return null;
   return {
     anchorFace,
     fit,
+    poseSource: fit.source || "unknown",
     faceCount: byFace.size,
     anchorObservationCount: (byFace.get(anchorFace) || []).length,
   };
@@ -2158,7 +2200,7 @@ function frameNumbersFromObservations(observations) {
   return Array.from(frames).sort((a, b) => a - b);
 }
 
-function appendRigidTowerTimelineTrail(observations, currentFrame, linePositions, lineColors, pointPositions, pointColors) {
+function appendRigidTowerTimelineTrail(dataset, observations, currentFrame, linePositions, lineColors, pointPositions, pointColors) {
   if (!correspondenceTimelineTrailVisible) return {count: 0};
   const trailColor = new THREE.Color(0xf6ad55);
   const currentColor = new THREE.Color(0xffffff);
@@ -2166,7 +2208,7 @@ function appendRigidTowerTimelineTrail(observations, currentFrame, linePositions
   let previous = null;
   let count = 0;
   for (const frame of frames) {
-    const context = buildRigidTowerContext(observations, frame, "__auto__");
+    const context = buildRigidTowerContext(dataset, observations, frame, "__auto__");
     if (!context) continue;
     const center = rigidTowerCenterForContext(context);
     appendColoredPoint(pointPositions, pointColors, center, String(frame) === String(currentFrame) ? currentColor : trailColor);
@@ -2360,7 +2402,7 @@ function updateCorrespondenceOverlay() {
   const groupMode = correspondenceGroupModeName();
   const pointGroupKey = selectedCorrespondencePointGroupKey();
   const rigidTowerContext = groupMode === "rigid_tower"
-    ? buildRigidTowerContext(observations, frame, pointGroupKey)
+    ? buildRigidTowerContext(dataset, observations, frame, pointGroupKey)
     : null;
   if (groupMode === "rigid_tower" && !rigidTowerContext) {
     correspondenceGroup.visible = false;
@@ -2431,6 +2473,7 @@ function updateCorrespondenceOverlay() {
   if (groupMode === "rigid_tower" && rigidTowerContext) {
     appendRigidTowerOutline(rigidTowerContext, diagnosticLinePositions, diagnosticLineColors);
     trailInfo = appendRigidTowerTimelineTrail(
+      dataset,
       observations,
       frame,
       diagnosticLinePositions,
@@ -2503,7 +2546,7 @@ function updateCorrespondenceOverlay() {
   if (name === "whole" && groupMode === "rigid_tower" && rigidTowerContext) {
     modeNote = " Timeline mode shows one synchronized frame as a nominal rigid tower with 8 faces, 0.25 m face width, and the existing 8 cm tag / 2 cm spacing local corners; anchor face "
       + rigidTowerContext.anchorFace + " fitted from " + rigidTowerContext.anchorObservationCount
-      + " points. Cyan outline is the current frame tower; orange trail has "
+      + " points using " + rigidTowerContext.poseSource + ". Cyan outline is the current frame tower; orange trail has "
       + trailInfo.count + " frame centers. Diagnostic only, not a BA constraint.";
   }
   status.textContent = name + " " + correspondenceGroupModeLabel(groupMode)

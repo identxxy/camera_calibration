@@ -592,6 +592,7 @@ def observation_feature_fields(feature_id):
 def write_frame_face_pose_yaml(path, frame_face_poses, transform_name):
     lines = [
         f"# Each pose stores {transform_name}; plane coordinates are the face-local AprilTag board coordinates.",
+        f"type: {transform_name}",
         f"pose_count: {len(frame_face_poses)}",
         "poses:",
     ]

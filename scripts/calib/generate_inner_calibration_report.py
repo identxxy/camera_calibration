@@ -16,6 +16,10 @@ import yaml
 from matplotlib.colors import LogNorm
 
 
+REPROJECTION_COLORMAP_VMIN_PX = 1e-1
+REPROJECTION_COLORMAP_VMAX_PX = 1e1
+
+
 def read_dataset(path):
     path = Path(path)
     with path.open("rb") as f:
@@ -285,17 +289,19 @@ def plot_reprojection_arrows(camera_index, camera_label, intrinsics, residuals, 
     height = intrinsics["height"]
     magnitudes = np.linalg.norm(errors, axis=1)
 
-    fig_width = 12
+    fig_width = 5.4
     fig_height = fig_width * height / width
     fig, ax = plt.subplots(figsize=(fig_width, fig_height), constrained_layout=True)
-    ax.set_facecolor("#101214")
-    ax.set_title(f"Camera {camera_index}: {camera_label}", fontsize=11)
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#f8fafc")
+    ax.set_title(f"Camera {camera_index}: {camera_label}", fontsize=8)
     ax.set_xlim(0, width)
     ax.set_ylim(height, 0)
     ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("x [px]")
-    ax.set_ylabel("y [px]")
-    ax.grid(color="#333333", linewidth=0.4, alpha=0.4)
+    ax.set_xlabel("x [px]", fontsize=7)
+    ax.set_ylabel("y [px]", fontsize=7)
+    ax.tick_params(labelsize=7)
+    ax.grid(color="#d0d7de", linewidth=0.35, alpha=0.55)
 
     if len(observed):
         heat = ax.hexbin(
@@ -305,8 +311,8 @@ def plot_reprojection_arrows(camera_index, camera_label, intrinsics, residuals, 
             extent=(0, width, 0, height),
             mincnt=1,
             bins="log",
-            cmap="Greys",
-            alpha=0.35,
+            cmap="Blues",
+            alpha=0.48,
             linewidths=0,
         )
         heat.set_zorder(0)
@@ -314,8 +320,12 @@ def plot_reprojection_arrows(camera_index, camera_label, intrinsics, residuals, 
         indices = sample_indices(len(observed), max_arrows)
         obs = observed[indices]
         err = errors[indices]
-        mag = np.clip(magnitudes[indices], 1e-3, None)
-        norm = LogNorm(vmin=0.01, vmax=max(0.5, float(np.percentile(np.clip(magnitudes, 1e-3, None), 99))))
+        mag = np.clip(
+            magnitudes[indices],
+            REPROJECTION_COLORMAP_VMIN_PX,
+            REPROJECTION_COLORMAP_VMAX_PX,
+        )
+        norm = LogNorm(vmin=REPROJECTION_COLORMAP_VMIN_PX, vmax=REPROJECTION_COLORMAP_VMAX_PX)
         display_scale = 45.0
         lengths = np.linalg.norm(err, axis=1)
         scale_factor = np.ones_like(lengths)
@@ -341,7 +351,9 @@ def plot_reprojection_arrows(camera_index, camera_label, intrinsics, residuals, 
             alpha=0.92,
         )
         cbar = fig.colorbar(quiver, ax=ax, shrink=0.82)
-        cbar.set_label("reprojection error [px], log scale")
+        cbar.set_label("reprojection error [px], log scale, 1e-1..1e1")
+        cbar.ax.tick_params(labelsize=7)
+        cbar.ax.yaxis.label.set_size(7)
         ax.text(
             0.01,
             0.99,
@@ -349,14 +361,14 @@ def plot_reprojection_arrows(camera_index, camera_label, intrinsics, residuals, 
             transform=ax.transAxes,
             ha="left",
             va="top",
-            color="#e8e8e8",
-            fontsize=9,
-            bbox={"facecolor": "#111111", "alpha": 0.65, "edgecolor": "none", "pad": 4},
+            color="#1f2328",
+            fontsize=6.5,
+            bbox={"facecolor": "#ffffff", "alpha": 0.76, "edgecolor": "none", "pad": 3},
         )
     else:
         ax.text(0.5, 0.5, "no valid residuals", transform=ax.transAxes, ha="center", va="center")
 
-    fig.savefig(output_path, dpi=160)
+    fig.savefig(output_path, dpi=135)
     plt.close(fig)
 
 
@@ -400,11 +412,14 @@ def write_html(output_path, summary, camera_rows):
     th, td {{ border-bottom: 1px solid #d8dee4; padding: 9px 10px; text-align: right; font-size: 13px; }}
     th:nth-child(2), td:nth-child(2) {{ text-align: left; }}
     th {{ background: #eef1f4; font-weight: 650; }}
-    .camera {{ margin: 0 0 32px; background: white; padding: 14px 14px 18px; border: 1px solid #d8dee4; }}
-    .camera h2 {{ margin: 0 0 12px; font-size: 18px; }}
+    .camera-grid {{ display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 10px; align-items: start; }}
+    .camera {{ margin: 0; background: white; padding: 7px; border: 1px solid #d8dee4; }}
+    .camera h2 {{ margin: 0 0 6px; font-size: 12px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
     .camera h2 span {{ color: #57606a; font-weight: 500; }}
-    .camera img {{ display: block; width: 100%; height: auto; border: 1px solid #d8dee4; }}
+    .camera img {{ display: block; width: 100%; object-fit: contain; border: 1px solid #d8dee4; background: #f8fafc; }}
     code {{ background: #eef1f4; padding: 2px 5px; border-radius: 4px; }}
+    @media (max-width: 1600px) {{ .camera-grid {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }} }}
+    @media (max-width: 900px) {{ .camera-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
   </style>
 </head>
 <body>
@@ -412,14 +427,14 @@ def write_html(output_path, summary, camera_rows):
     <h1>Inner Camera Calibration Report</h1>
     <p>Dataset: <code>{html.escape(summary['dataset'])}</code></p>
     <p>State: <code>{html.escape(summary['state_dir'])}</code></p>
-    <p>Projection: CentralOpenCVModel; arrows show projected minus observed residual, color uses log-level reprojection error.</p>
+    <p>Projection: CentralOpenCVModel; arrows show projected minus observed residual. The residual colormap is fixed to log scale from <code>10^-1</code> to <code>10^1</code> px for cross-camera comparison.</p>
   </header>
   <main>
     <table>
       <thead><tr><th>Camera</th><th>Label</th><th>Residuals</th><th>Median px</th><th>Mean px</th><th>P90 px</th><th>Max px</th></tr></thead>
       <tbody>{''.join(rows)}</tbody>
     </table>
-    {''.join(figures)}
+    <div class="camera-grid">{''.join(figures)}</div>
   </main>
 </body>
 </html>

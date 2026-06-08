@@ -14,6 +14,10 @@ import numpy as np
 from matplotlib.colors import LogNorm
 
 
+REPROJECTION_COLORMAP_VMIN_PX = 1e-1
+REPROJECTION_COLORMAP_VMAX_PX = 1e1
+
+
 def read_summary(path):
     rows = []
     with Path(path).open("r", encoding="utf-8") as f:
@@ -49,17 +53,19 @@ def plot_camera(row, observed, errors, output_path, max_arrows):
     magnitudes = np.linalg.norm(errors, axis=1)
     title = f"Camera {row['camera_index']}: {row['user_id']}"
 
-    fig_width = 5.6
+    fig_width = 5.4
     fig_height = fig_width * height / width
     fig, ax = plt.subplots(figsize=(fig_width, fig_height), constrained_layout=True)
-    ax.set_facecolor("#101214")
-    ax.set_title(title, fontsize=11)
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#f8fafc")
+    ax.set_title(title, fontsize=8)
     ax.set_xlim(0, width)
     ax.set_ylim(height, 0)
     ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("x [px]")
-    ax.set_ylabel("y [px]")
-    ax.grid(color="#333333", linewidth=0.4, alpha=0.4)
+    ax.set_xlabel("x [px]", fontsize=7)
+    ax.set_ylabel("y [px]", fontsize=7)
+    ax.tick_params(labelsize=7)
+    ax.grid(color="#d0d7de", linewidth=0.35, alpha=0.55)
 
     if len(observed):
         heat = ax.hexbin(
@@ -69,8 +75,8 @@ def plot_camera(row, observed, errors, output_path, max_arrows):
             extent=(0, width, 0, height),
             mincnt=1,
             bins="log",
-            cmap="Greys",
-            alpha=0.35,
+            cmap="Blues",
+            alpha=0.48,
             linewidths=0,
         )
         heat.set_zorder(0)
@@ -78,8 +84,12 @@ def plot_camera(row, observed, errors, output_path, max_arrows):
         indices = sample_indices(len(observed), max_arrows)
         obs = observed[indices]
         err = errors[indices]
-        mag = np.clip(magnitudes[indices], 1e-4, None)
-        norm = LogNorm(vmin=0.001, vmax=max(0.05, float(np.percentile(np.clip(magnitudes, 1e-4, None), 99))))
+        mag = np.clip(
+            magnitudes[indices],
+            REPROJECTION_COLORMAP_VMIN_PX,
+            REPROJECTION_COLORMAP_VMAX_PX,
+        )
+        norm = LogNorm(vmin=REPROJECTION_COLORMAP_VMIN_PX, vmax=REPROJECTION_COLORMAP_VMAX_PX)
 
         display_scale = 600.0
         lengths = np.linalg.norm(err, axis=1)
@@ -107,7 +117,9 @@ def plot_camera(row, observed, errors, output_path, max_arrows):
             alpha=0.92,
         )
         cbar = fig.colorbar(quiver, ax=ax, shrink=0.82)
-        cbar.set_label("reprojection error [px], log scale")
+        cbar.set_label("reprojection error [px], log scale, 1e-1..1e1")
+        cbar.ax.tick_params(labelsize=7)
+        cbar.ax.yaxis.label.set_size(7)
         ax.text(
             0.01,
             0.99,
@@ -115,9 +127,9 @@ def plot_camera(row, observed, errors, output_path, max_arrows):
             transform=ax.transAxes,
             ha="left",
             va="top",
-            color="#e8e8e8",
-            fontsize=9,
-            bbox={"facecolor": "#111111", "alpha": 0.65, "edgecolor": "none", "pad": 4},
+            color="#1f2328",
+            fontsize=6.5,
+            bbox={"facecolor": "#ffffff", "alpha": 0.76, "edgecolor": "none", "pad": 3},
         )
     else:
         ax.text(0.5, 0.5, "no valid residuals", transform=ax.transAxes, ha="center", va="center")
@@ -163,7 +175,7 @@ def write_html(output_path, source_dir, camera_rows):
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Inner Camera OpenCV Intrinsics Report</title>
+    <title>OpenCV Intrinsics Report</title>
   <style>
     body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f6f7; color: #1f2328; }}
     header {{ padding: 28px 36px 18px; background: #20242a; color: white; }}
@@ -174,20 +186,22 @@ def write_html(output_path, source_dir, camera_rows):
     th, td {{ border-bottom: 1px solid #d8dee4; padding: 9px 10px; text-align: right; font-size: 13px; }}
     th:nth-child(2), td:nth-child(2) {{ text-align: left; }}
     th {{ background: #eef1f4; font-weight: 650; }}
-    .camera-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; align-items: start; }}
-    .camera {{ margin: 0; background: white; padding: 12px; border: 1px solid #d8dee4; }}
-    .camera h2 {{ margin: 0 0 12px; font-size: 18px; }}
+    .camera-grid {{ display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 10px; align-items: start; }}
+    .camera {{ margin: 0; background: white; padding: 7px; border: 1px solid #d8dee4; }}
+    .camera h2 {{ margin: 0 0 6px; font-size: 12px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
     .camera h2 span {{ color: #57606a; font-weight: 500; }}
     .camera a {{ display: block; }}
-    .camera img {{ display: block; width: 100%; height: auto; border: 1px solid #d8dee4; }}
+    .camera img {{ display: block; width: 100%; object-fit: contain; border: 1px solid #d8dee4; background: #f8fafc; }}
     code {{ background: #eef1f4; padding: 2px 5px; border-radius: 4px; }}
+    @media (max-width: 1600px) {{ .camera-grid {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }} }}
+    @media (max-width: 900px) {{ .camera-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
   </style>
 </head>
 <body>
   <header>
-    <h1>Inner Camera OpenCV Intrinsics Report</h1>
+    <h1>OpenCV Intrinsics Report</h1>
     <p>Source: <code>{html.escape(str(source_dir))}</code></p>
-    <p>Arrows show projected minus observed residual after per-camera OpenCV calibration; colors use log-level reprojection error.</p>
+    <p>Arrows show projected minus observed residual after per-camera OpenCV calibration. The residual colormap is fixed to log scale from <code>10^-1</code> to <code>10^1</code> px for cross-camera comparison.</p>
   </header>
   <main>
     <table>
@@ -202,12 +216,12 @@ def write_html(output_path, source_dir, camera_rows):
     Path(output_path).write_text(html_text, encoding="utf-8")
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--intrinsics-dir", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--max-arrows-per-camera", type=int, default=60000)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     intrinsics_dir = Path(args.intrinsics_dir)
     output_dir = Path(args.output_dir)

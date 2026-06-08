@@ -83,6 +83,19 @@ def write_pose_yaml(path, count):
 
 
 class InnerBridgeRecalibPipelineTest(unittest.TestCase):
+    def test_binary_fallback_prefers_current_integration_build_before_releases(self):
+        fallback_paths = [str(path) for path in inner_pipeline.DEFAULT_T0_BINARY_FALLBACKS]
+
+        integration_index = next(
+            index for index, path in enumerate(fallback_paths)
+            if "camera_calibration_integration_build" in path
+        )
+        release_index = next(
+            index for index, path in enumerate(fallback_paths)
+            if "camera_calibration_release_1771ad3" in path
+        )
+        self.assertLess(integration_index, release_index)
+
     def test_force_clear_stage_outputs_removes_declared_outputs_and_fingerprint(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

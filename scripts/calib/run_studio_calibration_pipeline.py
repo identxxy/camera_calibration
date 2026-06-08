@@ -40,6 +40,15 @@ DEFAULT_OUTER_INTRINSIC_METRICS_TSV = (
     / "outer_large_marker_20260604_passing_images_only_min1_bycam"
     / "outer24_intrinsic_report_large_marker_v1/camera_metrics.tsv"
 )
+DEFAULT_OUTER_LARGE_OPENCV_INTRINSICS_DIR = (
+    Path("/home/ubuntu/calib_data/calib_2026_06_04_outer_large_marker_v2")
+    / "outer_large_marker_20260604_passing_images_only_min1_bycam"
+    / "outer24_opencv_intrinsics_large_marker_v1"
+)
+DEFAULT_OUTER_LARGE_QC_ROOT = (
+    Path("/home/ubuntu/calib_data/calib_2026_06_04_outer_large_marker_v2")
+    / "outer_large_marker_20260604_distributed_filtered_min1_bycam"
+)
 def repo_root():
     return Path(__file__).resolve().parents[2]
 
@@ -122,11 +131,14 @@ def build_paths(args):
         if args.outer_final_intrinsics_dir
         else outer_frame_face_dir / "intrinsics_refined"
     )
+    outer_large_opencv_intrinsics_dir = resolve_path(args.outer_large_opencv_intrinsics_dir)
+    outer_large_intrinsic_report_dir = output_root / "reports" / "outer_intrinsics_outer_large_marker"
     outer_intrinsic_metrics_tsv = (
         resolve_path(args.outer_intrinsic_metrics_tsv)
         if args.outer_intrinsic_metrics_tsv
+        else outer_large_intrinsic_report_dir / "camera_metrics.tsv"
+        if not args.bridge_only
         else first_existing([
-            output_root / "outer_large_marker_intrinsics" / "camera_metrics.tsv",
             DEFAULT_OUTER_INTRINSIC_METRICS_TSV,
             DEFAULT_HTTP_ROOT / "current_calibration/reports/06_outer_intrinsics_outer_large_marker/camera_metrics.tsv",
         ])
@@ -140,6 +152,15 @@ def build_paths(args):
     marker_correspondence_dir = output_root / "marker_correspondences"
     advanced_correspondence_root = output_root / "advanced_correspondence_viewer_v1"
     current_output_dir = resolve_path(args.current_output_dir)
+    outer_large_qc_root = resolve_path(args.outer_large_qc_root)
+    if args.whole_qc_root:
+        whole_qc_root = resolve_path(args.whole_qc_root)
+    else:
+        whole_qc_stats = first_existing([
+            whole_data_root / "whole_outer24_filtered_min4_fullres_min4cam" / "per_camera_stats.tsv",
+            whole_data_root / "whole_outer24_filtered_min4_hybrid_min4cam" / "per_camera_stats.tsv",
+        ])
+        whole_qc_root = Path(whole_qc_stats).parent if whole_qc_stats else ""
     whole_data_report = (
         resolve_path(args.whole_data_report)
         if args.whole_data_report
@@ -154,6 +175,10 @@ def build_paths(args):
         "outer_pose_yaml": outer_pose_yaml,
         "outer_intrinsics_dir": outer_intrinsics_dir,
         "outer_intrinsic_metrics_tsv": outer_intrinsic_metrics_tsv,
+        "outer_large_opencv_intrinsics_dir": outer_large_opencv_intrinsics_dir,
+        "outer_large_intrinsic_report_dir": outer_large_intrinsic_report_dir,
+        "outer_large_qc_root": outer_large_qc_root,
+        "whole_qc_root": whole_qc_root,
         "whole_data_report": whole_data_report,
         "bridge_root": bridge_root,
         "bridge_viewer": bridge_root / "combined_studio_rig_viewer_v1" / "index.html",
@@ -249,17 +274,14 @@ def publish_command(args, paths):
     http_root = resolve_path(args.http_root)
     return [
         sys.executable,
-        repo_root() / "scripts/ops/build_t0_current_calib_entry.py",
+        repo_root() / "scripts/ops/publish_t0_clean_calib_reports.py",
         "--root", http_root,
         "--base-url", args.report_url_base,
-        "--panel-url", args.panel_url,
-        "--output-dir", paths["current_output_dir"],
-        "--current-bridge-run-rel", rel_for_report(paths["bridge_root"], http_root),
-        "--current-outer-run-rel", rel_for_report(paths["outer_frame_face_dir"], http_root),
-        "--current-outer-report-rel", rel_for_report(paths["outer_wrapper_root"], http_root),
-        "--whole-data-report-rel", rel_for_report(paths["whole_data_report"], http_root),
-        "--studio32-yaml-rel", rel_for_report(paths["unified_camera_yaml"], http_root),
-        "--write-root-index",
+        "--run-tag", args.run_tag,
+        "--current-dir", paths["current_output_dir"],
+        "--outer-large-intrinsic-report", paths["outer_large_intrinsic_report_dir"],
+        "--outer-large-qc-root", paths["outer_large_qc_root"],
+        "--whole-qc-root", paths["whole_qc_root"],
     ]
 
 
@@ -289,6 +311,15 @@ def advanced_correspondence_command(args, paths):
         "--large-pnp-dir", paths["large_pnp_dir"],
         "--small-pnp-dir", paths["small_pnp_dir"],
         "--viewer-assets-dir", paths["viewer_assets_dir"],
+    ]
+
+
+def outer_large_intrinsic_report_command(args, paths):
+    return [
+        sys.executable,
+        repo_root() / "scripts/calib/generate_opencv_intrinsics_report.py",
+        "--intrinsics-dir", paths["outer_large_opencv_intrinsics_dir"],
+        "--output-dir", paths["outer_large_intrinsic_report_dir"],
     ]
 
 
@@ -343,9 +374,11 @@ def build_stages(args, paths):
     run_export = run_bridge
     run_marker_correspondences = run_bridge
     run_advanced = run_bridge
+    run_outer_intrinsic_report = run_outer
     run_publish = args.publish_current and run_bridge
     return [
         make_stage("outer_tower", run_outer, outer_command(args, paths)),
+        make_stage("generate_outer_intrinsic_report", run_outer_intrinsic_report, outer_large_intrinsic_report_command(args, paths)),
         make_stage("inner_bridge", run_bridge, bridge_command(args, paths)),
         make_stage("export_unified_cameras", run_export, export_unified_command(args, paths)),
         make_stage("export_large_marker_correspondences", run_marker_correspondences, marker_correspondence_command(args, paths, "large")),
@@ -465,6 +498,7 @@ def write_outputs(args, paths, stages, started_at, finished_at, duration_s):
         "report_urls": {
             "pipeline_index": report_url(output_root / "index.html", http_root, args.report_url_base),
             "outer_report": report_url(paths["outer_wrapper_root"] / "index.html", http_root, args.report_url_base),
+            "outer_intrinsic_report": report_url(paths["outer_large_intrinsic_report_dir"] / "index.html", http_root, args.report_url_base),
             "bridge_report": report_url(paths["bridge_root"] / "final_report" / "index.html", http_root, args.report_url_base),
             "unified_viewer": report_url(paths["bridge_viewer"], http_root, args.report_url_base),
             "unified_camera_yaml": report_url(paths["unified_camera_yaml"], http_root, args.report_url_base),
@@ -561,6 +595,24 @@ def parse_args():
             "Outer large-marker intrinsic camera_metrics.tsv used by the unified viewer "
             "for intrinsic residual columns."
         ),
+    )
+    parser.add_argument(
+        "--outer-large-opencv-intrinsics-dir",
+        type=Path,
+        default=DEFAULT_OUTER_LARGE_OPENCV_INTRINSICS_DIR,
+        help="Outer large-marker OpenCV intrinsic calibration directory used to regenerate the canonical outer intrinsic report.",
+    )
+    parser.add_argument(
+        "--outer-large-qc-root",
+        type=Path,
+        default=DEFAULT_OUTER_LARGE_QC_ROOT,
+        help="Outer large-marker distributed QC root used by the current clean report publisher.",
+    )
+    parser.add_argument(
+        "--whole-qc-root",
+        type=Path,
+        default=None,
+        help="Whole/tower distributed QC root used by the current clean report publisher.",
     )
     parser.add_argument(
         "--whole-data-report",

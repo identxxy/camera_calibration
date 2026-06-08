@@ -138,6 +138,46 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
             self.assertEqual(summary["intrinsic_sanity"]["warning_camera_count"], 1)
             self.assertEqual(summary["intrinsic_sanity"]["ok_camera_count"], 2)
 
+    def test_frame_face_pose_yaml_provides_whole_tower_orientation_sanity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            frame_face_pose = root / "rig_tr_frame_face.yaml"
+            frame_face_pose.write_text(
+                "pose_count: 1\n"
+                "poses:\n"
+                "  - index: 0\n"
+                "    frame_index: 244\n"
+                "    face_id: 0\n"
+                "    tx: 0.0\n"
+                "    ty: 0.0\n"
+                "    tz: 0.0\n"
+                "    qx: -0.7071067811865476\n"
+                "    qy: 0.0\n"
+                "    qz: 0.0\n"
+                "    qw: 0.7071067811865476\n",
+                encoding="utf-8",
+            )
+            args = type("Args", (), {
+                "tower_pose_yaml": frame_face_pose,
+                "large_marker_board_pose_yaml": None,
+                "bridge_marker_board_pose_yaml": None,
+                "small_marker_board_pose_yaml": None,
+            })()
+            gravity_alignment = {
+                "source": "test_gravity",
+                "metric_up_vector": [0.0, 1.0, 0.0],
+                "display_up_vector": [0.0, -1.0, 0.0],
+                "robust_angle_threshold_deg": 30.0,
+            }
+
+            alignment = combined_viewer.estimate_board_orientation_alignment(args, gravity_alignment)
+            whole = alignment["sources"]["whole_tower_faces"]
+
+            self.assertEqual(whole["sample_count"], 1)
+            self.assertEqual(whole["source"], str(frame_face_pose.resolve()))
+            self.assertIn("independent frame-face plane normals", whole["description"])
+            self.assertAlmostEqual(whole["median_angle_from_horizontal_deg"], 0.0, places=6)
+
     def test_attach_intrinsic_residuals_keeps_intrinsic_metrics_separate(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -256,10 +296,14 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
             self.assertIn("Residual <=", html)
             self.assertIn("function correspondenceGroupModeName()", html)
             self.assertIn("function correspondenceGroupKey(obs, includeFrame)", html)
-            self.assertIn("function buildRigidTowerContext(observations, frame, selectedGroupKey)", html)
+            self.assertIn("function frameFacePoseForDataset(dataset, frame, face)", html)
+            self.assertIn("function fitFromFrameFacePose(pose)", html)
+            self.assertIn("if (spanY < 0.015 || spanZ < 0.015) return null;", html)
+            self.assertIn("function buildRigidTowerContext(dataset, observations, frame, selectedGroupKey)", html)
             self.assertIn("RIGID_TOWER_FACE_WIDTH_M = 0.25", html)
-            self.assertIn("function appendRigidTowerTimelineTrail(observations, currentFrame", html)
+            self.assertIn("function appendRigidTowerTimelineTrail(dataset, observations, currentFrame", html)
             self.assertIn("Timeline mode shows one synchronized frame", html)
+            self.assertIn("using \" + rigidTowerContext.poseSource", html)
             self.assertIn("Cyan outline is the current frame tower", html)
             self.assertIn("Diagnostic only, not a BA constraint", html)
             self.assertIn("function populateCorrespondenceFrameControl()", html)
@@ -278,6 +322,7 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
         parser = combined_viewer.build_arg_parser()
         parsed = parser.parse_args([])
         self.assertIsNone(parsed.outer_final_pose_yaml)
+        self.assertIsNone(parsed.tower_pose_yaml)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
