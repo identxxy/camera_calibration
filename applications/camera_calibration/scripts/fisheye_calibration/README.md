@@ -155,3 +155,153 @@ show the metric centers from the camchain instead.
 In the integrated studio/headset calibration codebase, the core calibration
 binary uses `--max_ba_iterations` as the generic BA speed/quality knob, plus
 `--skip_bundle_adjustment` for initialization-only smoke runs.
+
+## SL Foxglove H264 Four-Fisheye Flow
+
+Some four-fisheye captures store each camera as a ROS1 Foxglove
+`foxglove_msgs/CompressedVideo` H264 topic instead of packed JPEG image tiles.
+The SL local flow keeps the same KB8 camera product, but separates the video IO
+adapter from the full-board detector and rig solver.
+
+Default camera order:
+
+```text
+cam0 = left_up
+cam1 = left_down
+cam2 = right_down
+cam3 = right_up
+```
+
+1. Extract one Annex-B `.h264` elementary stream per camera:
+
+```bash
+python applications/camera_calibration/scripts/fisheye_calibration/extract_foxglove_h264_from_mcap.py \
+  --mcap data_raw_sl.mcap \
+  --output-root <run_root>/raw_h264
+```
+
+2. Select sharp, board-visible per-camera frames for intrinsic calibration:
+
+```bash
+python applications/camera_calibration/scripts/fisheye_calibration/select_h264_fisheye_frames.py \
+  --raw-root <run_root>/raw_h264 \
+  --output-root <run_root>/selected_stride5 \
+  --stride 5 \
+  --max-selected-per-camera 140 \
+  --min-sharpness 110 \
+  --min-tags 1 \
+  --min-board-motion-px 90
+```
+
+3. Run the C++ full-board calibrator on each selected camera directory with the
+A4 board pattern, then export the four first-pass `CentralThinPrismFisheyeModel`
+intrinsics as KB8:
+
+```bash
+python applications/camera_calibration/scripts/fisheye_calibration/export_kb8_intrinsics.py \
+  --calibration-root <run_root>/calibration_kb8 \
+  --output <run_root>/sl_kb8_intrinsics_vision_only.json
+```
+
+4. Build timestamp-synchronized top and bottom left-right pair directories from
+the selected-frame anchors. This step uses MCAP timestamps, not decoded frame
+indices, because the four streams can be offset by one frame:
+
+```bash
+python applications/camera_calibration/scripts/fisheye_calibration/extract_timestamp_pair_frames.py \
+  --mcap data_raw_sl.mcap \
+  --raw-root <run_root>/raw_h264 \
+  --selected-root <run_root>/selected_stride5 \
+  --output-root <run_root>/pair_sync_timestamp \
+  --threshold-ms 2 \
+  --summary-json <run_root>/pair_sync_timestamp/summary.json
+```
+
+Run the C++ detector on the generated pair image directories to produce:
+
+```text
+<run_root>/pair_calibration/top_left_right_features.bin
+<run_root>/pair_calibration/bottom_left_right_features.bin
+```
+
+5. Estimate the constrained four-fisheye rig from fixed KB8 intrinsics and the
+two timestamp-synchronized pair feature datasets:
+
+```bash
+python applications/camera_calibration/scripts/fisheye_calibration/estimate_sl_kb8_rig.py \
+  --kb8-json <run_root>/sl_kb8_intrinsics_vision_only.json \
+  --top-dataset <run_root>/pair_calibration/top_left_right_features.bin \
+  --bottom-dataset <run_root>/pair_calibration/bottom_left_right_features.bin \
+  --output-yaml <run_root>/sl_kb8_four_fisheye_camchain.yaml \
+  --output-json <run_root>/sl_kb8_four_fisheye_rig.json \
+  --records-json <run_root>/sl_kb8_four_fisheye_rig_records.json
+```
+
+By default this solver does **not** run photometric up/down roll refinement. It
+uses the hardware constraints directly:
+
+```text
+left_up and left_down share optical center
+right_up and right_down share optical center
+T_down_up = Ry(180deg)
+```
+
+To enable the optional photometric seam refinement, pass
+`--optimize-up-down-phi`. This optimizes one small roll angle per side:
+
+```text
+T_down_up = Rz(phi) * Ry(180deg)
+phi is constrained to [-5deg, +5deg] by default
+loss = median brightness-offset-robust absolute difference
+       over a 20px seam band in the up/down panorama overlap
+```
+
+Example:
+
+```bash
+python applications/camera_calibration/scripts/fisheye_calibration/estimate_sl_kb8_rig.py \
+  --kb8-json <run_root>/sl_kb8_intrinsics_vision_only.json \
+  --top-dataset <run_root>/pair_calibration/top_left_right_features.bin \
+  --bottom-dataset <run_root>/pair_calibration/bottom_left_right_features.bin \
+  --output-yaml <run_root>/sl_kb8_four_fisheye_camchain_phi_optimized.yaml \
+  --output-json <run_root>/sl_kb8_four_fisheye_rig_phi_optimized.json \
+  --records-json <run_root>/sl_kb8_four_fisheye_rig_records.json \
+  --optimize-up-down-phi \
+  --phi-mcap data_raw_sl.mcap \
+  --phi-raw-root <run_root>/raw_h264 \
+  --phi-output-json <run_root>/sl_kb8_up_down_phi_optimization.json
+```
+
+The resulting YAML stores `up_down_phi_z_deg` only when this flag is used.
+
+6. Render left/right equirectangular panorama previews:
+
+```bash
+python applications/camera_calibration/scripts/fisheye_calibration/render_sl_kb8_panoramas.py \
+  --mcap data_raw_sl.mcap \
+  --raw-root <run_root>/raw_h264 \
+  --camchain-yaml <run_root>/sl_kb8_four_fisheye_camchain_phi_optimized.yaml \
+  --output-root <run_root>/panorama_preview \
+  --width 960 \
+  --height 480 \
+  --fps 30 \
+  --max-frames 600 \
+  --summary-json <run_root>/panorama_preview/summary.json
+```
+
+The panorama renderer uses the KB8 projection directly and treats a ray as valid
+when it projects inside the image. It does not apply a pinhole `z > 0`
+front-hemisphere cut, because fisheye lenses can image rays beyond 180 degrees.
+
+SL generated MCAPs, raw H264 streams, selected PNGs, feature binaries, rendered
+videos, and HTML summaries are run artifacts. Keep them under `<run_root>` and
+do not commit them.
+
+Additional SL-specific files:
+
+- `extract_foxglove_h264_from_mcap.py`: extracts per-camera H264 streams from Foxglove `CompressedVideo` MCAP topics.
+- `select_h264_fisheye_frames.py`: screens H264 frames by sharpness, board tag detection, and board motion.
+- `extract_timestamp_pair_frames.py`: builds timestamp-synchronized pair image directories from selected anchors.
+- `estimate_sl_kb8_rig.py`: estimates fixed-intrinsic left-right pair extrinsics and composes the constrained four-camera rig.
+- `optimize_sl_up_down_phi.py`: optional seam-loss roll refinement used only when explicitly requested.
+- `render_sl_kb8_panoramas.py`: renders left/right KB8 equirectangular panorama preview videos.
