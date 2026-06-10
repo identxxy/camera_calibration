@@ -6,8 +6,6 @@ import json
 import struct
 from pathlib import Path
 
-from mcap.reader import make_reader
-
 
 DEFAULT_TOPICS = {
     "left_up": "/camera/left_up/h264",
@@ -56,6 +54,8 @@ def parse_topic_map(raw):
 
 
 def extract_streams(mcap_path, output_root, topics):
+    from mcap.reader import make_reader
+
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
     topic_to_name = {topic: name for name, topic in topics.items()}

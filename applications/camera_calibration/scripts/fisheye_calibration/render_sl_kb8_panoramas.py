@@ -10,7 +10,6 @@ from pathlib import Path
 
 import numpy as np
 import yaml
-from mcap.reader import make_reader
 
 
 TOPICS = {
@@ -62,6 +61,8 @@ def iter_ppm_stream(stream):
 
 
 def load_frame_timestamps(mcap_path):
+    from mcap.reader import make_reader
+
     out = {name: [] for name in TOPICS}
     topic_to_name = {topic: name for name, topic in TOPICS.items()}
     with Path(mcap_path).open("rb") as f:

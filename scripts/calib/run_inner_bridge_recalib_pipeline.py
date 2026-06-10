@@ -1762,7 +1762,7 @@ def build_pipeline_stages(
         "--topdown_labels", ",".join(bridge_layout["outer_labels"]),
         "--output_html", str(combined_viewer_html),
         "--viewer_scope", "combined",
-        "--title", "Fast Inner/Outer Bridge Viewer",
+        "--title", "Studio 32-Camera Unified Calibration Viewer",
         "--correspondence_data_url", "../../advanced_correspondence_viewer_v1/correspondence_data.json",
         "--inner_reprojection_metrics_tsv", str(inner_reproj / "camera_metrics.tsv"),
         "--inner_intrinsic_metrics_tsv", str(inner_reproj / "camera_metrics.tsv"),

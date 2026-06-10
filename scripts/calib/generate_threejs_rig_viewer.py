@@ -1117,7 +1117,7 @@ HTML_TEMPLATE = """<!doctype html>
 </head>
 <body>
   <header>
-    <h1 id="report-title">Inner 8-Camera Rig Report</h1>
+    <h1 id="report-title">Interactive 3D Camera Rig</h1>
     <p id="source"></p>
   </header>
   <main>
@@ -1184,6 +1184,7 @@ HTML_TEMPLATE = """<!doctype html>
           <div class="correspondence-controls" id="correspondence-controls">
             <label>Group by
               <select id="correspondence-group-mode">
+                <option value="frame">Frame Feature</option>
                 <option value="timeline">Timeline</option>
                 <option value="face_id">Face ID</option>
               </select>

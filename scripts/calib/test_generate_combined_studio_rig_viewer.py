@@ -287,6 +287,7 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
             self.assertIn("id=\"correspondence-shared-only\"", html)
             self.assertIn("Shared tracks only", html)
             self.assertIn("id=\"correspondence-group-mode\"", html)
+            self.assertIn("Frame Feature", html)
             self.assertIn("Timeline", html)
             self.assertIn("Face ID", html)
             self.assertNotIn("By face in frame", html)
