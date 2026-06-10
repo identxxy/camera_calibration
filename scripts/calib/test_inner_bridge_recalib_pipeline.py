@@ -485,7 +485,9 @@ class InnerBridgeRecalibPipelineTest(unittest.TestCase):
 
             ba_command = stages["refine_large_marker_bridge_joint_ba"]["planned_command"]
             self.assertIn("--debug_fix_points", ba_command)
+            self.assertIn("--debug_fix_intrinsics", ba_command)
             self.assertIn("--model central_opencv", ba_command)
+            self.assertNotIn("--localize_only", ba_command)
             self.assertIn("--max_ba_iterations 80", ba_command)
 
             eval_command = stages["evaluate_inner_outer_bridge_alignment"]["planned_command"]
@@ -739,6 +741,34 @@ class InnerBridgeRecalibPipelineTest(unittest.TestCase):
                 summary["final_yaml_candidates"]["effective_inner_prior_state_dir"],
                 str(stale_state),
             )
+
+    def test_non_dry_run_blocked_requested_stage_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "data"
+            output_root = root / "out"
+            write_session(data_root, "large_marker_inner8", INNER_CAMERAS[:-1])
+            write_intrinsics(data_root)
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--data-root", str(data_root),
+                    "--output-root", str(output_root),
+                    "--run-large-inner-init",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
+            stages = {stage["name"]: stage for stage in summary["stages"]}
+            self.assertEqual(stages["estimate_large_inner_fixed_intrinsic_rig"]["status"], "blocked_missing_inputs")
+            self.assertIn("estimate_large_inner_fixed_intrinsic_rig", completed.stdout)
 
     def test_failed_allow_failure_stage_does_not_write_success_fingerprint(self):
         with tempfile.TemporaryDirectory() as tmp:

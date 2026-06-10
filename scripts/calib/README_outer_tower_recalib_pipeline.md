@@ -14,7 +14,7 @@ current outer AprilTag-tower recalibration tools:
 Default paths target the current t0 dataset:
 
 ```bash
-/home/ubuntu/calib_data/calib_2026_05_31_v3
+/home/ubuntu/calib_data/calib_2026_05_31_fullres_probe_v1
 ```
 
 If that path is missing, the wrapper still writes `summary.json` and
@@ -142,7 +142,7 @@ rigid yaw-45 tower refine with the `wide200_then_gate6` preset:
 
 ```bash
 python3 scripts/calib/run_outer_tower_recalib_pipeline.py \
-  --data-root /home/ubuntu/calib_data/calib_2026_05_31_v3 \
+  --data-root /home/ubuntu/calib_data/calib_2026_05_31_fullres_probe_v1 \
   --output-root /home/ubuntu/calib_data/studio_calibration_runs/<run-tag>/outer_tower_wrapper \
   --frame-face-output-dir /home/ubuntu/calib_data/studio_calibration_runs/<run-tag>/outer_tower/frame_face_refine_wide200_then_gate6 \
   --run-frame-face-refine \
@@ -375,11 +375,11 @@ observation counts. Delta rotation/translation remains available in
 from final reports because it mostly measures how far the solution moved from
 the coarse prior.
 
-The current t0 `latest` outer result uses all32 bridge-anchored COLMAP frame
-vote plus side-prior as the coarse rig, applies bridge full-pose overrides to
-`4-1,4-2,4-3`, then runs median-error weighted tower PnP initialization and
-tag delta refinement. On the 2026-05-26 `whole` capture it accepts 20/24 camera
-deltas. The wrapper then applies a default post-refine observation trim
+The legacy 2026-05-26 diagnostic outer result used all32 bridge-anchored COLMAP
+frame vote plus side-prior as the coarse rig, applied bridge full-pose overrides
+to `4-1,4-2,4-3`, then ran median-error weighted tower PnP initialization and
+tag delta refinement. On the sparse 2026-05-26 `whole` capture it accepted
+20/24 camera deltas. The wrapper then applied a default post-refine observation trim
 (`--tag-post-refine-observation-residual-gate-px 190`,
 `--tag-post-refine-outer-iterations 2`), removing 180/1841 initially kept
 observations and warm-starting a short second pass. The final accepted-output
@@ -419,7 +419,7 @@ The default bridge anchor for outer reports now comes from the fast all32 bridge
 result when available:
 
 ```text
-/home/ubuntu/calib_data/calib_2026_05_26_jpg_v3/recalib_pipelines/fast_inner_bridge/latest/bridge_colmap_inner_refined_v1/camera_tr_inner_refined_plus_outer_topdown.yaml
+/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260610_black_tile_wide200_pipeline_v2/inner_bridge/large_marker_bridge_all32/fixed_points_joint_ba_stride1_dense_v1/camera_tr_rig.yaml
 ```
 
 For that all32 bridge YAML, top-down anchors use

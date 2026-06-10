@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-DEFAULT_T0_DATA_ROOT = Path("/home/ubuntu/calib_data/calib_2026_05_26_jpg_v3")
+DEFAULT_T0_DATA_ROOT = Path("/home/ubuntu/calib_data/calib_2026_05_31_v3")
 DEFAULT_T0_REPO = Path("/home/ubuntu/camera_calibration")
 DEFAULT_T0_BINARY = Path(
     "/home/ubuntu/camera_calibration/build_t0_current/applications/"
@@ -44,12 +44,13 @@ DEFAULT_T0_BINARY_FALLBACKS = [
     ),
 ]
 DEFAULT_T0_PYTHON = "/home/ubuntu/miniconda3/bin/python"
+CALIB_DATA_ROOT = Path("/home/ubuntu/calib_data")
 DEFAULT_OUTER_FINAL_POSE_YAML = (
-    DEFAULT_T0_DATA_ROOT
-    / "recalib_pipelines/outer_tower/latest/tag_refine_robust/camera_tr_rig_delta_refined_accepted.yaml"
+    CALIB_DATA_ROOT
+    / "studio_calibration_runs/recalib_20260610_black_tile_wide200_pipeline_v2"
+    / "outer_tower/frame_face_refine_wide200_then_gate6/camera_tr_rig_delta_refined.yaml"
 )
 DEFAULT_REPORT_HTTP_ROOT = "http://192.168.2.0:9899"
-CALIB_DATA_ROOT = Path("/home/ubuntu/calib_data")
 
 SMALL_MARKER_PATTERN = (
     "applications/camera_calibration/patterns/"
@@ -2305,7 +2306,7 @@ def build_pipeline_stages(
                 "max_ba_iterations": args.large_bridge_max_ba_iterations,
                 "schur_mode": args.large_bridge_schur_mode,
                 "fixed_known_board_points": True,
-                "localize_only": False,
+                "fixed_intrinsics": True,
                 "manifest": large_manifest,
                 "index_convention": bridge_layout["index_convention"],
             },
@@ -2321,6 +2322,7 @@ def build_pipeline_stages(
                 "--output_directory", str(large_bridge_joint_ba),
                 "--model", args.large_bridge_model,
                 "--debug_fix_points",
+                "--debug_fix_intrinsics",
                 "--num_pyramid_levels", "1",
                 "--outlier_removal_factor", "0",
                 "--max_ba_iterations", str(args.large_bridge_max_ba_iterations),
@@ -2329,8 +2331,9 @@ def build_pipeline_stages(
             ],
             notes=(
                 [
-                    "runs direct BA from all32 PnP initializer; does not use --localize_only, "
-                    "because that path re-localizes per camera and can reset disconnected cameras"
+                    "fixed-intrinsic bridge BA from the all32 PnP initializer; "
+                    "--debug_fix_intrinsics prevents large-marker observations from overfitting rational distortion "
+                    "without re-localizing disconnected cameras"
                 ]
                 if bridge_intrinsics_ready else
                 [f"missing_{bridge_intrinsics['missing_count']}_bridge_intrinsics_files"]
@@ -2527,6 +2530,23 @@ def execute_requested_stages(args, stages, output_root, repo_root):
             if not stage.get("allow_failure"):
                 break
     return stages
+
+
+def hard_failed_stages(args, stages):
+    if args.dry_run:
+        return []
+    failed = []
+    for stage in stages:
+        if stage.get("status") == "failed" and not stage.get("allow_failure"):
+            failed.append(stage)
+            continue
+        if (
+            stage.get("status") == "blocked_missing_inputs"
+            and stage_requested(args, stage.get("group", ""))
+            and not stage.get("allow_failure")
+        ):
+            failed.append(stage)
+    return failed
 
 
 def stage_timing_entry(stage):
@@ -3407,10 +3427,7 @@ def main():
     write_index_html(index_path, summary)
     write_report_entrypoints(output_root, summary)
 
-    hard_failed_stages = [
-        stage for stage in stages
-        if stage.get("status") == "failed" and not stage.get("allow_failure")
-    ]
+    failed_stages = hard_failed_stages(args, stages)
     result = {
         "summary_json": str(summary_path),
         "run_manifest_json": str(manifest_path),
@@ -3421,10 +3438,10 @@ def main():
         "large_marker_status": large_scan["status"],
         "mode": summary["mode"],
     }
-    if hard_failed_stages:
-        result["failed_stages"] = [stage.get("name", "") for stage in hard_failed_stages]
+    if failed_stages:
+        result["failed_stages"] = [stage.get("name", "") for stage in failed_stages]
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 1 if hard_failed_stages else 0
+    return 1 if failed_stages else 0
 
 
 if __name__ == "__main__":

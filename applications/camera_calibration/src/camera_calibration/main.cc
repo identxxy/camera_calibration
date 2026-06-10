@@ -189,6 +189,9 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
   bool debug_fix_points = cmd_parser.Flag(
       "--debug_fix_points",
       "Keep calibration state points fixed during bundle adjustment. This is intended for known-geometry diagnostics and fixed-board bridge refinement.");
+  bool debug_fix_intrinsics = cmd_parser.Flag(
+      "--debug_fix_intrinsics",
+      "Keep loaded camera intrinsics fixed during bundle adjustment. This is intended for fixed-intrinsic rig refinement from an existing state.");
   int max_ba_iterations = 100;
   cmd_parser.NamedParameter(
       "--max_ba_iterations", &max_ba_iterations, /*required*/ false,
@@ -633,6 +636,7 @@ int LIBVIS_QT_MAIN(int argc, char** argv) {
         localize_only,
         skip_bundle_adjustment,
         debug_fix_points,
+        debug_fix_intrinsics,
         max_ba_iterations,
         schur_mode,
         show_visualizations);

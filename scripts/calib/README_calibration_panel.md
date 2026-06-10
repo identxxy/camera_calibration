@@ -88,22 +88,20 @@ Per-operation and diagnostic entrypoints:
 
 - Production whole outer cage panel:
   `http://192.168.2.0:9898/?mode=operate_whole_outer_cage`
-- Fast inner/bridge final report:
-  `http://192.168.2.0:9899/calib_2026_05_26_jpg_v3/recalib_pipelines/fast_inner_bridge/latest/final_report/index.html`
-- Fast inner/bridge summary:
-  `http://192.168.2.0:9899/calib_2026_05_26_jpg_v3/recalib_pipelines/fast_inner_bridge/latest/summary.json`
-- Fast inner/bridge panel:
+- Production large-marker bridge panel:
+  `http://192.168.2.0:9898/?mode=operate_large_marker_bridge`
+- Production small-marker inner panel:
+  `http://192.168.2.0:9898/?mode=operate_small_marker_inner`
+- Current public reports:
+  `http://192.168.2.0:9899/`
+- Diagnostic inner/bridge wrapper panel:
   `http://192.168.2.0:9898/?mode=run_inner_bridge_recalib_pipeline`
-- Outer tower final report:
-  `http://192.168.2.0:9899/calib_2026_05_26_jpg_v3/recalib_pipelines/outer_tower/latest/final_report/index.html`
-- Outer tower summary:
-  `http://192.168.2.0:9899/calib_2026_05_26_jpg_v3/recalib_pipelines/outer_tower/latest/summary.json`
 - Diagnostic/full outer tower panel:
   `http://192.168.2.0:9898/?mode=run_outer_tower_recalib_pipeline`
 
-Existing rough/debug pages remain discoverable under the folded diagnostics
-section. In particular, the outer-only viewer and first-frame COLMAP report must
-not be interpreted as final outer calibration results.
+Historical direct links under dated run directories, including the 2026-05-26
+fast inner/bridge and outer tower reports, are legacy diagnostics only. The
+operator-facing current result is always the curated 9899 root.
 
 ## Run Modes
 

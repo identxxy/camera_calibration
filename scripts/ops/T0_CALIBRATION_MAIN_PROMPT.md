@@ -33,16 +33,15 @@ outer corners 和 2 cm spacing。`wide200_then_gate6` 是当前 production prese
 
 ## 已经完成的整理
 
-- 删除了一个确认有 bug、打开后空白的 inner viewer：
-  `calib_2026_05_26_jpg_v3/recalib_pipelines/fast_inner_bridge/latest/reports/interactive_inner_viewer/index.html`
-- 保留其他历史 report，不继续物理删除；完整 inventory / cleanup audit 作为 debug 入口保留：
-  `http://192.168.2.0:9899/report_audit_20260529_current/index.html`
+- 删除了一个确认有 bug、打开后空白的 legacy inner viewer artifact。
+- 历史 report 不再从首页提升；当前首页由 allowlist publisher 生成，清理记录写入
+  `/home/ubuntu/calib_data/current_calibration/report_cleanup_manifest_latest.json`。
 - 新建了当前 clean entry：
   `http://192.168.2.0:9899/`
 - 新建了 report contract：
   `scripts/ops/README_t0_report_contract.md`
-- 新建/更新了入口生成脚本：
-  `scripts/ops/build_t0_current_calib_entry.py`
+- 当前 canonical homepage publisher：
+  `scripts/ops/publish_t0_clean_calib_reports.py`
 - 更新了 9898 Operation Panel 后端：
   `scripts/calib/calibration_panel_server.py`
 
@@ -71,22 +70,29 @@ pipeline directories 提升成首页组：
 9. bridge 结果报告:
    `09_bridge_result_large_marker`
 
-## 三类数据采集语义
+## 四类数据采集语义
 
-Operation/backend 仍按 capture data type 分成三类：
+Capture/data mode 分成四类；其中 `outer_large_marker` 是低频 outer intrinsic
+refresh，不是常规每次都要点的 9898 semantic operation：
 
-1. `whole`
+1. `outer_large_marker`
+   - 主要目的：用低密度 A4 board 刷新 outer24 per-camera intrinsics。
+   - 只在 outer lens/focus/resolution/distortion convention 改变，或旧 outer
+     intrinsics 被证明不可信时运行。
+   - 常规 inner movement recalib 不需要重新采集它。
+
+2. `whole`
    - 主要目的：标定整体 studio cage，也就是 outer cameras / outer24 camera cage。
    - 不要把 whole 混成 inner/outer bridge 的主入口。
 
-2. `large marker`
+3. `large marker`
    - 主要目的：bridge inner cameras 和 outer cameras。
    - 当前包含 `large_marker_inner8` 和 `large_marker_bridge_all32`。
    - 当前 all32 contract：outer cameras indices `0..23`，inner cameras indices `24..31`。
    - `4-1`, `4-2`, `4-3` 是 top-down hardware/layout metadata 和 legacy
      diagnostics，不再是 production bridge 的唯一 anchors。
 
-3. `small marker`
+4. `small marker`
    - 主要目的：标定 inner cameras。
    - 只服务 inner cameras，不用于 outer bridge。
 

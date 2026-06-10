@@ -37,6 +37,10 @@ artifact, one overall 3D viewer, and seven human reports:
    `/current_calibration/reports/07_outer_extrinsics_whole/index.html`.
 9. Bridge result report:
    `/current_calibration/reports/09_bridge_result_large_marker/index.html`.
+   This bridge page must include the all32 camera-origin projection diagnostic at
+   `/current_calibration/reports/09_bridge_result_large_marker/camera_origin_projection/index.html`;
+   it projects every calibrated camera optical center into every large-marker
+   view camera image for gross bridge extrinsic checks.
 
 The report entry must not add extra top-level groups such as dated scratch
 reports, raw pipeline directories, source/debug viewers, standalone
@@ -70,18 +74,24 @@ The cleanup/publish record lives at:
 /home/ubuntu/calib_data/current_calibration/report_cleanup_manifest_latest.json
 ```
 
-`report_registry.json` may still be emitted for compatibility by older entry
-builders, but the stable human homepage must not expose it as a user-facing
-report. UI code for the current public page should consume the explicit current
-paths above or the cleanup manifest instead of globbing arbitrary report files.
+Old runs may still contain `report_registry.json` from the retired homepage
+builder. The stable human homepage must not expose it as a user-facing report,
+and new code should not regenerate it. UI code for the current public page
+should consume the explicit current paths above or the cleanup manifest instead
+of globbing arbitrary report files.
 
 ## Operation Contract
 
-Every capture data type must have one human Operation page:
+Routine capture data types have one human Operation page:
 
 - `whole`: process the whole capture into outer camera cage calibration.
 - `large marker`: process large-marker captures into the inner/outer bridge.
 - `small marker`: process small-marker captures into inner camera calibration.
+
+`outer_large_marker` is an infrequent outer24 intrinsic-refresh data mode. It is
+covered by the outer data-quality/intrinsic reports, but it is not a routine
+one-click operation unless outer lens/focus/resolution/distortion convention has
+changed or old outer intrinsics are known bad.
 
 The Operation page is allowed to show buttons, but command execution belongs to
 the controlled backend panel, currently served from:

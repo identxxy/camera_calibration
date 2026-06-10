@@ -32,23 +32,32 @@ except ModuleNotFoundError:
     )
 
 
-DEFAULT_T0_ROOT = Path("/home/ubuntu/calib_data/calib_2026_05_26_jpg_v3")
-DEFAULT_FAST_ROOT = DEFAULT_T0_ROOT / "recalib_pipelines/fast_inner_bridge/latest"
-DEFAULT_OUTER_ROOT = DEFAULT_T0_ROOT / "recalib_pipelines/outer_tower/latest"
+DEFAULT_CALIB_ROOT = Path("/home/ubuntu/calib_data")
+DEFAULT_T0_ROOT = Path("/home/ubuntu/calib_data/calib_2026_05_31_v3")
+DEFAULT_STUDIO_RUN_ROOT = (
+    DEFAULT_CALIB_ROOT
+    / "studio_calibration_runs/recalib_20260610_black_tile_wide200_pipeline_v2"
+)
+DEFAULT_BRIDGE_ROOT = DEFAULT_STUDIO_RUN_ROOT / "inner_bridge"
+DEFAULT_OUTER_ROOT = DEFAULT_STUDIO_RUN_ROOT / "outer_tower/frame_face_refine_wide200_then_gate6"
 DEFAULT_INNER_BRIDGE_POSE_YAML = (
-    DEFAULT_FAST_ROOT
-    / "bridge_colmap_inner_refined_v1/camera_tr_inner_refined_plus_outer_topdown.yaml"
+    DEFAULT_BRIDGE_ROOT
+    / "large_marker_bridge_all32/fixed_points_joint_ba_stride1_dense_v1/camera_tr_rig.yaml"
+)
+DEFAULT_SMALL_INNER_POSE_YAML = (
+    DEFAULT_BRIDGE_ROOT
+    / "small_marker_inner8/fixed_intrinsic_small_grid4_quality_probe_v1/camera_tr_rig.yaml"
 )
 DEFAULT_OUTER_FINAL_POSE_YAML = (
     DEFAULT_OUTER_ROOT
-    / "tag_refine_robust/camera_tr_rig_delta_refined_accepted.yaml"
+    / "camera_tr_rig_delta_refined.yaml"
 )
-DEFAULT_OUTPUT_DIR = DEFAULT_FAST_ROOT / "calibration_artifacts/studio_32_extrinsics_current"
-DEFAULT_INTRINSICS_DIR = DEFAULT_FAST_ROOT / "planned_inputs/bridge_all32_fixed_intrinsics"
+DEFAULT_OUTPUT_DIR = DEFAULT_STUDIO_RUN_ROOT / "calibration_artifacts/studio_32_cameras_current"
+DEFAULT_INTRINSICS_DIR = DEFAULT_BRIDGE_ROOT / "planned_inputs/bridge_all32_fixed_intrinsics"
+DEFAULT_OUTER_INTRINSICS_DIR = DEFAULT_BRIDGE_ROOT / "planned_inputs/bridge_all32_fixed_intrinsics"
+DEFAULT_INNER_INTRINSICS_DIR = DEFAULT_SMALL_INNER_POSE_YAML.parent
 DEFAULT_VIEWER_URL = (
-    "http://192.168.2.0:9899/"
-    "calib_2026_05_26_jpg_v3/recalib_pipelines/fast_inner_bridge/latest/"
-    "combined_studio_rig_viewer_v1/index.html"
+    "http://192.168.2.0:9899/current_calibration/reports/01_3d_viewer/index.html"
 )
 
 
@@ -270,8 +279,36 @@ def parse_intrinsics_yaml(path):
     }
 
 
-def write_unified_camera_yaml(path, poses, camera_rows, intrinsics_dir, coordinate_frame=None):
-    intrinsics_dir = Path(intrinsics_dir)
+def validate_intrinsics_sanity(intrinsics, path, max_abs_distortion):
+    if max_abs_distortion <= 0:
+        return
+    model = str(intrinsics.get("model", ""))
+    params = intrinsics.get("parameters", [])
+    if model not in {"CentralOpenCVModel", "CentralOpenCV"} or len(params) < 12:
+        return
+    names = ["k1", "k2", "k3", "k4", "k5", "k6", "p1", "p2"]
+    values = params[4:12]
+    offenders = [
+        f"{name}={value:.6g}"
+        for name, value in zip(names, values)
+        if abs(float(value)) > max_abs_distortion
+    ]
+    if offenders:
+        raise ValueError(
+            f"Refusing unphysical CentralOpenCV distortion in {path}: "
+            f"{', '.join(offenders)} exceeds {max_abs_distortion}. "
+            "Use fixed/safe intrinsics for final studio YAML export."
+        )
+
+
+def write_unified_camera_yaml(
+        path,
+        poses,
+        camera_rows,
+        intrinsics_dir=None,
+        coordinate_frame=None,
+        max_abs_distortion=2.0):
+    intrinsics_dir = Path(intrinsics_dir) if intrinsics_dir else None
     frame_name = coordinate_frame["aligned_coordinate_frame"] if coordinate_frame else "studio_rig_current"
     lines = [
         "# Unified studio 24+8 camera calibration.",
@@ -297,8 +334,15 @@ def write_unified_camera_yaml(path, poses, camera_rows, intrinsics_dir, coordina
         index = int(row["index"])
         pose = poses[index]
         validate_pose(index, pose)
-        intrinsics_path = intrinsics_dir / f"intrinsics{index}.yaml"
+        intrinsics_path_text = row.get("intrinsics_yaml", "")
+        if intrinsics_path_text:
+            intrinsics_path = Path(intrinsics_path_text)
+        else:
+            if intrinsics_dir is None:
+                raise ValueError(f"Missing intrinsics path for camera {index}")
+            intrinsics_path = intrinsics_dir / f"intrinsics{index}.yaml"
         intrinsics = parse_intrinsics_yaml(intrinsics_path)
+        validate_intrinsics_sanity(intrinsics, intrinsics_path, max_abs_distortion)
         qx, qy, qz, qw = matrix_to_quat_xyzw(pose[:3, :3])
         tx, ty, tz = pose[:3, 3]
         parameters = ", ".join(format_float(value) for value in intrinsics["parameters"])
@@ -370,35 +414,39 @@ def average_rotation(rotations):
     return rotation
 
 
-def estimate_reference_from_bridge(bridge_poses, reference_poses):
+def estimate_transform_from_source_to_reference(source_poses, reference_poses, index_pairs, source_label="source"):
     transforms = []
-    for index in range(min(len(OUTER_CAMERA_LABELS), len(bridge_poses), len(reference_poses))):
-        bridge_pose = bridge_poses[index]
-        reference_pose = reference_poses[index]
-        if bridge_pose is None or reference_pose is None:
+    for source_index, reference_index in index_pairs:
+        if source_index >= len(source_poses) or reference_index >= len(reference_poses):
             continue
-        validate_pose(index, bridge_pose)
-        validate_pose(index, reference_pose)
-        transforms.append(invert_pose(reference_pose) @ bridge_pose)
+        source_pose = source_poses[source_index]
+        reference_pose = reference_poses[reference_index]
+        if source_pose is None or reference_pose is None:
+            continue
+        validate_pose(source_index, source_pose)
+        validate_pose(reference_index, reference_pose)
+        transforms.append(invert_pose(reference_pose) @ source_pose)
     if not transforms:
         return np.eye(4, dtype=np.float64), {
-            "outer_alignment_camera_count": 0,
-            "outer_alignment_center_rms_m": None,
-            "outer_alignment_rotation_rms_deg": None,
+            f"{source_label}_alignment_camera_count": 0,
+            f"{source_label}_alignment_center_rms_m": None,
+            f"{source_label}_alignment_rotation_rms_deg": None,
         }
 
-    reference_from_bridge = np.eye(4, dtype=np.float64)
-    reference_from_bridge[:3, :3] = average_rotation([transform[:3, :3] for transform in transforms])
-    reference_from_bridge[:3, 3] = np.mean([transform[:3, 3] for transform in transforms], axis=0)
+    reference_from_source = np.eye(4, dtype=np.float64)
+    reference_from_source[:3, :3] = average_rotation([transform[:3, :3] for transform in transforms])
+    reference_from_source[:3, 3] = np.mean([transform[:3, 3] for transform in transforms], axis=0)
 
     center_residuals = []
     rotation_residuals = []
-    for index in range(min(len(OUTER_CAMERA_LABELS), len(bridge_poses), len(reference_poses))):
-        bridge_pose = bridge_poses[index]
-        reference_pose = reference_poses[index]
-        if bridge_pose is None or reference_pose is None:
+    for source_index, reference_index in index_pairs:
+        if source_index >= len(source_poses) or reference_index >= len(reference_poses):
             continue
-        predicted_reference_pose = bridge_pose @ invert_pose(reference_from_bridge)
+        source_pose = source_poses[source_index]
+        reference_pose = reference_poses[reference_index]
+        if source_pose is None or reference_pose is None:
+            continue
+        predicted_reference_pose = source_pose @ invert_pose(reference_from_source)
         predicted_center = invert_pose(predicted_reference_pose)[:3, 3]
         target_center = invert_pose(reference_pose)[:3, 3]
         center_residuals.append(float(np.linalg.norm(predicted_center - target_center)))
@@ -406,11 +454,20 @@ def estimate_reference_from_bridge(bridge_poses, reference_poses):
         cos_angle = max(-1.0, min(1.0, (float(np.trace(delta_r)) - 1.0) * 0.5))
         rotation_residuals.append(math.degrees(math.acos(cos_angle)))
 
-    return reference_from_bridge, {
-        "outer_alignment_camera_count": len(transforms),
-        "outer_alignment_center_rms_m": float(np.sqrt(np.mean(np.square(center_residuals)))) if center_residuals else None,
-        "outer_alignment_rotation_rms_deg": float(np.sqrt(np.mean(np.square(rotation_residuals)))) if rotation_residuals else None,
+    return reference_from_source, {
+        f"{source_label}_alignment_camera_count": len(transforms),
+        f"{source_label}_alignment_center_rms_m": float(np.sqrt(np.mean(np.square(center_residuals)))) if center_residuals else None,
+        f"{source_label}_alignment_rotation_rms_deg": float(np.sqrt(np.mean(np.square(rotation_residuals)))) if rotation_residuals else None,
     }
+
+
+def estimate_reference_from_bridge(bridge_poses, reference_poses):
+    return estimate_transform_from_source_to_reference(
+        bridge_poses,
+        reference_poses,
+        [(index, index) for index in range(len(OUTER_CAMERA_LABELS))],
+        source_label="outer",
+    )
 
 
 def bridge_poses_in_outer_reference(bridge_poses, outer_reference_poses):
@@ -426,6 +483,32 @@ def bridge_poses_in_outer_reference(bridge_poses, outer_reference_poses):
     return [pose @ bridge_from_reference if pose is not None else None for pose in bridge_poses], summary
 
 
+def resolve_intrinsics_dir(group, args):
+    if args.intrinsics_dir:
+        return Path(args.intrinsics_dir)
+    if group == "outer":
+        return Path(args.outer_intrinsics_dir)
+    if group == "inner":
+        return Path(args.inner_intrinsics_dir)
+    raise ValueError(f"Unknown camera group: {group}")
+
+
+def intrinsics_path_for_group_index(group, index, args):
+    return resolve_intrinsics_dir(group, args) / f"intrinsics{index}.yaml"
+
+
+def small_inner_poses_in_bridge_reference(small_inner_poses, bridge_poses, inner_bridge_indices):
+    index_pairs = [(inner_index, bridge_index) for inner_index, bridge_index in enumerate(inner_bridge_indices)]
+    bridge_from_small, summary = estimate_transform_from_source_to_reference(
+        small_inner_poses,
+        bridge_poses,
+        index_pairs,
+        source_label="small_inner",
+    )
+    small_from_bridge = invert_pose(bridge_from_small)
+    return [pose @ small_from_bridge if pose is not None else None for pose in small_inner_poses], summary
+
+
 def build_combined_poses(args):
     inner_bridge_indices = parse_indices(args.inner_bridge_indices)
     if len(inner_bridge_indices) != 8:
@@ -433,13 +516,53 @@ def build_combined_poses(args):
 
     outer_poses = load_pose_yaml(args.outer_final_pose_yaml)
     inner_bridge_poses = load_pose_yaml(args.inner_bridge_pose_yaml)
-    inner_bridge_poses, bridge_alignment = bridge_poses_in_outer_reference(inner_bridge_poses, outer_poses)
+    bridge_alignment = {}
+    final_pose_source = getattr(args, "final_pose_source", "outer_plus_bridge_inner")
+    if final_pose_source == "outer_plus_bridge_inner":
+        inner_bridge_poses, bridge_alignment = bridge_poses_in_outer_reference(inner_bridge_poses, outer_poses)
+        outer_source_poses = outer_poses
+        inner_source_poses = inner_bridge_poses
+        inner_source_indices = inner_bridge_indices
+        outer_source_yaml = args.outer_final_pose_yaml
+        inner_source_yaml = args.inner_bridge_pose_yaml
+    elif final_pose_source == "bridge_all32":
+        outer_source_poses = inner_bridge_poses
+        inner_source_poses = inner_bridge_poses
+        inner_source_indices = inner_bridge_indices
+        outer_source_yaml = args.inner_bridge_pose_yaml
+        inner_source_yaml = args.inner_bridge_pose_yaml
+        bridge_alignment = {
+            "final_pose_source": "bridge_all32",
+            "note": "using the all32 large-marker bridge solve for both outer and inner camera poses",
+        }
+    elif final_pose_source == "bridge_outer_small_inner":
+        small_inner_poses = load_pose_yaml(args.small_inner_pose_yaml)
+        small_inner_poses, small_alignment = small_inner_poses_in_bridge_reference(
+            small_inner_poses,
+            inner_bridge_poses,
+            inner_bridge_indices,
+        )
+        outer_source_poses = inner_bridge_poses
+        inner_source_poses = small_inner_poses
+        inner_source_indices = list(range(8))
+        outer_source_yaml = args.inner_bridge_pose_yaml
+        inner_source_yaml = args.small_inner_pose_yaml
+        bridge_alignment = {
+            "final_pose_source": "bridge_outer_small_inner",
+            "note": (
+                "using the all32 large-marker bridge solve for outer camera poses and "
+                "small-marker inner8 solve aligned into that bridge frame for inner poses"
+            ),
+            **small_alignment,
+        }
+    else:
+        raise ValueError(f"Unsupported final pose source: {final_pose_source}")
     inner_camera_ids = read_inner_camera_ids(args.inner_manifest)
 
     poses = [None for _ in range(32)]
     rows = []
     for outer_index, label in enumerate(OUTER_CAMERA_LABELS):
-        pose = outer_poses[outer_index]
+        pose = outer_source_poses[outer_index]
         validate_pose(outer_index, pose)
         poses[outer_index] = pose
         rows.append({
@@ -447,13 +570,14 @@ def build_combined_poses(args):
             "label": label,
             "group": "outer",
             "camera_id": label,
-            "source_yaml": str(Path(args.outer_final_pose_yaml).resolve()),
+            "source_yaml": str(Path(outer_source_yaml).resolve()),
             "source_index": outer_index,
+            "intrinsics_yaml": str(intrinsics_path_for_group_index("outer", outer_index, args).resolve()),
         })
 
-    for inner_ordinal, source_index in enumerate(inner_bridge_indices):
+    for inner_ordinal, source_index in enumerate(inner_source_indices):
         output_index = 24 + inner_ordinal
-        pose = inner_bridge_poses[source_index]
+        pose = inner_source_poses[source_index]
         validate_pose(output_index, pose)
         label = f"inner{inner_ordinal}"
         poses[output_index] = pose
@@ -462,8 +586,9 @@ def build_combined_poses(args):
             "label": label,
             "group": "inner",
             "camera_id": inner_camera_ids.get(inner_ordinal, ""),
-            "source_yaml": str(Path(args.inner_bridge_pose_yaml).resolve()),
+            "source_yaml": str(Path(inner_source_yaml).resolve()),
             "source_index": source_index,
+            "intrinsics_yaml": str(intrinsics_path_for_group_index("inner", source_index, args).resolve()),
         })
     return poses, rows, bridge_alignment
 
@@ -504,8 +629,15 @@ def write_manifest(
         "inputs": {
             "outer_final_pose_yaml": str(Path(args.outer_final_pose_yaml).resolve()),
             "inner_bridge_pose_yaml": str(Path(args.inner_bridge_pose_yaml).resolve()),
+            "small_inner_pose_yaml": str(Path(getattr(args, "small_inner_pose_yaml", "")).resolve())
+            if getattr(args, "small_inner_pose_yaml", "") else "",
+            "final_pose_source": getattr(args, "final_pose_source", "outer_plus_bridge_inner"),
             "inner_manifest": str(Path(args.inner_manifest).resolve()) if args.inner_manifest else "",
-            "intrinsics_dir": str(Path(args.intrinsics_dir).resolve()),
+            "intrinsics_dir": str(Path(args.intrinsics_dir).resolve()) if args.intrinsics_dir else "",
+            "outer_intrinsics_dir": str(Path(getattr(args, "outer_intrinsics_dir", "")).resolve())
+            if getattr(args, "outer_intrinsics_dir", "") else "",
+            "inner_intrinsics_dir": str(Path(getattr(args, "inner_intrinsics_dir", "")).resolve())
+            if getattr(args, "inner_intrinsics_dir", "") else "",
             "viewer_url": args.viewer_url,
             "run_tag": args.run_tag,
         },
@@ -513,8 +645,9 @@ def write_manifest(
         "notes": [
             "This file records the 24+8 relative extrinsics matching the current combined Three.js viewer.",
             "studio_32_cameras.yaml is the unified intrinsics + extrinsics file for algorithm consumers.",
-            "Outer camera poses come from the latest accepted outer tower rig.",
-            "Inner camera poses come from bridge indices 24..31 of the current all32 bridge solve.",
+            "The default production export uses the all32 large-marker bridge solve for outer poses.",
+            "The default production export aligns the refined small-marker inner8 solve into that bridge frame for inner poses.",
+            "The older outer_plus_bridge_inner mode is kept only for diagnostics because it can mix inconsistent outer-tower and large-marker frames.",
         ],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -524,14 +657,46 @@ def write_manifest(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--inner-bridge-pose-yaml", type=Path, default=DEFAULT_INNER_BRIDGE_POSE_YAML)
+    parser.add_argument("--small-inner-pose-yaml", type=Path, default=DEFAULT_SMALL_INNER_POSE_YAML)
     parser.add_argument("--outer-final-pose-yaml", type=Path, default=DEFAULT_OUTER_FINAL_POSE_YAML)
     parser.add_argument("--inner-manifest", type=Path, default=DEFAULT_T0_ROOT / "small_marker_inner8/manifest.tsv")
     parser.add_argument("--inner-bridge-indices", default=DEFAULT_INNER_BRIDGE_INDICES)
-    parser.add_argument("--intrinsics-dir", type=Path, default=DEFAULT_INTRINSICS_DIR)
+    parser.add_argument(
+        "--intrinsics-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Legacy override: use one intrinsics directory for all cameras. "
+            "Leave unset for the production mixed outer/inner refined intrinsics."
+        ),
+    )
+    parser.add_argument("--outer-intrinsics-dir", type=Path, default=DEFAULT_OUTER_INTRINSICS_DIR)
+    parser.add_argument("--inner-intrinsics-dir", type=Path, default=DEFAULT_INNER_INTRINSICS_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--run-tag", default="latest")
     parser.add_argument("--viewer-url", default=DEFAULT_VIEWER_URL)
     parser.add_argument("--no-canonical-studio-frame", action="store_true")
+    parser.add_argument(
+        "--max-abs-distortion",
+        type=float,
+        default=2.0,
+        help=(
+            "Reject CentralOpenCVModel intrinsics with any k/p distortion "
+            "coefficient above this absolute value during final YAML export. "
+            "Set <=0 to disable for diagnostics."
+        ),
+    )
+    parser.add_argument(
+        "--final-pose-source",
+        choices=["bridge_outer_small_inner", "bridge_all32", "outer_plus_bridge_inner"],
+        default="bridge_outer_small_inner",
+        help=(
+            "Source of final camera poses. bridge_outer_small_inner uses the all32 "
+            "large-marker bridge solve for outer poses and aligns the small-marker "
+            "inner8 solve into that frame. outer_plus_bridge_inner is the older "
+            "diagnostic mode that keeps outer-tower outer poses."
+        ),
+    )
     args = parser.parse_args()
 
     poses, rows, bridge_alignment = build_combined_poses(args)
@@ -548,7 +713,14 @@ def main():
     manifest_json = output_dir / "manifest.json"
     write_pose_yaml(pose_yaml, poses, coordinate_frame)
     write_label_tsv(label_tsv, rows)
-    write_unified_camera_yaml(unified_yaml, poses, rows, args.intrinsics_dir, coordinate_frame)
+    write_unified_camera_yaml(
+        unified_yaml,
+        poses,
+        rows,
+        args.intrinsics_dir,
+        coordinate_frame,
+        args.max_abs_distortion,
+    )
     write_manifest(
         manifest_json,
         args,

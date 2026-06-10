@@ -136,11 +136,12 @@ preview 时必须使用这个方向，否则 tag corner ordering 会和实物不
 
 八个面从 top-down view 看，ID 由小到大按逆时针排列。
 
-重要设计选择：当前 production outer refine 不再依赖“理想正八面体”或精确
-`face_width_m`。实物 tower 的 face width 和接缝工艺不够精确，强行把八个面
-绑定成理想八棱柱会把几何误差注入 BA。现在默认把每个 observed frame-face
-视为独立平面位姿，tower 的作用是提供稳定、可复用的 tag corner
-correspondence，而不是作为刚性理想八面体模型。
+重要设计选择：当前 production outer refine 不再把实物 tower 当作“精确加工的
+正八棱柱”。实物 face width 和接缝工艺不够精确，所以 `face_width_m` 只能作为
+弱参数优化，不能作为高精度测量来源。当前默认 production 模型是每个同步帧一
+个共享 tower pose、相邻面固定 `360/8 = 45 deg` yaw、每个面的角点坐标由
+8 cm 黑色 tile 边长和 2 cm 间距定义。flex / independent face 模型只作为
+diagnostic 或 fallback。
 
 `whole` 的主要目标：
 

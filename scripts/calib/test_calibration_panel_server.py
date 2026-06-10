@@ -165,11 +165,36 @@ class CalibrationPanelServerTest(unittest.TestCase):
             self.assertIn("--inner-data-root /home/ubuntu/calib_data/calib_2026_05_31_v3", command)
             self.assertIn("--outer-preset wide200_then_gate6", command)
             self.assertIn("--outer-frame-face-prior-pose-yaml", command)
-            self.assertIn("recalib_20260608_rigid_yaw45_v2", command)
-            self.assertIn("frame_face_refine_wide50_then_gate6", command)
+            self.assertIn("recalib_20260610_black_tile_wide200_pipeline_v2", command)
+            self.assertIn("frame_face_refine_wide200_then_gate6", command)
             self.assertIn("--run-small-quality", command)
             self.assertIn("--publish-current", command)
             self.assertIn("--dry-run", command)
+
+    def test_bridge_only_studio_pipeline_passes_explicit_outer_final_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "scripts" / "calib").mkdir(parents=True)
+            manager = panel.JobManager(
+                repo_root=root,
+                runs_root=root / "runs",
+                python_bin=sys.executable,
+            )
+            job = manager.start_job(
+                "run_studio_calibration_pipeline",
+                {"bridge_only": True},
+                dry_run=True,
+            )
+            manager.wait_for_job(job["id"], timeout=5)
+
+            command = json.loads(
+                (Path(job["run_dir"]) / "job.json").read_text(encoding="utf-8")
+            )["steps"][0]["command"]
+
+            self.assertIn("--bridge-only", command)
+            self.assertIn("--outer-final-pose-yaml", command)
+            self.assertIn("--outer-final-intrinsics-dir", command)
+            self.assertIn("recalib_20260610_black_tile_wide200_pipeline_v2", command)
 
     def test_operation_aliases_build_clean_commands(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,8 +230,8 @@ class CalibrationPanelServerTest(unittest.TestCase):
             )
             self.assertIn("--run-frame-face-refine", whole_command)
             self.assertIn("--frame-face-refine-preset wide200_then_gate6", whole_command)
-            self.assertIn("recalib_20260608_rigid_yaw45_v2", whole_command)
-            self.assertIn("frame_face_refine_wide50_then_gate6", whole_command)
+            self.assertIn("recalib_20260610_black_tile_wide200_pipeline_v2", whole_command)
+            self.assertIn("frame_face_refine_wide200_then_gate6", whole_command)
             self.assertNotIn("--run-colmap-vote", whole_command)
             self.assertNotIn("--run-side-prior", whole_command)
             self.assertNotIn("--run-tag-refine", whole_command)

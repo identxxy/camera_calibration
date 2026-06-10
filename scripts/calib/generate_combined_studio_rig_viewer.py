@@ -1359,7 +1359,7 @@ def estimate_board_orientation_alignment(args, gravity_alignment):
     if is_frame_face_pose_path(tower_pose_path):
         tower_local_normals = [[1.0, 0.0, 0.0]]
         tower_description = (
-            "AprilTag tower independent frame-face plane normals from rig_tr_frame_face; "
+            "AprilTag tower accepted frame-face normals from rig_tr_frame_face; "
             "they should be horizontal when each tag face is vertical."
         )
     else:

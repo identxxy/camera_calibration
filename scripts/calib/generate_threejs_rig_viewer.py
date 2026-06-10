@@ -1355,6 +1355,7 @@ let coverageMode = ((RIG_DATA.dataset_coverage || {}).default_mode) || "whole";
 let currentFrameMode = "iso";
 let worldFromCam0Quat = initialWorldFromReferenceQuaternion();
 let transformControl = null;
+let calibratedViewCameraIndex = null;
 let worldGizmoPointerActive = false;
 let worldGizmoDragging = false;
 let correspondenceData = null;
@@ -1531,6 +1532,26 @@ function addScaled(base, vectors) {
   return out;
 }
 
+function frustumCornerScales(cam, depth) {
+  const intrinsics = cameraViewIntrinsics(cam);
+  if (intrinsics) {
+    return {
+      left: -intrinsics.cx / intrinsics.fx * depth,
+      right: (intrinsics.width - intrinsics.cx) / intrinsics.fx * depth,
+      top: -intrinsics.cy / intrinsics.fy * depth,
+      bottom: (intrinsics.height - intrinsics.cy) / intrinsics.fy * depth,
+    };
+  }
+  const halfW = RIG_DATA.frustum.half_width_over_depth * depth;
+  const halfH = RIG_DATA.frustum.half_height_over_depth * depth;
+  return {
+    left: -halfW,
+    right: halfW,
+    top: -halfH,
+    bottom: halfH,
+  };
+}
+
 function makeGeometryFromLines(lines) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(flattenLines(lines), 3));
@@ -1542,17 +1563,14 @@ function calcFrustum(cam, nearValue, farValue) {
   const xAxis = v3(cam.basis.x).normalize();
   const yAxis = v3(cam.basis.y).normalize();
   const zAxis = v3(cam.basis.z).normalize();
-  const sx = RIG_DATA.frustum.half_width_over_depth;
-  const sy = RIG_DATA.frustum.half_height_over_depth;
 
   function planeCorners(depth) {
-    const halfW = sx * depth;
-    const halfH = sy * depth;
+    const scales = frustumCornerScales(cam, depth);
     return [
-      addScaled(center, [[zAxis, depth], [xAxis, halfW], [yAxis, halfH]]),
-      addScaled(center, [[zAxis, depth], [xAxis, -halfW], [yAxis, halfH]]),
-      addScaled(center, [[zAxis, depth], [xAxis, -halfW], [yAxis, -halfH]]),
-      addScaled(center, [[zAxis, depth], [xAxis, halfW], [yAxis, -halfH]]),
+      addScaled(center, [[zAxis, depth], [xAxis, scales.right], [yAxis, scales.bottom]]),
+      addScaled(center, [[zAxis, depth], [xAxis, scales.left], [yAxis, scales.bottom]]),
+      addScaled(center, [[zAxis, depth], [xAxis, scales.left], [yAxis, scales.top]]),
+      addScaled(center, [[zAxis, depth], [xAxis, scales.right], [yAxis, scales.top]]),
     ];
   }
 
@@ -2586,10 +2604,10 @@ function updateCorrespondenceOverlay() {
     ? pointSelect.selectedOptions[0].textContent
     : (pointGroupKey === "__all__" ? "all" : pointGroupKey);
   let modeNote = name === "whole" && groupMode === "face_id"
-    ? " Face ID mode arranges the whole capture by one tower face across all selected frames using final independent face-plane poses."
+    ? " Face ID mode arranges the whole capture by one tower face across all selected frames using the final accepted tower model."
     : "";
   if (name === "whole" && groupMode === "timeline") {
-    modeNote = " Timeline mode shows the selected synchronized frame using final independent frame-face plane poses from BA; no ideal octagon and no face-width constraint are applied. Cyan rectangles are "
+    modeNote = " Timeline mode shows the selected synchronized frame using the final accepted tower model from BA: one shared tower pose per synchronized frame, fixed 45 degree face yaw, and 8 cm black-tile corners with 2 cm spacing. Cyan rectangles are "
       + faceOutlineInfo.count + " accepted frame-face planes in this frame; orange trail has "
       + trailInfo.count + " frame centers.";
   }
@@ -2673,7 +2691,7 @@ function buildScene() {
       const imageMaterial = new THREE.MeshBasicMaterial({
         color: 0xffffff,
         transparent: true,
-        opacity: 0.92,
+        opacity: 0.25,
         side: THREE.FrontSide,
         depthWrite: false,
       });
@@ -2921,6 +2939,103 @@ function selectedCameraData() {
   return RIG_DATA.cameras.find((cam) => cam.index === selectedIndex) || null;
 }
 
+function numericOrNull(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function cameraViewIntrinsics(cam) {
+  const q = calibrationQuality(cam);
+  const size = q.intrinsics_image_size || q.image_size || [q.image_width, q.image_height];
+  const width = Array.isArray(size) ? numericOrNull(size[0]) : numericOrNull(q.image_width);
+  const height = Array.isArray(size) ? numericOrNull(size[1]) : numericOrNull(q.image_height);
+  const fx = numericOrNull(q.fx);
+  const fy = numericOrNull(q.fy);
+  const cx = numericOrNull(q.cx);
+  const cy = numericOrNull(q.cy);
+  if (!fx || !fy || cx === null || cy === null || !width || !height) {
+    return null;
+  }
+  return {fx, fy, cx, cy, width, height};
+}
+
+function resetOverviewProjection() {
+  const width = Math.max(320, viewport.clientWidth);
+  const height = Math.max(320, viewport.clientHeight);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+}
+
+function applyCalibratedProjectionFromIntrinsics(intrinsics) {
+  const viewportWidth = Math.max(320, viewport.clientWidth);
+  const viewportHeight = Math.max(320, viewport.clientHeight);
+  const scale = Math.min(viewportWidth / intrinsics.width, viewportHeight / intrinsics.height);
+  const imageWidth = intrinsics.width * scale;
+  const imageHeight = intrinsics.height * scale;
+  const offsetX = (viewportWidth - imageWidth) * 0.5;
+  const offsetY = (viewportHeight - imageHeight) * 0.5;
+  const fx = intrinsics.fx * scale;
+  const fy = intrinsics.fy * scale;
+  const cx = intrinsics.cx * scale + offsetX;
+  const cy = intrinsics.cy * scale + offsetY;
+  const near = Math.max(camera.near || 0.005, 0.001);
+  const far = Math.max(camera.far || 100.0, near + 1.0);
+  const projection = new THREE.Matrix4();
+  projection.set(
+    2.0 * fx / viewportWidth, 0.0, 1.0 - 2.0 * cx / viewportWidth, 0.0,
+    0.0, 2.0 * fy / viewportHeight, 2.0 * cy / viewportHeight - 1.0, 0.0,
+    0.0, 0.0, -(far + near) / (far - near), -2.0 * far * near / (far - near),
+    0.0, 0.0, -1.0, 0.0
+  );
+  camera.projectionMatrix.copy(projection);
+  camera.projectionMatrixInverse.copy(projection).invert();
+}
+
+function enterCalibratedCameraView(cam) {
+  if (!cam) return;
+  const intrinsics = cameraViewIntrinsics(cam);
+  const position = cam0ToWorldPoint(cam.center);
+  const forward = v3(cam.basis.z).applyQuaternion(worldFromCam0Quat).normalize();
+  const imageDown = v3(cam.basis.y).applyQuaternion(worldFromCam0Quat).normalize();
+  const screenUp = imageDown.multiplyScalar(-1.0);
+  calibratedViewCameraIndex = cam.index;
+  camera.position.copy(position);
+  camera.up.copy(screenUp);
+  camera.near = 0.005;
+  camera.far = Math.max(20.0, radius * 20.0);
+  camera.lookAt(position.clone().add(forward));
+  if (intrinsics) {
+    applyCalibratedProjectionFromIntrinsics(intrinsics);
+  } else {
+    resetOverviewProjection();
+  }
+  if (controls) {
+    controls.enabled = false;
+    controls.target.copy(position.clone().add(forward));
+    controls.update();
+  }
+  updateSelectedPanel();
+}
+
+function reapplyCalibratedCameraViewIfActive() {
+  if (calibratedViewCameraIndex === null) return false;
+  const cam = RIG_DATA.cameras.find((item) => item.index === calibratedViewCameraIndex);
+  if (!cam) {
+    calibratedViewCameraIndex = null;
+    return false;
+  }
+  enterCalibratedCameraView(cam);
+  return true;
+}
+
+function leaveCalibratedCameraView() {
+  calibratedViewCameraIndex = null;
+  if (controls) {
+    controls.enabled = true;
+  }
+  resetOverviewProjection();
+}
+
 function updateSelectedPanel() {
   const cam = selectedCameraData();
   const el = document.getElementById("selected");
@@ -2952,16 +3067,24 @@ function updateSelectedPanel() {
     + fmt((m.delta_translation_m || 0) * 1000.0, 3) + " mm, "
     + fmt(m.delta_rotation_deg, 4) + " deg<br>"
     + "rotation from cam0: " + fmt(m.rotation_deg, 3) + " deg<br>"
-    + "first frame image: " + (cam.image_url ? cam.image_url : "missing");
+    + "first frame image: " + (cam.image_url ? cam.image_url : "missing") + "<br>"
+    + "view mode: " + (calibratedViewCameraIndex === cam.index
+      ? "calibrated camera view (projection from fx/fy/cx/cy)"
+      : "overview");
 }
 
 function selectCamera(index, focus) {
   selectedIndex = index;
+  if (focus && calibratedViewCameraIndex === index) {
+    frameRig(currentFrameMode);
+    updateSelectedPanel();
+    return;
+  }
   updateSelectedPanel();
   if (focus) {
     const cam = selectedCameraData();
     if (cam) {
-      controls.target.copy(cam0ToWorldPoint(cam.center));
+      enterCalibratedCameraView(cam);
     }
   }
 }
@@ -2986,7 +3109,7 @@ function applyCoverageStyle(item, visible) {
   setObjectOpacity(item.line, lineOpacity);
   setObjectOpacity(item.fill, fillOpacity);
   if (item.imagePlane) {
-    setObjectOpacity(item.imagePlane, active ? 0.92 : 0.12);
+    setObjectOpacity(item.imagePlane, active ? 0.25 : 0.05);
   }
   const sceneItem = cameraSceneObjects.get(item.cam.index);
   if (sceneItem) {
@@ -3067,6 +3190,8 @@ function applyWorldFromCam0(refit, syncPivotPosition = true) {
   }
   if (refit) {
     frameRig(currentFrameMode);
+  } else {
+    reapplyCalibratedCameraViewIfActive();
   }
 }
 
@@ -3114,6 +3239,7 @@ function projectedCameraUp(preferredUp, viewDirection) {
 }
 
 function frameRig(mode) {
+  leaveCalibratedCameraView();
   currentFrameMode = mode;
   const c = bounds.center;
   const mobile = viewport.clientWidth <= 760;
@@ -3169,9 +3295,7 @@ function setGizmoToggle(buttonId) {
     }
     worldGizmoDragging = false;
     worldGizmoPointerActive = false;
-    if (controls) {
-      controls.enabled = true;
-    }
+    if (controls) controls.enabled = calibratedViewCameraIndex === null;
     button.classList.toggle("active", visible);
   });
 }
@@ -3229,8 +3353,9 @@ function onResize() {
   const width = Math.max(320, viewport.clientWidth);
   const height = Math.max(320, viewport.clientHeight);
   renderer.setSize(width, height);
-  camera.aspect = width / height;
-  camera.updateProjectionMatrix();
+  if (!reapplyCalibratedCameraViewIfActive()) {
+    resetOverviewProjection();
+  }
 }
 
 function animate() {

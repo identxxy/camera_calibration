@@ -199,20 +199,44 @@ def pose_from_yaml_node(node):
 
 
 def load_reference_camera_poses(path):
+    return load_reference_cameras(path)[0]
+
+
+def reference_intrinsics_from_camera(camera):
+    intrinsics = camera.get("intrinsics") or {}
+    model_type = str(intrinsics.get("model") or intrinsics.get("type") or "").strip()
+    if model_type in {"CentralOpenCV", "CentralOpenCVModel"}:
+        model_type = "CentralOpenCVModel"
+    parameters = [float(value) for value in intrinsics.get("parameters", [])]
+    if model_type in {"CentralOpenCVModel", "CentralThinPrismFisheyeModel"}:
+        parameters = (parameters + [0.0] * 12)[:12]
+    return {
+        "type": model_type,
+        "width": int(intrinsics.get("width", 0)),
+        "height": int(intrinsics.get("height", 0)),
+        "parameters": np.asarray(parameters, dtype=np.float64),
+        "use_equidistant_projection": bool(intrinsics.get("use_equidistant_projection", True)),
+    }
+
+
+def load_reference_cameras(path):
     if not path:
-        return {}
+        return {}, {}
     path = Path(path)
     if not path.is_file():
-        return {}
+        return {}, {}
     node = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     poses = {}
+    intrinsics = {}
     for camera in node.get("cameras", []) or []:
         index = int(camera.get("index", len(poses)))
         poses[index] = pose_from_yaml_node(camera)
+        if camera.get("intrinsics"):
+            intrinsics[index] = reference_intrinsics_from_camera(camera)
     for pose in node.get("poses", []) or []:
         index = int(pose.get("index", len(poses)))
         poses[index] = pose_from_yaml_node(pose)
-    return poses
+    return poses, intrinsics
 
 
 def average_rotation(rotations):
@@ -500,7 +524,7 @@ def export_rows(args):
     points, feature_to_point = load_points(state_dir / "points.yaml")
     intrinsics = load_intrinsics_set(state_dir, args.intrinsics_dir, dataset["camera_count"])
     manifest = load_manifest(args.manifest)
-    reference_poses = load_reference_camera_poses(args.reference_studio32_yaml)
+    reference_poses, reference_intrinsics = load_reference_cameras(args.reference_studio32_yaml)
     reference_tr_state, reference_summary = estimate_reference_tr_state(
         camera_rotations,
         camera_translations,
@@ -566,8 +590,22 @@ def export_rows(args):
                             row["world_x"] = format_float(world_point[0])
                             row["world_y"] = format_float(world_point[1])
                             row["world_z"] = format_float(world_point[2])
-                            camera_point = camera_rotations[camera_index] @ rig_point + camera_translations[camera_index]
-                            status, projected = project_point(camera_point, intrinsics[camera_index])
+                            if args.project_with_reference_yaml:
+                                reference_index = output_camera_index
+                                reference_pose = reference_poses.get(reference_index)
+                                projection_intrinsics = reference_intrinsics.get(reference_index)
+                                if reference_pose is None:
+                                    status = "missing_reference_camera_pose"
+                                    projected = None
+                                elif projection_intrinsics is None:
+                                    status = "missing_reference_intrinsics"
+                                    projected = None
+                                else:
+                                    camera_point = transform_point(reference_pose, world_point)
+                                    status, projected = project_point(camera_point, projection_intrinsics)
+                            else:
+                                camera_point = camera_rotations[camera_index] @ rig_point + camera_translations[camera_index]
+                                status, projected = project_point(camera_point, intrinsics[camera_index])
                             if projected is not None:
                                 observed = np.asarray([feature["x"], feature["y"]], dtype=np.float64)
                                 residual = projected - observed
@@ -589,6 +627,7 @@ def export_rows(args):
         "state_dir": str(state_dir.resolve(strict=False)),
         "output_tsv": str(args.output_tsv.resolve(strict=False)),
         "reference_studio32_yaml": str(Path(args.reference_studio32_yaml).resolve(strict=False)) if args.reference_studio32_yaml else "",
+        "project_with_reference_yaml": bool(args.project_with_reference_yaml),
         "camera_index_offset": int(args.camera_index_offset),
         "row_count": row_count,
         "status_counts": status_counts,
@@ -615,6 +654,15 @@ def parse_args(argv=None):
     parser.add_argument("--intrinsics-dir", type=Path)
     parser.add_argument("--camera-index-offset", type=int, default=0)
     parser.add_argument("--reference-studio32-yaml", type=Path)
+    parser.add_argument(
+        "--project-with-reference-yaml",
+        action="store_true",
+        help=(
+            "Project with camera poses and intrinsics from --reference-studio32-yaml "
+            "after aligning the local solver state into that reference frame. "
+            "Without this flag, residuals are computed in the local solver state."
+        ),
+    )
     parser.add_argument("--summary-json", type=Path)
     return parser.parse_args(argv)
 

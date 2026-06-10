@@ -631,6 +631,31 @@ class OuterTowerRecalibPipelineTest(unittest.TestCase):
             self.assertGreaterEqual(started.timestamp(), before - 1.0)
             self.assertLessEqual(finished.timestamp(), after + 1.0)
 
+    def test_non_dry_run_missing_inputs_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_root = root / "out"
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--data-root", str(root / "missing_data"),
+                    "--output-root", str(output_root),
+                    "--run-frame-face-refine",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
+            stages = {stage["name"]: stage for stage in summary["stages"]}
+            self.assertEqual(stages["frame_face_refine"]["status"], "missing_inputs")
+            self.assertIn("frame_face_refine", completed.stdout)
+
     def test_legacy_tag_summary_reports_fixed_intrinsics_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             tag_dir = Path(tmp)

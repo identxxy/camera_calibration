@@ -16,9 +16,18 @@ import sys
 import time
 
 
-T0_DATA_ROOT = Path("/home/ubuntu/calib_data/calib_2026_05_26_jpg_v3")
+T0_DATA_ROOT = Path("/home/ubuntu/calib_data/calib_2026_05_31_fullres_probe_v1")
 T0_HTTP_ROOT = Path("/home/ubuntu/calib_data")
 T0_HTTP_BASE = "http://192.168.2.0:9899"
+DEFAULT_CURRENT_STUDIO_RUN_ROOT = (
+    T0_HTTP_ROOT
+    / "studio_calibration_runs/recalib_20260610_black_tile_wide200_pipeline_v2"
+)
+DEFAULT_CURRENT_ALL32_BRIDGE_POSE_YAML = (
+    DEFAULT_CURRENT_STUDIO_RUN_ROOT
+    / "inner_bridge/large_marker_bridge_all32"
+    / "fixed_points_joint_ba_stride1_dense_v1/camera_tr_rig.yaml"
+)
 DEFAULT_LEGACY_ANCHOR_LABEL_TO_POSE_INDEX = "4-1:8,4-2:9,4-3:10"
 DEFAULT_ALL32_ANCHOR_LABEL_TO_POSE_INDEX = "4-1:9,4-2:10,4-3:11"
 # Production whole-tower BA should use physical black-tile outer corners:
@@ -314,6 +323,7 @@ def choose_first_existing(candidates, fallback):
 def default_anchor_pose_yaml(data_root):
     return choose_first_existing(
         [
+            DEFAULT_CURRENT_ALL32_BRIDGE_POSE_YAML,
             data_root
             / "recalib_pipelines"
             / "fast_inner_bridge"
@@ -325,12 +335,7 @@ def default_anchor_pose_yaml(data_root):
             / "bridge_colmap_inner_refined_v1"
             / "camera_tr_inner_refined_plus_outer_topdown.yaml",
         ],
-        data_root
-        / "recalib_pipelines"
-        / "fast_inner_bridge"
-        / "latest"
-        / "bridge_colmap_inner_refined_v1"
-        / "camera_tr_inner_refined_plus_outer_topdown.yaml",
+        DEFAULT_CURRENT_ALL32_BRIDGE_POSE_YAML,
     )
 
 
@@ -1460,6 +1465,16 @@ def execute_stages(stages, paths, dry_run, force=False):
     return results
 
 
+def hard_failed_stages(stage_results, dry_run=False):
+    if dry_run:
+        return []
+    hard_statuses = {"failed", "missing_inputs"}
+    return [
+        stage for stage in stage_results
+        if stage.get("requested") and stage.get("status") in hard_statuses
+    ]
+
+
 def collect_summary(args, paths, stage_results, run_started_at="", run_finished_at="", total_duration=0.0):
     final_pose, final_source = final_pose_candidate(paths, args, stage_results)
     final_metrics = final_metrics_candidate(paths, final_source)
@@ -1922,8 +1937,9 @@ def parse_args():
         "--run-frame-face-refine",
         action="store_true",
         help=(
-            "Run the independent frame/face AprilTag tower refine path. "
-            "This is the current high-quality subset outer-cage candidate path."
+            "Run the accepted frame-face AprilTag tower refine path. "
+            "The production preset uses a shared synchronized-frame tower pose "
+            "with fixed 45 degree adjacent face yaw."
         ),
     )
     parser.add_argument("--run-quality", action="store_true")
@@ -2108,6 +2124,7 @@ def main():
         "final_pose_yaml": summary["final"]["pose_yaml"],
         "viewer_url": summary["final"]["viewer_url"],
         "stage_status": {stage["name"]: stage["status"] for stage in stage_results},
+        "hard_failed_stages": [stage["name"] for stage in hard_failed_stages(stage_results, args.dry_run)],
     }, indent=2, sort_keys=True))
     if args.dry_run:
         print("\nPlanned commands:")
@@ -2116,6 +2133,7 @@ def main():
                 print(f"[{stage['name']}] {stage['status']}")
                 for command in stage["commands"]:
                     print(command)
+    return 1 if hard_failed_stages(stage_results, args.dry_run) else 0
 
 
 if __name__ == "__main__":

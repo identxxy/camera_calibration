@@ -8,20 +8,24 @@ adjustment, and must still leave stable report entrypoints.
 Default t0 paths:
 
 ```bash
-/home/ubuntu/calib_data/calib_2026_05_26_jpg_v3
+/home/ubuntu/calib_data/calib_2026_05_31_v3
 http://192.168.2.0:9899
 ```
+
+For the concise production command map, start with
+`scripts/calib/README_studio_operation_commands.md`. This wrapper document is
+the lower-level diagnostic/implementation reference.
 
 Panel-compatible dry-run:
 
 ```bash
 python3 scripts/calib/run_inner_bridge_recalib_pipeline.py \
-  --stage-root /home/ubuntu/calib_data/calib_2026_05_26_jpg_v3 \
-  --output-root /home/ubuntu/calib_data/calib_2026_05_26_jpg_v3/recalib_pipelines/fast_inner_bridge/latest \
+  --stage-root /home/ubuntu/calib_data/calib_2026_05_31_v3 \
+  --output-root /home/ubuntu/calib_data/studio_calibration_runs/<run-tag>/inner_bridge \
   --small-marker-sequence small_marker_inner8 \
   --large-inner-marker-sequence large_marker_inner8 \
   --large-marker-sequence large_marker_bridge_all32 \
-  --run-tag latest \
+  --run-tag <run-tag> \
   --dry-run \
   --force
 ```
@@ -58,9 +62,12 @@ Capture the board around the inner working volume with these requirements:
   intrinsics unless resolution, focus, lens, or distortion convention changed.
 
 The intended solve uses the all32 large-board PnP state as an initializer, then
-runs direct all32 joint BA with known board points fixed. The production bridge
-quality is the post-BA correspondence reprojection residual. The PnP summary is
-kept as initializer/connectivity metadata only.
+runs direct all32 joint BA with both known board points and camera intrinsics
+fixed. This warm-start BA path uses `--debug_fix_points --debug_fix_intrinsics`;
+it must not use `--localize_only` for production all32 bridge output because
+that mode can re-localize disconnected cameras into a different reference. The
+production bridge quality is the post-BA correspondence reprojection residual.
+The PnP summary is kept as initializer/connectivity metadata only.
 
 ## Bridge all32 camera convention
 
@@ -117,8 +124,8 @@ The wrapper keeps heavy compute opt-in:
    is allowed to flag disconnected cameras; it does not replace the large-inner
    baseline.
 4. Plan a large-marker all32 PnP initializer, then run direct all32 joint BA
-   with fixed known board points. The final bridge residual is exported from
-   the BA state, not from the PnP initializer.
+   with fixed known board points and fixed camera intrinsics. The final bridge
+   residual is exported from the BA state, not from the PnP initializer.
 5. Generate stable entrypoint reports for panel links.
 
 The legacy inner/outer bridge evaluator remains as a diagnostic for historical
@@ -156,16 +163,17 @@ studio frame needs refresh, run just the all32 bridge path:
 
 ```bash
 python3 scripts/calib/run_inner_bridge_recalib_pipeline.py \
-  --data-root /home/ubuntu/calib_data/calib_2026_05_26_jpg_v3 \
-  --output-root /home/ubuntu/calib_data/calib_2026_05_26_jpg_v3/recalib_pipelines/fast_inner_bridge/latest \
+  --data-root /home/ubuntu/calib_data/calib_2026_05_31_v3 \
+  --output-root /home/ubuntu/calib_data/studio_calibration_runs/<run-tag>/inner_bridge \
   --large-marker-sequence large_marker_bridge_all32 \
+  --run-tag <run-tag> \
   --run-large-bridge \
   --run-reports \
   --force
 ```
 
 This reuses the selected intrinsics, initializes from all32 PnP, then refines
-the all32 bridge state with fixed known board points. Re-run
+the all32 bridge state with fixed known board points and fixed intrinsics. Re-run
 `--run-large-inner-init` first when the inner cameras were physically moved
 relative to each other or the prior inner extrinsics are suspect.
 

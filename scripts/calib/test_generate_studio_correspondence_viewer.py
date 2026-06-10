@@ -654,6 +654,8 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
 
             summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
             stages = {stage["name"]: stage for stage in summary["stages"]}
+            self.assertIn("generate_bridge_camera_origin_projection", stages)
+            self.assertTrue(stages["generate_bridge_camera_origin_projection"]["requested"])
             self.assertIn("generate_advanced_correspondence_viewer", stages)
             self.assertTrue(stages["generate_advanced_correspondence_viewer"]["requested"])
             command = stages["generate_advanced_correspondence_viewer"]["commands"][0]
@@ -666,7 +668,7 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
                 summary["outputs"]["advanced_correspondence_viewer"],
                 str(output_root / "advanced_correspondence_viewer_v1" / "index.html"),
             )
-            self.assertEqual(summary["run_timing"]["stage_count"], 8)
+            self.assertEqual(summary["run_timing"]["stage_count"], 9)
 
 
 if __name__ == "__main__":

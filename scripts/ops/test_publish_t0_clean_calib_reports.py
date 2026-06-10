@@ -32,6 +32,7 @@ class PublishT0CleanCalibReportsTest(unittest.TestCase):
                 "OUTER_LARGE_QC_ROOT",
                 "WHOLE_QC_ROOT",
                 "OUTER_FRAME_FACE_REPORT_ROOT",
+                "BRIDGE_CAMERA_ORIGIN_PROJECTION_REPORT",
             ]
         }
         try:
@@ -53,6 +54,10 @@ class PublishT0CleanCalibReportsTest(unittest.TestCase):
                 self.assertEqual(
                     publisher.OUTER_FRAME_FACE_REPORT_ROOT,
                     root / "studio_calibration_runs/new_run/outer_tower/frame_face_refine_wide200_then_gate6",
+                )
+                self.assertEqual(
+                    publisher.BRIDGE_CAMERA_ORIGIN_PROJECTION_REPORT,
+                    root / "studio_calibration_runs/new_run/inner_bridge/reports/bridge_all32_camera_origin_projection",
                 )
         finally:
             for name, value in old_values.items():

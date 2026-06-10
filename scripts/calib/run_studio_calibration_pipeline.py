@@ -28,12 +28,12 @@ DEFAULT_OUTER_COLMAP_PRIOR = (
     / "colmap_outer24_firstframe_colmap404_v3/fixed_intrinsics/sparse_txt_final24_fixedK_ba/images.txt"
 )
 DEFAULT_OUTER_FRAME_FACE_PRIOR_POSE_YAML = (
-    Path("/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260608_rigid_yaw45_v2")
-    / "outer_tower/frame_face_refine_wide50_then_gate6/camera_tr_rig_delta_refined.yaml"
+    Path("/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260610_black_tile_wide200_pipeline_v2")
+    / "outer_tower/frame_face_refine_wide200_then_gate6/camera_tr_rig_delta_refined.yaml"
 )
 DEFAULT_OUTER_FRAME_FACE_INTRINSICS_DIR = (
-    Path("/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260608_rigid_yaw45_v2")
-    / "outer_tower/frame_face_refine_wide50_then_gate6/intrinsics_refined"
+    Path("/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260610_black_tile_wide200_pipeline_v2")
+    / "outer_tower/frame_face_refine_wide200_then_gate6/intrinsics_refined"
 )
 DEFAULT_OUTER_INTRINSIC_METRICS_TSV = (
     Path("/home/ubuntu/calib_data/calib_2026_06_04_outer_large_marker_v2")
@@ -124,11 +124,15 @@ def build_paths(args):
     outer_pose_yaml = (
         resolve_path(args.outer_final_pose_yaml)
         if args.outer_final_pose_yaml
+        else resolve_path(DEFAULT_OUTER_FRAME_FACE_PRIOR_POSE_YAML)
+        if args.bridge_only
         else outer_frame_face_dir / "camera_tr_rig_delta_refined.yaml"
     )
     outer_intrinsics_dir = (
         resolve_path(args.outer_final_intrinsics_dir)
         if args.outer_final_intrinsics_dir
+        else resolve_path(DEFAULT_OUTER_FRAME_FACE_INTRINSICS_DIR)
+        if args.bridge_only
         else outer_frame_face_dir / "intrinsics_refined"
     )
     outer_large_opencv_intrinsics_dir = resolve_path(args.outer_large_opencv_intrinsics_dir)
@@ -193,6 +197,7 @@ def build_paths(args):
         "large_marker_dataset": bridge_root / args.large_marker_sequence / f"features_parallel_pattern0_bridge_stride{args.large_frame_stride}_v1.bin",
         "large_marker_state_dir": large_marker_ba_state_dir,
         "large_marker_manifest": bridge_root / "planned_inputs" / "large_marker_usable_manifest.tsv",
+        "bridge_camera_origin_projection_report": bridge_root / "reports" / "bridge_all32_camera_origin_projection",
         "small_marker_dataset": bridge_root / args.small_marker_sequence / f"features_pattern3_grid4_stride{args.small_frame_stride}_fast_v1.bin",
         "small_marker_state_dir": bridge_root / args.small_marker_sequence / "fixed_intrinsic_small_grid4_quality_probe_v1",
         "small_marker_manifest": bridge_root / "planned_inputs" / "small_marker_usable_manifest.tsv",
@@ -299,11 +304,29 @@ def export_unified_command(args, paths):
         sys.executable,
         repo_root() / "scripts/calib/export_combined_studio_extrinsics.py",
         "--inner-bridge-pose-yaml", paths["bridge_pose_yaml"],
+        "--small-inner-pose-yaml", paths["small_marker_state_dir"] / "camera_tr_rig.yaml",
         "--outer-final-pose-yaml", paths["outer_pose_yaml"],
-        "--intrinsics-dir", paths["bridge_intrinsics_dir"],
+        "--outer-intrinsics-dir", paths["bridge_intrinsics_dir"],
+        "--inner-intrinsics-dir", paths["small_marker_state_dir"],
+        "--final-pose-source", "bridge_outer_small_inner",
         "--output-dir", paths["unified_artifact_dir"],
         "--run-tag", args.run_tag,
         "--viewer-url", report_url(paths["bridge_viewer"], args.http_root, args.report_url_base),
+    ]
+
+
+def bridge_origin_projection_command(args, paths):
+    return [
+        sys.executable,
+        repo_root() / "scripts/calib/generate_camera_origin_projection_report.py",
+        "--title", "Bridge Camera-Origin Projection - all32 large_marker",
+        "--studio-yaml", paths["unified_camera_yaml"],
+        "--camera-group", "all",
+        "--manifest", paths["large_marker_manifest"],
+        "--output-dir", paths["bridge_camera_origin_projection_report"],
+        "--capture-kind", "large_marker",
+        "--frame-index", str(args.bridge_projection_frame_index),
+        "--max-image-width", str(args.bridge_projection_max_image_width),
     ]
 
 
@@ -364,6 +387,7 @@ def marker_correspondence_command(args, paths, dataset_name):
         "--dataset-name", dataset_name,
         "--manifest", manifest,
         "--reference-studio32-yaml", paths["unified_camera_yaml"],
+        "--project-with-reference-yaml",
         "--camera-index-offset", str(camera_index_offset),
     ]
 
@@ -387,6 +411,7 @@ def build_stages(args, paths):
     run_bridge = not args.outer_only
     run_export = run_bridge
     run_marker_correspondences = run_bridge
+    run_bridge_origin_projection = run_bridge
     run_advanced = run_bridge
     run_outer_intrinsic_report = run_outer
     run_publish = args.publish_current and run_bridge
@@ -395,6 +420,11 @@ def build_stages(args, paths):
         make_stage("generate_outer_intrinsic_report", run_outer_intrinsic_report, outer_large_intrinsic_report_command(args, paths)),
         make_stage("inner_bridge", run_bridge, bridge_command(args, paths)),
         make_stage("export_unified_cameras", run_export, export_unified_command(args, paths)),
+        make_stage(
+            "generate_bridge_camera_origin_projection",
+            run_bridge_origin_projection,
+            bridge_origin_projection_command(args, paths),
+        ),
         make_stage("export_large_marker_correspondences", run_marker_correspondences, marker_correspondence_command(args, paths, "large")),
         make_stage("export_small_marker_correspondences", run_marker_correspondences, marker_correspondence_command(args, paths, "small")),
         make_stage("generate_advanced_correspondence_viewer", run_advanced, advanced_correspondence_command(args, paths)),
@@ -514,6 +544,11 @@ def write_outputs(args, paths, stages, started_at, finished_at, duration_s):
             "outer_report": report_url(paths["outer_wrapper_root"] / "index.html", http_root, args.report_url_base),
             "outer_intrinsic_report": report_url(paths["outer_large_intrinsic_report_dir"] / "index.html", http_root, args.report_url_base),
             "bridge_report": report_url(paths["bridge_root"] / "final_report" / "index.html", http_root, args.report_url_base),
+            "bridge_camera_origin_projection": report_url(
+                paths["bridge_camera_origin_projection_report"] / "index.html",
+                http_root,
+                args.report_url_base,
+            ),
             "unified_viewer": report_url(paths["bridge_viewer"], http_root, args.report_url_base),
             "unified_camera_yaml": report_url(paths["unified_camera_yaml"], http_root, args.report_url_base),
             "large_marker_correspondences": report_url(paths["large_marker_correspondence_tsv"], http_root, args.report_url_base),
@@ -563,6 +598,18 @@ def parse_args():
         default="dense",
     )
     parser.add_argument("--small-frame-stride", type=int, default=4)
+    parser.add_argument(
+        "--bridge-projection-frame-index",
+        type=int,
+        default=-1,
+        help="Frame index used by the bridge all32 camera-origin projection diagnostic; -1 picks the synchronized midpoint.",
+    )
+    parser.add_argument(
+        "--bridge-projection-max-image-width",
+        type=int,
+        default=1200,
+        help="Maximum image width for bridge camera-origin projection overlays.",
+    )
     parser.add_argument("--run-large-inner-init", action="store_true")
     parser.add_argument("--run-small-quality", action="store_true")
     parser.add_argument(
@@ -661,6 +708,8 @@ def parse_args():
         parser.error("--large-bridge-max-ba-iterations must be non-negative")
     if args.small_frame_stride < 1:
         parser.error("--small-frame-stride must be >= 1")
+    if args.bridge_projection_max_image_width < 1:
+        parser.error("--bridge-projection-max-image-width must be >= 1")
     return args
 
 

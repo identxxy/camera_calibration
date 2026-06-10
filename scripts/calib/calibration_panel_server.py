@@ -52,11 +52,11 @@ SMALL_MARKER_PATTERN = (
 )
 DEFAULT_CURRENT_STUDIO_RUN = (
     "/home/ubuntu/calib_data/studio_calibration_runs/"
-    "recalib_20260608_rigid_yaw45_v2"
+    "recalib_20260610_black_tile_wide200_pipeline_v2"
 )
 DEFAULT_CURRENT_OUTER_FRAME_FACE_DIR = (
     DEFAULT_CURRENT_STUDIO_RUN
-    + "/outer_tower/frame_face_refine_wide50_then_gate6"
+    + "/outer_tower/frame_face_refine_wide200_then_gate6"
 )
 DEFAULT_CURRENT_OUTER_POSE_YAML = (
     DEFAULT_CURRENT_OUTER_FRAME_FACE_DIR + "/camera_tr_rig_delta_refined.yaml"
@@ -334,10 +334,11 @@ MODE_DEFINITIONS = {
         ],
     },
     "run_inner_bridge_recalib_pipeline": {
-        "title": "Fast Inner/Bridge Recalib Pipeline",
+        "title": "Diagnostic: Inner/Bridge Wrapper",
         "operator_summary": (
-            "Run large-marker inner fixed-rig baseline plus a small-marker "
-            "fixed-rig quality probe and all32 bridge solve. Pipeline --dry-run "
+            "Advanced wrapper for large-marker, small-marker, and bridge "
+            "diagnostics. For routine production runs prefer the semantic "
+            "Large Marker and Small Marker operation modes. Pipeline --dry-run "
             "is enabled by default."
         ),
         "params": [
@@ -433,11 +434,11 @@ MODE_DEFINITIONS = {
         ],
     },
     "run_outer_tower_recalib_pipeline": {
-        "title": "Outer Tower Recalib Pipeline",
+        "title": "Diagnostic: Outer Tower Wrapper",
         "operator_summary": (
-            "Run whole tower QC, all32-anchored COLMAP vote, side prior, tag "
-            "refine, and final outer rig artifacts. Pipeline --dry-run is enabled "
-            "by default."
+            "Advanced whole/tower wrapper that can re-enable bootstrap and "
+            "diagnostic stages. For routine production outer refresh prefer "
+            "the Whole Operation mode. Pipeline --dry-run is enabled by default."
         ),
         "params": [
             {
@@ -951,6 +952,12 @@ def build_studio_calibration_pipeline_plan(params, context, job_dir):
         argv.append("--outer-only")
     if bridge_only:
         argv.append("--bridge-only")
+        argv.extend([
+            "--outer-final-pose-yaml",
+            string_param(params, "outer_frame_face_prior_pose_yaml", DEFAULT_CURRENT_OUTER_POSE_YAML, required=True),
+            "--outer-final-intrinsics-dir",
+            string_param(params, "outer_frame_face_intrinsics_dir", DEFAULT_CURRENT_OUTER_INTRINSICS_DIR, required=True),
+        ])
     if bool_param(params, "run_large_inner_init", False):
         argv.append("--run-large-inner-init")
     if bool_param(params, "run_small_quality", True):

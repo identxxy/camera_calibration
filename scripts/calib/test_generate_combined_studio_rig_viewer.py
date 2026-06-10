@@ -175,7 +175,7 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
 
             self.assertEqual(whole["sample_count"], 1)
             self.assertEqual(whole["source"], str(frame_face_pose.resolve()))
-            self.assertIn("independent frame-face plane normals", whole["description"])
+            self.assertIn("accepted frame-face normals", whole["description"])
             self.assertAlmostEqual(whole["median_angle_from_horizontal_deg"], 0.0, places=6)
 
     def test_attach_intrinsic_residuals_keeps_intrinsic_metrics_separate(self):
@@ -307,8 +307,8 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
             self.assertIn("function appendFrameFaceOutlines(dataset, frame", html)
             self.assertIn("function appendFrameFaceTimelineTrail(dataset, currentFrame", html)
             self.assertIn("Timeline mode shows the selected synchronized frame", html)
-            self.assertIn("final independent frame-face plane poses from BA", html)
-            self.assertIn("no ideal octagon and no face-width constraint", html)
+            self.assertIn("final accepted tower model from BA", html)
+            self.assertIn("fixed 45 degree face yaw", html)
             self.assertNotIn("anchor face", html)
             self.assertNotIn("Anchor face", html)
             self.assertNotIn("nominal rigid tower", html)
@@ -322,6 +322,18 @@ class CombinedStudioRigViewerTest(unittest.TestCase):
             self.assertIn("No shared tracks survived", html)
             self.assertIn("function updateCorrespondenceOverlay()", html)
             self.assertIn("correspondenceObjectCount", html)
+            self.assertIn("let calibratedViewCameraIndex = null", html)
+            self.assertIn("function cameraViewIntrinsics(cam)", html)
+            self.assertIn("function applyCalibratedProjectionFromIntrinsics(intrinsics)", html)
+            self.assertIn("function enterCalibratedCameraView(cam)", html)
+            self.assertIn("camera.projectionMatrix.copy(projection)", html)
+            self.assertIn("calibrated camera view (projection from fx/fy/cx/cy)", html)
+            self.assertIn("if (focus && calibratedViewCameraIndex === index)", html)
+            self.assertIn("setObjectOpacity(item.imagePlane, active ? 0.25 : 0.05)", html)
+            self.assertIn("opacity: 0.25", html)
+            self.assertIn("function frustumCornerScales(cam, depth)", html)
+            self.assertIn("left: -intrinsics.cx / intrinsics.fx * depth", html)
+            self.assertIn("right: (intrinsics.width - intrinsics.cx) / intrinsics.fx * depth", html)
             self.assertEqual(
                 json.loads((output_html.parent / "rig_data.json").read_text(encoding="utf-8")),
                 data,

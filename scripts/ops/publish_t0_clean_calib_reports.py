@@ -38,6 +38,7 @@ WHOLE_QC_ROOT = (
     / "whole_outer24_filtered_min4_fullres_min4cam"
 )
 OUTER_FRAME_FACE_REPORT_ROOT = RUN / "outer_tower/frame_face_refine_wide200_then_gate6"
+BRIDGE_CAMERA_ORIGIN_PROJECTION_REPORT = RUN / "inner_bridge/reports/bridge_all32_camera_origin_projection"
 
 CANONICAL_REPORTS = [
     {
@@ -80,7 +81,7 @@ CANONICAL_REPORTS = [
         "number": "7",
         "title": "bridge 结果报告 (large marker)",
         "relative_index": "09_bridge_result_large_marker/index.html",
-        "description": "Large-marker inner/outer bridge result and anchor consistency.",
+        "description": "Large-marker inner/outer bridge result plus all32 camera-origin projection diagnostic.",
     },
 ]
 
@@ -90,7 +91,7 @@ def configure(args):
     global FINAL_YAML, CURRENT_FINAL_YAML
     global CORRESPONDENCE_JSON, CURRENT_CORRESPONDENCE_JSON
     global OUTER_LARGE_INTRINSIC_REPORT, OUTER_LARGE_QC_ROOT, WHOLE_QC_ROOT
-    global OUTER_FRAME_FACE_REPORT_ROOT
+    global OUTER_FRAME_FACE_REPORT_ROOT, BRIDGE_CAMERA_ORIGIN_PROJECTION_REPORT
 
     ROOT = Path(args.root).resolve()
     BASE_URL = args.base_url.rstrip("/")
@@ -110,6 +111,7 @@ def configure(args):
         if args.outer_frame_face_report_root
         else RUN / "outer_tower/frame_face_refine_wide200_then_gate6"
     )
+    BRIDGE_CAMERA_ORIGIN_PROJECTION_REPORT = RUN / "inner_bridge/reports/bridge_all32_camera_origin_projection"
 
 
 def rel_url(path):
@@ -575,6 +577,7 @@ def publish_reports():
     require_path(OUTER_LARGE_QC_ROOT / "per_camera_stats.tsv", "outer large-marker QC stats")
     require_path(WHOLE_QC_ROOT / "per_camera_stats.tsv", "whole QC stats")
     require_path(OUTER_FRAME_FACE_REPORT_ROOT / "summary.json", "outer frame-face report summary")
+    require_path(BRIDGE_CAMERA_ORIGIN_PROJECTION_REPORT / "index.html", "bridge all32 camera-origin projection report")
     final_yaml = publish_final_yaml()
 
     if REPORTS.exists():
@@ -766,6 +769,10 @@ def publish_reports():
     bridge_corr = inner_bridge_summary.get("bridge_correspondence_quality", {})
     bridge_intrinsics = inner_bridge_summary.get("bridge_intrinsics", {})
     bridge_layout = inner_bridge_summary.get("bridge_layout", {})
+    copy_report(
+        BRIDGE_CAMERA_ORIGIN_PROJECTION_REPORT,
+        REPORTS / "09_bridge_result_large_marker/camera_origin_projection",
+    )
     write_page(
         REPORTS / "09_bridge_result_large_marker/index.html",
         "Bridge 结果报告 - large_marker",
@@ -785,6 +792,13 @@ def publish_reports():
 </div>
 <p class="muted">This report is based on the current production all32 fixed-known-point joint BA. The older top-down-anchor bridge summary remains in the run directory as a diagnostic, but it is not the current bridge quality gate.</p>
 """,
+            ),
+            (
+                "All32 Camera-Origin Projection",
+                "<p class='muted'>This diagnostic projects each of the 32 calibrated camera optical centers "
+                "into each of the 32 large-marker view images. It is the bridge sanity check for gross extrinsic "
+                "orientation or scale failures.</p>"
+                "<p><a href='camera_origin_projection/index.html'>Open all32 camera-origin projection report</a></p>",
             ),
             (
                 "Large Marker Staging",
@@ -885,9 +899,12 @@ code { background: #eeece5; padding: 1px 4px; border-radius: 4px; }
     allowed = {ROOT / "index.html", CURRENT / "index.html"}
     allowed.add(REPORTS / "01_3d_viewer/index.html")
     allowed.update(report["path"] for report in reports)
+    allowed_html_dirs = [
+        REPORTS / "09_bridge_result_large_marker/camera_origin_projection",
+    ]
     removed_current_html = []
     for path in sorted(CURRENT.rglob("*.html")):
-        if path in allowed:
+        if path in allowed or any(directory in path.parents for directory in allowed_html_dirs):
             continue
         path.unlink()
         removed_current_html.append(str(path))

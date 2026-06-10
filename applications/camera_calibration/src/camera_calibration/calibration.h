@@ -67,6 +67,7 @@ bool Calibrate(
     bool localize_only,
     bool skip_bundle_adjustment,
     bool debug_fix_points,
+    bool debug_fix_intrinsics,
     int max_ba_iterations,
     CalibrationWindow* calibration_window,
     BAState* state,
@@ -93,6 +94,7 @@ void CalibrateBatch(
     bool localize_only,
     bool skip_bundle_adjustment,
     bool debug_fix_points,
+    bool debug_fix_intrinsics,
     int max_ba_iterations,
     SchurMode schur_mode,
     CalibrationWindow* calibration_window);
@@ -119,6 +121,7 @@ int BatchCalibrationWithGUI(
     bool localize_only,
     bool skip_bundle_adjustment,
     bool debug_fix_points,
+    bool debug_fix_intrinsics,
     int max_ba_iterations,
     SchurMode schur_mode,
     bool show_visualizations);

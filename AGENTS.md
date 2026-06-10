@@ -92,8 +92,10 @@ There are four capture/data modes:
 - `whole`: move the AprilTag tower through the studio. This is for outer-ring
   extrinsic refinement and broad inner/outer co-visibility. It should start
   from trusted outer intrinsics and a trusted coarse outer rig. The production
-  tower path uses independent frame/face poses and does not depend on an ideal
-  octagonal-prism `face_width_m`.
+  tower path uses one shared tower pose per synchronized frame, fixed
+  `360/8 = 45 deg` adjacent face yaw, and an optimized global face-width weak
+  parameter. Flexible/independent face models are diagnostic fallback paths, not
+  the default production output.
   The physical printed tower black tiles are 8 cm with 2 cm white tile gaps.
   OpenCV AprilTag detector corners land on the inner detector square, so they
   should only identify tag IDs and provide a red-box scale prior. Production
@@ -101,7 +103,8 @@ There are four capture/data modes:
   corners, with physical geometry `tower_tag_size_m = 0.08` and
   `tower_tag_spacing_m = 0.02`. The production outer-tower refine preset is
   `wide200_then_gate6`: keep same-ID support with a loose 200 px initialization
-  gate, then write the accepted result with a strict 6 px final gate. The older
+  gate, optimize the shared tower/frame model, then write the accepted result
+  with a strict 6 px final gate. The older
   detector-corner geometry
   `0.06710408594834662 / 0.03289591405165339` is legacy diagnostic-only for
   datasets that still store raw OpenCV inner detector corners.
@@ -173,6 +176,7 @@ frame with `diag(-1, -1, 1)`, not a single-axis reflection.
 For detailed runbooks, start with:
 
 ```text
+scripts/calib/README_studio_operation_commands.md
 scripts/calib/README_studio_32_camera_system.md
 scripts/calib/README_studio_calibration_pipeline.md
 scripts/calib/README_calibration_panel.md
