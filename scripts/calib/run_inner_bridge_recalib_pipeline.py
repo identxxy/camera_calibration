@@ -21,11 +21,15 @@ from pathlib import Path
 DEFAULT_T0_DATA_ROOT = Path("/home/ubuntu/calib_data/calib_2026_05_26_jpg_v3")
 DEFAULT_T0_REPO = Path("/home/ubuntu/camera_calibration")
 DEFAULT_T0_BINARY = Path(
-    "/home/ubuntu/camera_calibration/build_t0/applications/"
+    "/home/ubuntu/camera_calibration/build_t0_current/applications/"
     "camera_calibration/camera_calibration",
 )
 DEFAULT_T0_BINARY_FALLBACKS = [
     DEFAULT_T0_BINARY,
+    Path(
+        "/home/ubuntu/camera_calibration/build_t0/applications/"
+        "camera_calibration/camera_calibration",
+    ),
     Path(
         "/home/ubuntu/camera_calibration_integration_build/build_t0_codex/"
         "applications/camera_calibration/camera_calibration",
@@ -109,8 +113,9 @@ def default_camera_calibration_binary():
     env_binary = os.environ.get("CAMERA_CALIBRATION_BINARY")
     if env_binary:
         return Path(env_binary).expanduser()
-    local_build = script_repo_root() / "build_t0/applications/camera_calibration/camera_calibration"
+    local_build = script_repo_root() / "build_t0_current/applications/camera_calibration/camera_calibration"
     candidates = [local_build]
+    candidates.append(script_repo_root() / "build_t0/applications/camera_calibration/camera_calibration")
     candidates.extend(DEFAULT_T0_BINARY_FALLBACKS)
     for candidate in candidates:
         if candidate.is_file():
@@ -1112,6 +1117,18 @@ def infer_outer_intrinsic_metrics_tsv(outer_intrinsics, data_root=None):
     return Path("")
 
 
+def infer_whole_coverage_tsv(data_root):
+    data_root = Path(data_root)
+    candidates = [
+        data_root / "whole_outer24_filtered_min4_fullres_min4cam" / "per_camera_stats.tsv",
+        data_root / "whole_outer24_filtered_min4_hybrid_min4cam" / "per_camera_stats.tsv",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve(strict=False)
+    return candidates[0].resolve(strict=False)
+
+
 def intrinsic_path_candidates(intrinsics_dir, camera_index, camera_id=""):
     intrinsics_dir = Path(intrinsics_dir)
     candidates = [intrinsics_dir / f"intrinsics{camera_index}.yaml"]
@@ -1722,7 +1739,7 @@ def build_pipeline_stages(
         "outer_final_pose_yaml": outer_final_pose_yaml,
         "outer_pose_source": viewer_outer_pose_source,
         "combined_image_directories_file": large_input,
-        "whole_coverage_tsv": str(data_root / "whole_outer24_filtered_min4_hybrid_min4cam" / "per_camera_stats.tsv"),
+        "whole_coverage_tsv": priors.get("whole_coverage_tsv", ""),
         "large_marker_pnp_summary_tsv": str(large_bridge_pnp / "camera_pnp_summary.tsv"),
         "large_marker_correspondence_tsv": str(large_bridge_correspondence),
         "small_marker_pnp_summary_tsv": str(small_fixed_rig_quality / "camera_pnp_summary.tsv"),
@@ -1749,7 +1766,7 @@ def build_pipeline_stages(
         "--correspondence_data_url", "../../advanced_correspondence_viewer_v1/correspondence_data.json",
         "--inner_reprojection_metrics_tsv", str(inner_reproj / "camera_metrics.tsv"),
         "--inner_intrinsic_metrics_tsv", str(inner_reproj / "camera_metrics.tsv"),
-        "--whole_coverage_tsv", str(data_root / "whole_outer24_filtered_min4_hybrid_min4cam" / "per_camera_stats.tsv"),
+        "--whole_coverage_tsv", priors.get("whole_coverage_tsv", ""),
         "--large_marker_pnp_summary_tsv", str(large_bridge_pnp / "camera_pnp_summary.tsv"),
         "--large_marker_correspondence_tsv", str(large_bridge_correspondence),
         "--small_marker_pnp_summary_tsv", str(small_fixed_rig_quality / "camera_pnp_summary.tsv"),
@@ -2977,6 +2994,15 @@ def parse_args():
         help="Optional outer intrinsic report camera_metrics.tsv, usually from the outer-large-marker intrinsic calibration report.",
     )
     parser.add_argument(
+        "--whole-coverage-tsv",
+        type=Path,
+        default=None,
+        help=(
+            "Whole/tower distributed QC per_camera_stats.tsv used by the combined viewer. "
+            "Defaults to the full-resolution staged whole QC stats when present, then the hybrid stats."
+        ),
+    )
+    parser.add_argument(
         "--camera-calibration-binary",
         type=Path,
         default=default_camera_calibration_binary(),
@@ -3205,6 +3231,10 @@ def main():
         args.outer_intrinsic_metrics_tsv,
         data_root,
     ) if args.outer_intrinsic_metrics_tsv else infer_outer_intrinsic_metrics_tsv(outer_intrinsics, data_root)
+    whole_coverage_tsv = resolve_user_path(
+        args.whole_coverage_tsv,
+        data_root,
+    ) if args.whole_coverage_tsv else infer_whole_coverage_tsv(data_root)
     bridge_layout = bridge_all32_layout(large_scan)
     bridge_intrinsics_started_at = utc_now()
     bridge_intrinsics_started_perf = time.time()
@@ -3224,6 +3254,7 @@ def main():
         "bridge_intrinsics": bridge_intrinsics["output_dir"],
         "outer_prior": str(outer_prior.resolve(strict=False)),
         "outer_final_pose_yaml": str(outer_final_pose_yaml.resolve(strict=False)) if outer_final_pose_yaml else "",
+        "whole_coverage_tsv": str(whole_coverage_tsv) if whole_coverage_tsv else "",
     }
 
     stages, final_candidates = build_pipeline_stages(

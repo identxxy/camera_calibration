@@ -14,7 +14,7 @@ import sys
 import time
 
 
-DEFAULT_WHOLE_DATA_ROOT = Path("/home/ubuntu/calib_data/calib_2026_05_31_v3")
+DEFAULT_WHOLE_DATA_ROOT = Path("/home/ubuntu/calib_data/calib_2026_05_31_fullres_probe_v1")
 DEFAULT_INNER_DATA_ROOT = Path("/home/ubuntu/calib_data/calib_2026_05_31_v3")
 DEFAULT_HTTP_ROOT = Path("/home/ubuntu/calib_data")
 DEFAULT_REPORT_URL_BASE = "http://192.168.2.0:9899"
@@ -28,12 +28,12 @@ DEFAULT_OUTER_COLMAP_PRIOR = (
     / "colmap_outer24_firstframe_colmap404_v3/fixed_intrinsics/sparse_txt_final24_fixedK_ba/images.txt"
 )
 DEFAULT_OUTER_FRAME_FACE_PRIOR_POSE_YAML = (
-    Path("/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50")
-    / "outer_tower/frame_face_refine_fullres_raw_ransac1000_wide50_gate6_v1/camera_tr_rig_delta_refined.yaml"
+    Path("/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260608_rigid_yaw45_v2")
+    / "outer_tower/frame_face_refine_wide50_then_gate6/camera_tr_rig_delta_refined.yaml"
 )
 DEFAULT_OUTER_FRAME_FACE_INTRINSICS_DIR = (
-    Path("/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50")
-    / "outer_tower/frame_face_refine_fullres_raw_ransac1000_wide50_gate6_v1/intrinsics_refined"
+    Path("/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260608_rigid_yaw45_v2")
+    / "outer_tower/frame_face_refine_wide50_then_gate6/intrinsics_refined"
 )
 DEFAULT_OUTER_INTRINSIC_METRICS_TSV = (
     Path("/home/ubuntu/calib_data/calib_2026_06_04_outer_large_marker_v2")
@@ -161,9 +161,12 @@ def build_paths(args):
             whole_data_root / "whole_outer24_filtered_min4_hybrid_min4cam" / "per_camera_stats.tsv",
         ])
         whole_qc_root = Path(whole_qc_stats).parent if whole_qc_stats else ""
+    whole_coverage_tsv = whole_qc_root / "per_camera_stats.tsv" if whole_qc_root else ""
     whole_data_report = (
         resolve_path(args.whole_data_report)
         if args.whole_data_report
+        else whole_qc_root / "index.html"
+        if whole_qc_root
         else whole_data_root / "whole_outer24_filtered_min4_hybrid_min4cam" / "index.html"
     )
     return {
@@ -179,6 +182,7 @@ def build_paths(args):
         "outer_large_intrinsic_report_dir": outer_large_intrinsic_report_dir,
         "outer_large_qc_root": outer_large_qc_root,
         "whole_qc_root": whole_qc_root,
+        "whole_coverage_tsv": whole_coverage_tsv,
         "whole_data_report": whole_data_report,
         "bridge_root": bridge_root,
         "bridge_viewer": bridge_root / "combined_studio_rig_viewer_v1" / "index.html",
@@ -199,6 +203,8 @@ def build_paths(args):
         "small_marker_correspondence_summary": marker_correspondence_dir / "small_marker_correspondences.summary.json",
         "outer_observation_residuals_tsv": outer_frame_face_dir / "diagnostics" / "observation_residuals.tsv",
         "outer_frame_face_pose_yaml": outer_frame_face_dir / "rig_tr_frame_face.yaml",
+        "outer_raw_dataset": whole_qc_root / "opencv_tower_dataset_black_tile_red_scale_edge.bin" if whole_qc_root else "",
+        "outer_raw_manifest": whole_qc_root / "manifest.tsv" if whole_qc_root else "",
         "large_pnp_dir": (
             bridge_root / args.large_marker_sequence /
             f"fixed_intrinsic_bridge_pnp_stride{args.large_frame_stride}_v1"
@@ -257,6 +263,8 @@ def bridge_command(args, paths):
         command.extend(["--camera-calibration-binary", resolve_path(args.camera_calibration_binary)])
     if paths["outer_intrinsic_metrics_tsv"]:
         command.extend(["--outer-intrinsic-metrics-tsv", paths["outer_intrinsic_metrics_tsv"]])
+    if paths["whole_coverage_tsv"]:
+        command.extend(["--whole-coverage-tsv", paths["whole_coverage_tsv"]])
     if args.inner_prior:
         command.extend(["--inner-prior", resolve_path(args.inner_prior)])
     if args.outer_prior:
@@ -282,6 +290,7 @@ def publish_command(args, paths):
         "--outer-large-intrinsic-report", paths["outer_large_intrinsic_report_dir"],
         "--outer-large-qc-root", paths["outer_large_qc_root"],
         "--whole-qc-root", paths["whole_qc_root"],
+        "--outer-frame-face-report-root", paths["outer_frame_face_dir"],
     ]
 
 
@@ -299,7 +308,7 @@ def export_unified_command(args, paths):
 
 
 def advanced_correspondence_command(args, paths):
-    return [
+    command = [
         sys.executable,
         repo_root() / "scripts/calib/generate_studio_correspondence_viewer.py",
         "--output-dir", paths["advanced_correspondence_root"],
@@ -312,6 +321,11 @@ def advanced_correspondence_command(args, paths):
         "--small-pnp-dir", paths["small_pnp_dir"],
         "--viewer-assets-dir", paths["viewer_assets_dir"],
     ]
+    if paths["outer_raw_dataset"]:
+        command.extend(["--outer-raw-dataset", paths["outer_raw_dataset"]])
+    if paths["outer_raw_manifest"]:
+        command.extend(["--outer-raw-manifest", paths["outer_raw_manifest"]])
+    return command
 
 
 def outer_large_intrinsic_report_command(args, paths):
@@ -536,7 +550,7 @@ def parse_args():
     parser.add_argument("--inner-data-root", type=Path, default=DEFAULT_INNER_DATA_ROOT)
     parser.add_argument("--output-root", type=Path, default=None)
     parser.add_argument("--run-tag", default="latest")
-    parser.add_argument("--outer-preset", default="wide50_then_gate6")
+    parser.add_argument("--outer-preset", default="wide200_then_gate6")
     parser.add_argument("--large-marker-sequence", default="large_marker_bridge_all32")
     parser.add_argument("--large-inner-marker-sequence", default="large_marker_inner8")
     parser.add_argument("--small-marker-sequence", default="small_marker_inner8")

@@ -13,7 +13,7 @@ import argparse
 
 ROOT = Path("/home/ubuntu/calib_data")
 BASE_URL = "http://192.168.2.0:9899"
-RUN_TAG = "recalib_20260605_whole_fullres_probe_v1"
+RUN_TAG = "recalib_20260610_black_tile_wide200_pipeline_v2"
 RUN = ROOT / "studio_calibration_runs" / RUN_TAG
 CURRENT = ROOT / "current_calibration"
 REPORTS = CURRENT / "reports"
@@ -37,6 +37,7 @@ WHOLE_QC_ROOT = (
     / "calib_2026_05_31_fullres_probe_v1"
     / "whole_outer24_filtered_min4_fullres_min4cam"
 )
+OUTER_FRAME_FACE_REPORT_ROOT = RUN / "outer_tower/frame_face_refine_wide200_then_gate6"
 
 CANONICAL_REPORTS = [
     {
@@ -89,6 +90,7 @@ def configure(args):
     global FINAL_YAML, CURRENT_FINAL_YAML
     global CORRESPONDENCE_JSON, CURRENT_CORRESPONDENCE_JSON
     global OUTER_LARGE_INTRINSIC_REPORT, OUTER_LARGE_QC_ROOT, WHOLE_QC_ROOT
+    global OUTER_FRAME_FACE_REPORT_ROOT
 
     ROOT = Path(args.root).resolve()
     BASE_URL = args.base_url.rstrip("/")
@@ -103,6 +105,11 @@ def configure(args):
     OUTER_LARGE_INTRINSIC_REPORT = Path(args.outer_large_intrinsic_report).resolve()
     OUTER_LARGE_QC_ROOT = Path(args.outer_large_qc_root).resolve()
     WHOLE_QC_ROOT = Path(args.whole_qc_root).resolve()
+    OUTER_FRAME_FACE_REPORT_ROOT = (
+        Path(args.outer_frame_face_report_root).resolve()
+        if args.outer_frame_face_report_root
+        else RUN / "outer_tower/frame_face_refine_wide200_then_gate6"
+    )
 
 
 def rel_url(path):
@@ -171,6 +178,76 @@ def median_field(rows, field):
         except Exception:
             pass
     return statistics.median(values) if values else None
+
+
+def percentile(values, percentile_value):
+    if not values:
+        return None
+    values = sorted(values)
+    rank = (len(values) - 1) * float(percentile_value) / 100.0
+    low = int(rank)
+    high = min(low + 1, len(values) - 1)
+    weight = rank - low
+    return values[low] * (1.0 - weight) + values[high] * weight
+
+
+def write_camera_metrics_from_correspondence(input_tsv, output_tsv):
+    rows = read_tsv(input_tsv)
+    by_camera = {}
+    for row in rows:
+        if row.get("projection_status") != "ok":
+            continue
+        try:
+            residual = float(row.get("residual_px", ""))
+        except Exception:
+            continue
+        camera_index = row.get("camera_index", "")
+        bucket = by_camera.setdefault(
+            camera_index,
+            {
+                "camera_index": camera_index,
+                "camera_label": row.get("camera_label") or row.get("user_id") or row.get("camera_id") or camera_index,
+                "residuals": [],
+                "frames": set(),
+            },
+        )
+        bucket["residuals"].append(residual)
+        if row.get("frame_index", ""):
+            bucket["frames"].add(row.get("frame_index"))
+    if not by_camera:
+        return None
+
+    output_tsv = Path(output_tsv)
+    output_tsv.parent.mkdir(parents=True, exist_ok=True)
+    with output_tsv.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=[
+                "camera_index",
+                "camera_label",
+                "residual_count",
+                "frame_count",
+                "median_error_px",
+                "mean_error_px",
+                "p90_error_px",
+                "max_error_px",
+            ],
+            delimiter="\t",
+        )
+        writer.writeheader()
+        for _camera_index, bucket in sorted(by_camera.items(), key=lambda item: int(float(item[0] or 0))):
+            residuals = bucket["residuals"]
+            writer.writerow({
+                "camera_index": bucket["camera_index"],
+                "camera_label": bucket["camera_label"],
+                "residual_count": len(residuals),
+                "frame_count": len(bucket["frames"]),
+                "median_error_px": f"{statistics.median(residuals):.6f}",
+                "mean_error_px": f"{statistics.mean(residuals):.6f}",
+                "p90_error_px": f"{percentile(residuals, 90):.6f}",
+                "max_error_px": f"{max(residuals):.6f}",
+            })
+    return output_tsv
 
 
 def table(headers, rows, limit=None):
@@ -408,7 +485,11 @@ def index_rows_by_camera(rows):
     return result
 
 
-def publish_inner_extrinsic_wrapper(report_dir, residual_metrics_tsv=None, pnp_summary_tsv=None):
+def publish_inner_extrinsic_wrapper(
+        report_dir,
+        residual_metrics_tsv=None,
+        pnp_summary_tsv=None,
+        source_description="It summarizes small-marker fixed-rig reprojection residuals in pixels."):
     report_dir = Path(report_dir)
     summary = load_json(report_dir / "summary.json")
     residual_rows = read_tsv(residual_metrics_tsv) if residual_metrics_tsv else []
@@ -469,8 +550,7 @@ def publish_inner_extrinsic_wrapper(report_dir, residual_metrics_tsv=None, pnp_s
             (
                 "Definition",
                 "<p class='muted'>This extrinsic report intentionally does not include static layout plots. "
-                "It summarizes the final small-marker fixed-rig reprojection residuals in pixels; "
-                "spatial layout inspection belongs to the Overall 3D Viewer.</p>",
+                f"{esc(source_description)} Spatial layout inspection belongs to the Overall 3D Viewer.</p>",
             ),
         ],
     )
@@ -494,6 +574,7 @@ def publish_reports():
     require_path(OUTER_LARGE_INTRINSIC_REPORT, "outer large-marker intrinsic report source")
     require_path(OUTER_LARGE_QC_ROOT / "per_camera_stats.tsv", "outer large-marker QC stats")
     require_path(WHOLE_QC_ROOT / "per_camera_stats.tsv", "whole QC stats")
+    require_path(OUTER_FRAME_FACE_REPORT_ROOT / "summary.json", "outer frame-face report summary")
     final_yaml = publish_final_yaml()
 
     if REPORTS.exists():
@@ -507,10 +588,28 @@ def publish_reports():
     )
     publish_inner_intrinsic_wrapper(REPORTS / "03_inner_intrinsics_small_marker")
     copy_report(RUN / "inner_bridge/reports/rig_extrinsics", REPORTS / "04_inner_extrinsics_small_marker")
+    small_quality_correspondence = (
+        RUN / "inner_bridge/small_marker_inner8/fixed_intrinsic_small_grid4_quality_probe_v1/correspondence_residuals.tsv"
+    )
+    small_quality_metrics = write_camera_metrics_from_correspondence(
+        small_quality_correspondence,
+        REPORTS / "04_inner_extrinsics_small_marker/small_marker_quality_camera_metrics.tsv",
+    )
+    inner_extrinsic_metrics_tsv = (
+        small_quality_metrics
+        if small_quality_metrics
+        else REPORTS / "03_inner_intrinsics_small_marker/camera_metrics.tsv"
+    )
+    inner_extrinsic_source_description = (
+        "It summarizes small-marker fixed-rig quality-probe reprojection residuals in pixels."
+        if small_quality_metrics
+        else "Small-marker quality-probe correspondence residuals were unavailable; this table falls back to the published inner baseline reprojection metrics."
+    )
     publish_inner_extrinsic_wrapper(
         REPORTS / "04_inner_extrinsics_small_marker",
-        REPORTS / "03_inner_intrinsics_small_marker/camera_metrics.tsv",
+        inner_extrinsic_metrics_tsv,
         RUN / "inner_bridge/small_marker_inner8/fixed_intrinsic_small_grid4_quality_probe_v1/camera_pnp_summary.tsv",
+        inner_extrinsic_source_description,
     )
     copy_report(
         OUTER_LARGE_INTRINSIC_REPORT,
@@ -618,8 +717,8 @@ def publish_reports():
         ],
     )
 
-    outer_summary = load_json(RUN / "outer_tower/frame_face_refine_wide50_then_gate6/summary.json")
-    outer_reproj = read_tsv(RUN / "outer_tower/frame_face_refine_wide50_then_gate6/diagnostics/camera_reprojection.tsv")
+    outer_summary = load_json(OUTER_FRAME_FACE_REPORT_ROOT / "summary.json")
+    outer_reproj = read_tsv(OUTER_FRAME_FACE_REPORT_ROOT / "diagnostics/camera_reprojection.tsv")
     res_after = outer_summary.get("residual_after", {})
     obs_gate = outer_summary.get("observation_gate", {})
     cameras = outer_summary.get("cameras", {})
@@ -836,6 +935,14 @@ code { background: #eeece5; padding: 1px 4px; border-radius: 4px; }
             }
             for report in reports
         ],
+        "source_paths": {
+            "run": str(RUN),
+            "outer_frame_face_report_root": str(OUTER_FRAME_FACE_REPORT_ROOT),
+            "outer_large_intrinsic_report": str(OUTER_LARGE_INTRINSIC_REPORT),
+            "outer_large_qc_root": str(OUTER_LARGE_QC_ROOT),
+            "whole_qc_root": str(WHOLE_QC_ROOT),
+            "inner_extrinsic_metrics_tsv": str(inner_extrinsic_metrics_tsv),
+        },
         "removed_current_html_count": len(removed_current_html),
         "removed_current_html": removed_current_html,
     }
@@ -856,6 +963,7 @@ def parse_args():
     parser.add_argument("--outer-large-intrinsic-report", default=str(OUTER_LARGE_INTRINSIC_REPORT))
     parser.add_argument("--outer-large-qc-root", default=str(OUTER_LARGE_QC_ROOT))
     parser.add_argument("--whole-qc-root", default=str(WHOLE_QC_ROOT))
+    parser.add_argument("--outer-frame-face-report-root", default="")
     return parser.parse_args()
 
 

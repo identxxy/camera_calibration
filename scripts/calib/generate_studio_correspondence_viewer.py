@@ -15,6 +15,17 @@ import numpy as np
 import yaml
 
 try:
+    from export_calibration_correspondence_residuals import (
+        parse_frame_index,
+        read_dataset as read_calib_dataset,
+    )
+except ModuleNotFoundError:
+    from scripts.calib.export_calibration_correspondence_residuals import (
+        parse_frame_index,
+        read_dataset as read_calib_dataset,
+    )
+
+try:
     from studio_canonical_frame import (
         estimate_studio_canonical_frame,
         transform_point_to_aligned,
@@ -55,6 +66,13 @@ def finite_int(value, default=None):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def full_frame_range(frames):
+    values = sorted({int(frame) for frame in frames if frame is not None})
+    if not values:
+        return []
+    return list(range(values[0], values[-1] + 1))
 
 
 def quat_xyzw_to_matrix(qx, qy, qz, qw):
@@ -338,6 +356,114 @@ def residual_color_value(residual_px):
     return max(0.0, min(1.0, math.log1p(value) / math.log1p(10.0)))
 
 
+def default_tower_layout():
+    return {
+        "first_tag_id": 0,
+        "face_id_stride": 32,
+        "tag_columns": 2,
+        "tag_rows": 16,
+        "tag_size_m": 0.08,
+        "tag_spacing_m": 0.02,
+        "tag_rotation_degrees": 180,
+    }
+
+
+def physical_corner_for_opencv_corner(corner_id, tag_rotation_degrees):
+    if tag_rotation_degrees == 0:
+        return [3, 2, 1, 0][corner_id]
+    if tag_rotation_degrees == 180:
+        return [1, 0, 3, 2][corner_id]
+    raise ValueError(f"Unsupported tag rotation: {tag_rotation_degrees}")
+
+
+def tower_feature_fields(feature_id, layout):
+    if feature_id is None:
+        return None, None, None
+    feature_id = int(feature_id)
+    tag_id = feature_id // 4
+    corner_id = feature_id % 4
+    first_tag_id = int(layout["first_tag_id"])
+    face_stride = int(layout["face_id_stride"])
+    local = tag_id - first_tag_id
+    if local < 0:
+        return None, None, None
+    face_id = local // face_stride
+    local_tag_id = local - face_id * face_stride
+    columns = int(layout["tag_columns"])
+    rows = int(layout["tag_rows"])
+    if local_tag_id < 0 or local_tag_id >= columns * rows:
+        return None, None, None
+    return int(tag_id), int(corner_id), int(face_id)
+
+
+def tower_face_local_point_for_feature(feature_id, layout):
+    tag_id, corner_id, face_id = tower_feature_fields(feature_id, layout)
+    if tag_id is None or corner_id is None or face_id is None:
+        return None
+    columns = int(layout["tag_columns"])
+    local_tag_id = int(tag_id) - int(layout["first_tag_id"]) - int(face_id) * int(layout["face_id_stride"])
+    row = local_tag_id // columns
+    col = local_tag_id % columns
+    tag_size = float(layout["tag_size_m"])
+    spacing = float(layout["tag_spacing_m"])
+    pitch = tag_size + spacing
+    half_tag = 0.5 * tag_size
+    center_u = (col - 0.5 * (columns - 1)) * pitch
+    center_z = (row - 0.5 * (int(layout["tag_rows"]) - 1)) * pitch
+    corners = [
+        np.asarray([0.0, center_u - half_tag, center_z - half_tag], dtype=np.float64),
+        np.asarray([0.0, center_u + half_tag, center_z - half_tag], dtype=np.float64),
+        np.asarray([0.0, center_u + half_tag, center_z + half_tag], dtype=np.float64),
+        np.asarray([0.0, center_u - half_tag, center_z + half_tag], dtype=np.float64),
+    ]
+    physical_corner_id = physical_corner_for_opencv_corner(
+        corner_id,
+        int(layout["tag_rotation_degrees"]),
+    )
+    return corners[physical_corner_id]
+
+
+def read_manifest_by_camera_index(path):
+    path = Path(path) if path else None
+    if path is None or not path.is_file():
+        return {}
+    with path.open("r", encoding="utf-8", newline="") as stream:
+        rows = {}
+        for row in csv.DictReader(stream, delimiter="\t"):
+            camera_index = finite_int(row.get("camera_index"))
+            if camera_index is None:
+                continue
+            rows[camera_index] = row
+        return rows
+
+
+def raw_camera_label(camera_index, manifest_row):
+    if manifest_row:
+        for key in ("camera_id", "user_id", "stage_name"):
+            value = manifest_row.get(key)
+            if value:
+                return str(value)
+    return f"camera{camera_index}"
+
+
+def read_residual_frame_face_keys(path):
+    path = Path(path) if path else None
+    if path is None or not path.is_file():
+        return set()
+    keys = set()
+    with path.open("r", encoding="utf-8", newline="") as stream:
+        for row in csv.DictReader(stream, delimiter="\t"):
+            status = str(row.get("projection_status") or "")
+            if status and status.lower() != "ok":
+                continue
+            frame_index = finite_int(row.get("frame_index"))
+            face_id = finite_int(row.get("face_id"))
+            if frame_index is None or face_id is None:
+                continue
+            keys.add((frame_index, face_id))
+    return keys
+
+
 def load_outer_observations(path, frame_face_pose_yaml, cameras, coordinate_transform=None):
     path = Path(path)
     if not path.is_file():
@@ -434,7 +560,142 @@ def load_outer_observations(path, frame_face_pose_yaml, cameras, coordinate_tran
     summary["frame_face_pose_count"] = len(frame_face_pose_entries)
     return {
         "observations": observations,
-        "frames": sorted(frames),
+        "frames": full_frame_range(frames),
+        "observed_frames": sorted(frames),
+        "timeline_frames": full_frame_range(frames),
+        "camera_ids": sorted(camera_ids),
+        "frame_face_poses": frame_face_pose_entries,
+        "summary": summary,
+    }
+
+
+def load_outer_raw_shared_observations(
+        dataset_path,
+        manifest_path,
+        frame_face_pose_yaml,
+        cameras,
+        coordinate_transform=None,
+        max_shared_tracks_per_frame=96,
+        accepted_frame_face_keys=None):
+    dataset_path = Path(dataset_path) if dataset_path else None
+    if dataset_path is None or not dataset_path.is_file():
+        return None
+
+    dataset = read_calib_dataset(dataset_path)
+    manifest = read_manifest_by_camera_index(manifest_path)
+    camera_by_index = {int(camera["index"]): camera for camera in cameras}
+    frame_face_poses = load_frame_face_poses(frame_face_pose_yaml)
+    accepted_frame_face_keys = set(accepted_frame_face_keys or [])
+    layout = default_tower_layout()
+    observations = []
+    residuals = []
+    frames_all = set()
+    frames_with_selected = set()
+    camera_ids = set()
+    used_frame_faces = set()
+    raw_feature_count = 0
+    raw_shared_track_count = 0
+    selected_shared_track_count = 0
+    missing_pose_count = 0
+
+    for imageset in dataset["imagesets"]:
+        frame_index = finite_int(parse_frame_index(imageset["filename"], imageset["index"]))
+        if frame_index is None:
+            continue
+        frames_all.add(frame_index)
+        tracks = {}
+        for camera_index, features in enumerate(imageset["features"]):
+            manifest_row = manifest.get(camera_index)
+            camera_id = raw_camera_label(camera_index, manifest_row)
+            camera = camera_by_index.get(camera_index)
+            camera_center = camera["center"] if camera else None
+            for feature in features:
+                raw_feature_count += 1
+                feature_id = int(feature["feature_id"])
+                tag_id, corner_id, face_id = tower_feature_fields(feature_id, layout)
+                local = tower_face_local_point_for_feature(feature_id, layout)
+                if tag_id is None or corner_id is None or face_id is None or local is None:
+                    continue
+                if accepted_frame_face_keys and (frame_index, face_id) not in accepted_frame_face_keys:
+                    continue
+                pose = frame_face_poses.get((frame_index, face_id))
+                if pose is None:
+                    missing_pose_count += 1
+                    continue
+                world = transform_point(pose, local).tolist()
+                world = apply_coordinate_transform(world, coordinate_transform)
+                used_frame_faces.add((frame_index, face_id))
+                key = (tag_id, corner_id)
+                tracks.setdefault(key, []).append({
+                    "dataset": "whole",
+                    "kind": "raw_feature_correspondence",
+                    "source": "raw_apriltag_dataset_shared_track",
+                    "frame_index": frame_index,
+                    "imageset_index": int(imageset["index"]),
+                    "filename": str(imageset["filename"]),
+                    "camera_index": camera_index,
+                    "camera_id": camera_id,
+                    "feature_id": feature_id,
+                    "tag_id": tag_id,
+                    "corner_id": corner_id,
+                    "face_id": face_id,
+                    "local": [float(value) for value in local],
+                    "world": [float(value) for value in world],
+                    "three": to_three(world),
+                    "camera_center": camera_center,
+                    "camera_center_three": to_three(camera_center) if camera_center else None,
+                    "line_three": [to_three(camera_center), to_three(world)] if camera_center else None,
+                    "observed": [float(feature["x"]), float(feature["y"])],
+                    "projected": [None, None],
+                    "residual": [None, None],
+                    "residual_px": None,
+                    "residual_color": 0.0,
+                    "projection_status": "raw_detection_shared_track",
+                })
+
+        shared_tracks = []
+        for key, items in tracks.items():
+            camera_set = {item["camera_id"] for item in items}
+            if len(camera_set) < 2:
+                continue
+            raw_shared_track_count += 1
+            shared_tracks.append((key, items, len(camera_set)))
+        shared_tracks.sort(key=lambda item: (-item[2], -len(item[1]), item[0][0], item[0][1]))
+        if max_shared_tracks_per_frame and max_shared_tracks_per_frame > 0:
+            shared_tracks = shared_tracks[:max_shared_tracks_per_frame]
+        selected_shared_track_count += len(shared_tracks)
+        for _key, items, _camera_count in shared_tracks:
+            frames_with_selected.add(frame_index)
+            for item in items:
+                camera_ids.add(item["camera_id"])
+                observations.append(item)
+
+    frame_face_pose_entries = []
+    for frame_index, face_id in sorted(used_frame_faces):
+        pose = frame_face_poses.get((frame_index, face_id))
+        if pose is None:
+            continue
+        entry = frame_face_pose_to_viewer_entry(frame_index, face_id, pose, coordinate_transform)
+        if entry:
+            frame_face_pose_entries.append(entry)
+
+    summary = summarize_residuals(residuals, len(observations), missing_pose_count)
+    summary.update({
+        "source": "raw_apriltag_dataset_shared_tracks",
+        "frame_face_filter": "final_ba_residual_frame_faces" if accepted_frame_face_keys else "all_frame_faces_with_pose",
+        "accepted_frame_face_key_count": int(len(accepted_frame_face_keys)),
+        "raw_feature_count": int(raw_feature_count),
+        "raw_shared_track_count": int(raw_shared_track_count),
+        "selected_shared_track_count": int(selected_shared_track_count),
+        "max_shared_tracks_per_frame": int(max_shared_tracks_per_frame),
+        "frame_face_pose_count": len(frame_face_pose_entries),
+        "source_dataset": str(dataset_path.resolve()),
+    })
+    return {
+        "observations": observations,
+        "frames": full_frame_range(frames_all),
+        "observed_frames": sorted(frames_with_selected),
+        "timeline_frames": full_frame_range(frames_all),
         "camera_ids": sorted(camera_ids),
         "frame_face_poses": frame_face_pose_entries,
         "summary": summary,
@@ -486,6 +747,14 @@ def row_value(row, *names, default=None):
     return default
 
 
+def row_display_frame_index(row, fallback=None):
+    return finite_int(row_value(row, "frame_index", "imageset_index"), fallback)
+
+
+def row_pose_index(row, fallback=None):
+    return finite_int(row_value(row, "imageset_index", "frame_index"), fallback)
+
+
 def load_pnp_dataset(name, pnp_dir, cameras, coordinate_transform=None):
     if not pnp_dir:
         return empty_pnp_dataset(name)
@@ -506,13 +775,14 @@ def load_pnp_dataset(name, pnp_dir, cameras, coordinate_transform=None):
             reader = csv.DictReader(stream, delimiter="\t")
             for row in reader:
                 camera_index = finite_int(row_value(row, "camera_index", "camera"))
-                frame_index = finite_int(row_value(row, "imageset_index", "frame_index"))
-                if camera_index is None or frame_index is None:
+                pose_index = row_pose_index(row)
+                frame_index = row_display_frame_index(row, pose_index)
+                if camera_index is None or pose_index is None or frame_index is None:
                     continue
                 status = str(row.get("status") or "")
                 if status.lower() == "failed":
                     continue
-                board_pose = rig_poses.get(frame_index)
+                board_pose = rig_poses.get(pose_index)
                 board_center = board_pose[:3, 3].tolist() if board_pose is not None else None
                 if board_center is not None:
                     board_center = apply_coordinate_transform(board_center, coordinate_transform)
@@ -525,6 +795,7 @@ def load_pnp_dataset(name, pnp_dir, cameras, coordinate_transform=None):
                     "kind": "per_view_pose_summary",
                     "dataset": name,
                     "frame_index": frame_index,
+                    "imageset_index": pose_index,
                     "camera_index": camera_index,
                     "camera_id": camera_id,
                     "filename": str(row.get("filename") or ""),
@@ -548,7 +819,9 @@ def load_pnp_dataset(name, pnp_dir, cameras, coordinate_transform=None):
         "point_count": int(points.shape[0]),
         "sample_points_three": [to_three(point) for point in points[:512]],
         "view_count": len(views),
-        "frames": sorted(frames),
+        "frames": full_frame_range(frames),
+        "observed_frames": sorted(frames),
+        "timeline_frames": full_frame_range(frames),
         "camera_ids": sorted(camera_ids),
         "views": views,
     }
@@ -583,7 +856,7 @@ def load_marker_correspondences(name, path, max_rows, cameras=None):
             if any(value is None for value in world + center):
                 continue
             ok_count += 1
-            frame = finite_int(row.get("imageset_index"))
+            frame = row_display_frame_index(row)
             if frame is not None:
                 frame_counts[frame] = frame_counts.get(frame, 0) + 1
             camera_ids.add(str(row.get("camera_label") or row.get("reference_camera_index") or row.get("camera_index")))
@@ -617,11 +890,13 @@ def load_marker_correspondences(name, path, max_rows, cameras=None):
             kept_ok_index += 1
             residual_px = finite_float(row.get("residual_px"))
             camera_id = str(row.get("camera_label") or row.get("reference_camera_index") or row.get("camera_index"))
-            frame_index = finite_int(row.get("imageset_index"))
+            imageset_index = row_pose_index(row)
+            frame_index = row_display_frame_index(row, imageset_index)
             observations.append({
                 "kind": "feature_correspondence",
                 "dataset": name,
                 "frame_index": frame_index,
+                "imageset_index": imageset_index,
                 "filename": str(row.get("filename") or ""),
                 "camera_index": finite_int(row.get("reference_camera_index"), finite_int(row.get("camera_index"))),
                 "camera_id": camera_id,
@@ -650,7 +925,8 @@ def load_marker_correspondences(name, path, max_rows, cameras=None):
             })
 
     alignment = align_marker_observations_to_cameras(observations, cameras or [])
-    frames = sorted(frame_counts)
+    observed_frames = sorted(frame_counts)
+    timeline_frames = full_frame_range(observed_frames)
     top_frames = [
         {"frame_index": int(frame), "observation_count": int(count)}
         for frame, count in sorted(frame_counts.items(), key=lambda item: (-item[1], item[0]))[:64]
@@ -674,7 +950,9 @@ def load_marker_correspondences(name, path, max_rows, cameras=None):
         "point_count": int(len(observations)),
         "sample_points_three": [obs["three"] for obs in observations[:512]],
         "view_count": int(len(view_keys)),
-        "frames": frames,
+        "frames": timeline_frames,
+        "observed_frames": observed_frames,
+        "timeline_frames": timeline_frames,
         "top_frames": top_frames,
         "camera_ids": sorted(camera_ids),
         "views": [],
@@ -976,6 +1254,19 @@ def build_data(args):
         cameras,
         coordinate_transform,
     )
+    raw_outer = load_outer_raw_shared_observations(
+        args.outer_raw_dataset,
+        args.outer_raw_manifest,
+        args.outer_frame_face_pose_yaml,
+        cameras,
+        coordinate_transform,
+        args.max_outer_shared_tracks_per_frame,
+        read_residual_frame_face_keys(args.outer_observation_residuals_tsv),
+    )
+    if raw_outer is not None and raw_outer["observations"]:
+        raw_outer["summary"]["final_ba_observation_count"] = outer["summary"].get("observation_count")
+        raw_outer["summary"]["final_ba_median_residual_px"] = outer["summary"].get("median_residual_px")
+        outer = raw_outer
     large = (
         load_marker_correspondences(
             "large",
@@ -1042,12 +1333,15 @@ def parse_args():
     parser.add_argument("--studio32-yaml", required=True, type=Path)
     parser.add_argument("--outer-observation-residuals-tsv", required=True, type=Path)
     parser.add_argument("--outer-frame-face-pose-yaml", required=True, type=Path)
+    parser.add_argument("--outer-raw-dataset", type=Path, default=None)
+    parser.add_argument("--outer-raw-manifest", type=Path, default=None)
     parser.add_argument("--large-correspondence-tsv", type=Path, default=None)
     parser.add_argument("--small-correspondence-tsv", type=Path, default=None)
     parser.add_argument("--large-pnp-dir", type=Path, default=None)
     parser.add_argument("--small-pnp-dir", type=Path, default=None)
     parser.add_argument("--viewer-assets-dir", type=Path, default=None)
     parser.add_argument("--max-marker-correspondences-per-dataset", type=int, default=30000)
+    parser.add_argument("--max-outer-shared-tracks-per-frame", type=int, default=96)
     return parser.parse_args()
 
 

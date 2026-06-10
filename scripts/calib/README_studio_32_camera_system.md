@@ -117,8 +117,10 @@ faces:          8
 tags per face:  32
 layout:         2 columns x 16 rows
 tag family:     tag36h11
-tag size:       0.08 m
-tag gap:        0.02 m
+printed tile:   0.08 m side
+printed gap:    0.02 m tile-to-tile
+BA tag size:    0.08 m black-tile outer corner square
+BA tag gap:     0.02 m physical white tile gap
 face id ranges: 0-31, 32-63, 64-95, ..., 224-255
 ```
 

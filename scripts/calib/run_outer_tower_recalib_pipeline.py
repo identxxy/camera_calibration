@@ -21,7 +21,48 @@ T0_HTTP_ROOT = Path("/home/ubuntu/calib_data")
 T0_HTTP_BASE = "http://192.168.2.0:9899"
 DEFAULT_LEGACY_ANCHOR_LABEL_TO_POSE_INDEX = "4-1:8,4-2:9,4-3:10"
 DEFAULT_ALL32_ANCHOR_LABEL_TO_POSE_INDEX = "4-1:9,4-2:10,4-3:11"
+# Production whole-tower BA should use physical black-tile outer corners:
+# 8 cm black tile footprint and 2 cm white gap. The older 0.067104... effective
+# detector-square geometry is only valid for legacy datasets that stored raw
+# OpenCV AprilTag inner-detector corners.
+DEFAULT_TOWER_TAG_CENTER_PITCH_M = 0.10
+DEFAULT_TOWER_DETECTOR_TAG_SIZE_M = 0.08
 FRAME_FACE_REFINE_PRESETS = {
+    "wide200_then_gate6": {
+        "pnp_ransac_iterations": 1000,
+        "pnp_ransac_threshold_px": 4.0,
+        "max_pnp_median_error_px": 5.0,
+        "min_frame_face_observations": 8,
+        "initial_observation_residual_gate_px": 200.0,
+        "observation_residual_gate_px": 6.0,
+        "optimizer_residual_clip_px": 20.0,
+        "outer_iterations": 12,
+        "block_iterations": 8,
+        "min_camera_observations_for_delta": 8,
+    },
+    "wide200_then_gate6_flex_faces": {
+        "tower_model": "flex_yaw_offset_tower",
+        "optimize_tower_face_width": False,
+        "pnp_ransac_iterations": 1000,
+        "pnp_ransac_threshold_px": 4.0,
+        "max_pnp_median_error_px": 5.0,
+        "min_frame_face_observations": 8,
+        "initial_observation_residual_gate_px": 200.0,
+        "observation_residual_gate_px": 6.0,
+        "optimizer_residual_clip_px": 20.0,
+        "outer_iterations": 14,
+        "block_iterations": 8,
+        "min_camera_observations_for_delta": 8,
+        "flex_face_yaw_sigma_deg": 3.0,
+        "flex_face_yaw_max_deg": 8.0,
+        "flex_face_radial_offset_sigma_m": 0.015,
+        "flex_face_radial_offset_max_m": 0.05,
+        "flex_face_tangent_offset_sigma_m": 0.010,
+        "flex_face_tangent_offset_max_m": 0.02,
+        "flex_face_adjacent_angle_min_deg": 30.0,
+        "flex_face_adjacent_angle_max_deg": 60.0,
+        "flex_face_geometry_block_iterations": 6,
+    },
     "wide50_then_gate4": {
         "pnp_ransac_iterations": 1000,
         "pnp_ransac_threshold_px": 4.0,
@@ -57,6 +98,41 @@ FRAME_FACE_REFINE_PRESETS = {
         "outer_iterations": 12,
         "block_iterations": 8,
         "min_camera_observations_for_delta": 8,
+    },
+    "wide50_then_gate16": {
+        "pnp_ransac_iterations": 1000,
+        "pnp_ransac_threshold_px": 4.0,
+        "max_pnp_median_error_px": 5.0,
+        "min_frame_face_observations": 8,
+        "initial_observation_residual_gate_px": 50.0,
+        "observation_residual_gate_px": 16.0,
+        "optimizer_residual_clip_px": 40.0,
+        "outer_iterations": 12,
+        "block_iterations": 8,
+        "min_camera_observations_for_delta": 8,
+    },
+    "wide50_then_gate16_flex_faces": {
+        "tower_model": "flex_yaw_offset_tower",
+        "optimize_tower_face_width": False,
+        "pnp_ransac_iterations": 1000,
+        "pnp_ransac_threshold_px": 4.0,
+        "max_pnp_median_error_px": 5.0,
+        "min_frame_face_observations": 8,
+        "initial_observation_residual_gate_px": 50.0,
+        "observation_residual_gate_px": 16.0,
+        "optimizer_residual_clip_px": 40.0,
+        "outer_iterations": 14,
+        "block_iterations": 8,
+        "min_camera_observations_for_delta": 8,
+        "flex_face_yaw_sigma_deg": 3.0,
+        "flex_face_yaw_max_deg": 8.0,
+        "flex_face_radial_offset_sigma_m": 0.015,
+        "flex_face_radial_offset_max_m": 0.05,
+        "flex_face_tangent_offset_sigma_m": 0.010,
+        "flex_face_tangent_offset_max_m": 0.02,
+        "flex_face_adjacent_angle_min_deg": 30.0,
+        "flex_face_adjacent_angle_max_deg": 60.0,
+        "flex_face_geometry_block_iterations": 6,
     },
     "gate20": {
         "pnp_ransac_iterations": 100,
@@ -337,8 +413,14 @@ def build_paths(args):
         whole_dir,
     ]
     default_frame_face_stage_root = choose_first_existing(
-        [root / "opencv_tower_dataset_fullres.bin" for root in frame_face_stage_roots],
-        frame_face_stage_roots[0] / "opencv_tower_dataset_fullres.bin",
+        [
+            candidate
+            for root in frame_face_stage_roots
+            for candidate in [
+                root / "opencv_tower_dataset_black_tile_red_scale_edge.bin",
+            ]
+        ],
+        frame_face_stage_roots[0] / "opencv_tower_dataset_black_tile_red_scale_edge.bin",
     ).parent
     default_frame_face_root = choose_first_existing(
         [root / "pnp_inlier_filter_facewidth025_optwidth_v1" for root in frame_face_stage_roots],
@@ -349,19 +431,10 @@ def build_paths(args):
         if args.frame_face_dataset
         else choose_first_existing(
             [
-                whole_dir / "opencv_tower_dataset_fullres.bin",
-                whole_dir / "opencv_tower_dataset_fullres_corner_offset2.bin",
-                whole_dir / "pnp_inlier_filter_facewidth025_optwidth_ransac1000_probe" / "tower_pnp_inliers.bin",
-                default_frame_face_root / "tower_pnp_inliers.bin",
-                whole_dir / "pnp_inlier_filter_facewidth025_optwidth_v1" / "tower_pnp_inliers.bin",
-                *[root / "opencv_tower_dataset_fullres.bin" for root in frame_face_stage_roots],
-                *[root / "opencv_tower_dataset_fullres_corner_offset2.bin" for root in frame_face_stage_roots],
-                *[
-                    root / "pnp_inlier_filter_facewidth025_optwidth_ransac1000_probe" / "tower_pnp_inliers.bin"
-                    for root in frame_face_stage_roots
-                ],
+                whole_dir / "opencv_tower_dataset_black_tile_red_scale_edge.bin",
+                *[root / "opencv_tower_dataset_black_tile_red_scale_edge.bin" for root in frame_face_stage_roots],
             ],
-            default_frame_face_stage_root / "opencv_tower_dataset_fullres.bin",
+            default_frame_face_stage_root / "opencv_tower_dataset_black_tile_red_scale_edge.bin",
         )
     )
     frame_face_manifest = (
@@ -867,6 +940,10 @@ def make_command(script_name, *args):
     return [sys.executable, str(repo_root() / "scripts" / "calib" / script_name), *[str(x) for x in args]]
 
 
+def tower_detector_tag_spacing_m(args):
+    return float(args.tower_tag_center_pitch_m) - float(args.tower_detector_tag_size_m)
+
+
 def bridge_prior_override_decision(args, paths):
     requested = (args.bridge_prior_override_labels or "").strip()
     summary_path = paths["bridge_summary_json"]
@@ -1050,6 +1127,8 @@ def build_stage_plan(args, paths):
         "--tower_face_width_min_m", args.tag_tower_face_width_min_m,
         "--tower_face_width_max_m", args.tag_tower_face_width_max_m,
         "--tower_face_width_max_step_m", args.tag_tower_face_width_max_step_m,
+        "--tower_tag_size_m", args.tower_detector_tag_size_m,
+        "--tower_tag_spacing_m", tower_detector_tag_spacing_m(args),
         "--max_pnp_median_error_px", args.tag_max_pnp_median_error_px,
     )
     if args.tag_optimize_tower_face_width:
@@ -1076,6 +1155,15 @@ def build_stage_plan(args, paths):
         "--intrinsics_dir", paths["frame_face_intrinsics_dir"],
         "--intrinsics_mode", "central_opencv",
         "--intrinsics_refine_mode", "fixed",
+        "--tower_model", frame_face_preset.get("tower_model", "rigid_yaw45_tower"),
+        "--tower_face_count", 8,
+        "--tower_face0_angle_degrees", 0.0,
+        "--tower_face_width_initial_m", 0.25,
+        "--tower_face_width_sigma_m", 0.03,
+        "--tower_face_width_min_m", 0.18,
+        "--tower_face_width_max_m", 0.32,
+        "--tower_tag_size_m", args.tower_detector_tag_size_m,
+        "--tower_tag_spacing_m", tower_detector_tag_spacing_m(args),
         "--output_dir", paths["frame_face_refine_dir"],
         "--outer_iterations", frame_face_preset["outer_iterations"],
         "--block_iterations", frame_face_preset["block_iterations"],
@@ -1087,6 +1175,22 @@ def build_stage_plan(args, paths):
         "--min_frame_face_observations", frame_face_preset["min_frame_face_observations"],
         "--min_camera_observations_for_delta", frame_face_preset["min_camera_observations_for_delta"],
     )
+    if frame_face_preset.get("optimize_tower_face_width", True):
+        frame_face_cmd.append("--optimize_tower_face_width")
+    else:
+        frame_face_cmd.append("--no-optimize_tower_face_width")
+    if frame_face_preset.get("tower_model") == "flex_yaw_offset_tower":
+        frame_face_cmd.extend([
+            "--flex_face_yaw_sigma_deg", frame_face_preset["flex_face_yaw_sigma_deg"],
+            "--flex_face_yaw_max_deg", frame_face_preset["flex_face_yaw_max_deg"],
+            "--flex_face_radial_offset_sigma_m", frame_face_preset["flex_face_radial_offset_sigma_m"],
+            "--flex_face_radial_offset_max_m", frame_face_preset["flex_face_radial_offset_max_m"],
+            "--flex_face_tangent_offset_sigma_m", frame_face_preset["flex_face_tangent_offset_sigma_m"],
+            "--flex_face_tangent_offset_max_m", frame_face_preset["flex_face_tangent_offset_max_m"],
+            "--flex_face_adjacent_angle_min_deg", frame_face_preset["flex_face_adjacent_angle_min_deg"],
+            "--flex_face_adjacent_angle_max_deg", frame_face_preset["flex_face_adjacent_angle_max_deg"],
+            "--flex_face_geometry_block_iterations", frame_face_preset["flex_face_geometry_block_iterations"],
+        ])
     if frame_face_preset.get("initial_observation_residual_gate_px") is not None:
         frame_face_cmd.extend([
             "--initial_observation_residual_gate_px",
@@ -1865,14 +1969,14 @@ def parse_args():
     parser.add_argument(
         "--frame-face-refine-preset",
         choices=sorted(FRAME_FACE_REFINE_PRESETS),
-        default="wide50_then_gate6",
+        default="wide200_then_gate6",
         help=(
-            "Preset for refine_outer_tower_frame_face_planes.py. wide50_then_gate6 is "
-            "the current conservative production candidate: fullres raw tag corners, "
-            "a wide support-recovery pass, 1000-iteration PnP RANSAC, then strict "
-            "6px re-gating. wide50_then_gate4 is the stricter high-precision "
-            "candidate when full-resolution detections provide enough support; "
-            "wide50_then_gate10 keeps more observations for diagnostics."
+            "Preset for refine_outer_tower_frame_face_planes.py. wide200_then_gate6 "
+            "is the production default for black-tile physical-corner datasets: "
+            "loose 200px initialization support, robust BA, then strict 6px "
+            "final re-gating. wide50_* presets are legacy diagnostics for older "
+            "initialization behavior. *_flex_faces presets relax the ideal "
+            "octagonal tower with bounded per-face yaw/radial/tangent offsets."
         ),
     )
     parser.add_argument("--frame-face-dataset", type=Path, default=None)
@@ -1880,6 +1984,25 @@ def parse_args():
     parser.add_argument("--frame-face-prior-pose-yaml", type=Path, default=None)
     parser.add_argument("--frame-face-intrinsics-dir", type=Path, default=None)
     parser.add_argument("--frame-face-output-dir", type=Path, default=None)
+    parser.add_argument(
+        "--tower-detector-tag-size-m",
+        type=float,
+        default=DEFAULT_TOWER_DETECTOR_TAG_SIZE_M,
+        help=(
+            "Physical side length represented by the 2D tower corner observations. "
+            "Production black-tile datasets use the 8 cm printed black tile footprint. "
+            "Pass 0.06710408594834662 only for legacy raw OpenCV inner-detector-corner datasets."
+        ),
+    )
+    parser.add_argument(
+        "--tower-tag-center-pitch-m",
+        type=float,
+        default=DEFAULT_TOWER_TAG_CENTER_PITCH_M,
+        help=(
+            "Center-to-center pitch between adjacent tags on one tower face. "
+            "The studio tower uses 8 cm printed tiles with 2 cm tile gaps, so this is 10 cm."
+        ),
+    )
     parser.add_argument("--tag-observation-residual-gate-px", type=float, default=600.0)
     parser.add_argument("--tag-post-refine-observation-residual-gate-px", type=float, default=190.0)
     parser.add_argument("--tag-post-refine-outer-iterations", type=int, default=2)
@@ -1952,7 +2075,12 @@ def parse_args():
     parser.add_argument("--tag-tower-face-width-max-step-m", type=float, default=0.005)
     parser.add_argument("--delta-translation-sigma-m", type=float, default=0.12)
     parser.add_argument("--delta-rotation-sigma-deg", type=float, default=3.0)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.tower_detector_tag_size_m <= 0:
+        parser.error("--tower-detector-tag-size-m must be positive")
+    if args.tower_tag_center_pitch_m <= args.tower_detector_tag_size_m:
+        parser.error("--tower-tag-center-pitch-m must be larger than --tower-detector-tag-size-m")
+    return args
 
 
 def main():

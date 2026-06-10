@@ -4,6 +4,10 @@ CMakeLists.txt.user
 build*/
 .ipynb_checkpoints
 *.pyc
+*.mcap
+
+# Local scratch artifacts and downloaded dependencies.
+.local/
 
 # Internal collaboration layer (notes, plans, discussions). Not part of upstream.
 studio/

@@ -5,6 +5,7 @@ set -euo pipefail
 
 REPO="${REPO:-${HOME}/camera_calibration}"
 PREFIX="${PREFIX:-${HOME}/.local}"
+BUILD_DIR="${BUILD_DIR:-${REPO}/build_t0_current}"
 CUDA_ARCH="${CUDA_ARCH:-89}"
 OPENGV_COMMIT="${OPENGV_COMMIT:-306a54e6c6b94e2048f820cdf77ef5281d4b48ad}"
 
@@ -36,17 +37,17 @@ for arch in ${CUDA_ARCH//;/ }; do
   CUDA_FLAGS+="-gencode arch=compute_${arch},code=sm_${arch} "
 done
 
-cmake -S "${REPO}" -B "${REPO}/build_t0" \
+cmake -S "${REPO}" -B "${BUILD_DIR}" \
   -G Ninja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DCMAKE_PREFIX_PATH="${PREFIX}" \
   -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-11 \
   -DCMAKE_CUDA_FLAGS="${CUDA_FLAGS}"
 
-cmake --build "${REPO}/build_t0" --target camera_calibration -j"$(nproc)"
+cmake --build "${BUILD_DIR}" --target camera_calibration -j"$(nproc)"
 
 set +e
-"${REPO}/build_t0/applications/camera_calibration/camera_calibration" --help >/tmp/camera_calibration_help.txt
+"${BUILD_DIR}/applications/camera_calibration/camera_calibration" --help >/tmp/camera_calibration_help.txt
 HELP_STATUS=$?
 set -e
 if ! grep -q -- "--apriltag_tower_config" /tmp/camera_calibration_help.txt; then
@@ -56,4 +57,4 @@ fi
 if [ "${HELP_STATUS}" -ne 0 ]; then
   echo "Note: camera_calibration --help returned ${HELP_STATUS}; usage output was still generated."
 fi
-echo "Build OK: ${REPO}/build_t0/applications/camera_calibration/camera_calibration"
+echo "Build OK: ${BUILD_DIR}/applications/camera_calibration/camera_calibration"

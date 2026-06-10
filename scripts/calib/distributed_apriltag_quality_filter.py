@@ -1052,6 +1052,34 @@ def find_metrics_files(worker_outputs):
     return unique
 
 
+def find_detection_jsonl_files(worker_outputs):
+    paths = []
+    for item in worker_outputs:
+        path = Path(item)
+        if path.is_file() and path.name == "detections.jsonl":
+            paths.append(path)
+            continue
+        if path.is_file() and path.name == "per_image_metrics.tsv":
+            sibling = path.parent / "detections.jsonl"
+            if sibling.is_file():
+                paths.append(sibling)
+            continue
+        direct = path / "detections.jsonl"
+        if direct.is_file():
+            paths.append(direct)
+            continue
+        if path.is_dir():
+            paths.extend(sorted(path.glob("**/detections.jsonl")))
+    unique = []
+    seen = set()
+    for path in paths:
+        resolved = str(path.resolve())
+        if resolved not in seen:
+            unique.append(path)
+            seen.add(resolved)
+    return unique
+
+
 def load_metric_rows(worker_outputs):
     rows = []
     for path in find_metrics_files(worker_outputs):
@@ -1433,6 +1461,59 @@ def write_passing_image_dataset(args, output_dir, manifest_rows, chosen_metrics,
     return image_dirs, output_manifest, selected_rows, missing_sources
 
 
+def write_selected_detections_jsonl(output_path, worker_outputs, selected_image_rows):
+    selected_by_key = {}
+    for row in selected_image_rows:
+        key = (
+            str(row.get("camera_id", "")),
+            str(row.get("time", "")),
+            frame_text(row.get("frame_id", "")),
+        )
+        selected_by_key[key] = row
+    detection_paths = find_detection_jsonl_files(worker_outputs)
+    matched = 0
+    scanned = 0
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as out_stream:
+        for path in detection_paths:
+            with Path(path).open("r", encoding="utf-8") as in_stream:
+                for line_number, line in enumerate(in_stream, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    scanned += 1
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    key = (
+                        str(record.get("camera_id", "")),
+                        str(record.get("time", "")),
+                        frame_text(record.get("frame_id", "")),
+                    )
+                    selected = selected_by_key.get(key)
+                    if selected is None:
+                        continue
+                    item = dict(record)
+                    item["_worker_detections_jsonl"] = str(path)
+                    item["_worker_line_number"] = line_number
+                    item["_selected"] = {
+                        "out_frame": selected.get("out_frame", ""),
+                        "camera_index": selected.get("camera_index", ""),
+                        "filtered_image": selected.get("filtered_image", ""),
+                        "source": selected.get("source", ""),
+                    }
+                    out_stream.write(json.dumps(item, sort_keys=True) + "\n")
+                    matched += 1
+    return {
+        "path": str(output_path),
+        "worker_detection_file_count": len(detection_paths),
+        "scanned_detection_record_count": scanned,
+        "selected_detection_record_count": matched,
+    }
+
+
 def chosen_metric_rows(by_camera_frame, camera_ids, time_ids):
     camera_set = set(camera_ids)
     time_set = set(time_ids)
@@ -1574,6 +1655,10 @@ def run_aggregate(args):
             "out_frame", "time", "frame_id", "frame_key", "camera_index", "camera_id",
             "tag_count", "corner_count", "source", "filtered_image",
         ])
+    selected_detections = write_selected_detections_jsonl(
+        output_dir / "selected_detections.jsonl",
+        worker_outputs,
+        selected_image_rows)
 
     passing_rows = []
     time_set = set(time_ids)
@@ -1639,6 +1724,7 @@ def run_aggregate(args):
         "selected_passing_camera_count_histogram": selected_passing_histogram,
         "missing_base_manifest_cameras": missing_manifest_cameras,
         "missing_source_count": len(missing_sources),
+        "selected_detections": selected_detections,
         "selection": {
             "stage_mode": args.stage_mode,
             "min_tags": args.min_tags,
@@ -1653,6 +1739,7 @@ def run_aggregate(args):
             "frame_selection": str(output_dir / "frame_selection.tsv"),
             "selected_frames": str(output_dir / "selected_frames.tsv"),
             "selected_images": str(output_dir / "selected_images.tsv"),
+            "selected_detections": str(output_dir / "selected_detections.jsonl"),
             "passing_images": str(output_dir / f"images_min{args.min_tags}.tsv"),
             "per_camera_stats": str(output_dir / "per_camera_stats.tsv"),
             "index_html": str(output_dir / "index.html"),
@@ -1661,6 +1748,9 @@ def run_aggregate(args):
             "Use image_directories.txt with parallel_extract_features.py. "
             "For repo calibration-board data, pass --pattern-files. "
             "For tower data, pass --apriltag-tower-config. "
+            "For faster tower BA dataset construction, pass selected_detections.jsonl "
+            "and selected_images.tsv to build_apriltag_tower_dataset_opencv.py "
+            "instead of re-running detection on every staged image. "
             "Use --stage-mode passing-images for per-camera intrinsic initialization, "
             "and the default synchronized frame staging for multi-camera rig calibration."
         ),

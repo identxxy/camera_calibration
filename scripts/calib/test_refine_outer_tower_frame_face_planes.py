@@ -56,6 +56,110 @@ class RefineOuterTowerFrameFacePlanesTest(unittest.TestCase):
         self.assertEqual(len(by_camera[0]), 3)
         self.assertEqual(len(by_camera[1]), 2)
 
+    def test_rigid_yaw45_tower_model_builds_shared_frame_faces(self):
+        args = type("Args", (), {
+            "tower_face_count": 8,
+            "tower_face0_angle_degrees": 0.0,
+            "tower_face_width_initial_m": 0.25,
+        })()
+        poses = refine_ff.frame_face_poses_from_tower_poses(
+            {311: refine_ff.base.np.eye(4, dtype=refine_ff.base.np.float64)},
+            {(311, 0), (311, 1)},
+            args,
+            0.0,
+        )
+
+        n0 = poses[(311, 0)][:3, 0]
+        n1 = poses[(311, 1)][:3, 0]
+        z0 = poses[(311, 0)][:3, 2]
+        z1 = poses[(311, 1)][:3, 2]
+        angle_deg = refine_ff.math.degrees(refine_ff.math.acos(float(refine_ff.base.np.dot(n0, n1))))
+
+        self.assertAlmostEqual(angle_deg, 45.0, places=6)
+        self.assertTrue(refine_ff.base.np.allclose(z0, z1))
+        self.assertTrue(refine_ff.base.np.allclose(z0, [0.0, 0.0, 1.0]))
+
+    def test_flex_tower_model_applies_bounded_face_yaw_and_offsets(self):
+        args = type("Args", (), {
+            "tower_model": "flex_yaw_offset_tower",
+            "tower_face_count": 8,
+            "tower_face0_angle_degrees": 0.0,
+            "tower_face_width_initial_m": 0.25,
+            "flex_face_yaw_max_deg": 8.0,
+            "flex_face_radial_offset_max_m": 0.05,
+            "flex_face_tangent_offset_max_m": 0.02,
+        })()
+        delta = refine_ff.zero_face_geometry_delta(args)
+        face_count = args.tower_face_count
+        delta[1] = refine_ff.math.radians(5.0)
+        delta[face_count + 1] = 0.02
+        delta[2 * face_count + 1] = 0.01
+
+        poses = refine_ff.frame_face_poses_from_tower_poses(
+            {0: refine_ff.base.np.eye(4, dtype=refine_ff.base.np.float64)},
+            {(0, 0), (0, 1)},
+            args,
+            0.0,
+            delta,
+        )
+
+        n0 = poses[(0, 0)][:3, 0]
+        n1 = poses[(0, 1)][:3, 0]
+        angle_deg = refine_ff.math.degrees(refine_ff.math.acos(float(refine_ff.base.np.dot(n0, n1))))
+        self.assertAlmostEqual(angle_deg, 50.0, places=6)
+
+        yaw_only = refine_ff.zero_face_geometry_delta(args)
+        yaw_only[1] = delta[1]
+        yaw_only_face1 = refine_ff.tower_face_transform(
+            1,
+            0.25,
+            args.tower_face_count,
+            args.tower_face0_angle_degrees,
+            yaw_only,
+            args,
+        )
+        shifted = poses[(0, 1)][:3, 3] - yaw_only_face1[:3, 3]
+        shifted_radial = float(refine_ff.base.np.dot(shifted, n1))
+        shifted_tangent = float(refine_ff.base.np.dot(shifted, poses[(0, 1)][:3, 1]))
+        self.assertAlmostEqual(shifted_radial, 0.02, places=6)
+        self.assertAlmostEqual(shifted_tangent, 0.01, places=6)
+
+        over = refine_ff.zero_face_geometry_delta(args)
+        over[0] = refine_ff.math.radians(20.0)
+        over[face_count] = 0.20
+        over[2 * face_count] = -0.20
+        clamped = refine_ff.clamp_face_geometry_delta(args, over)
+        self.assertAlmostEqual(clamped[0], refine_ff.math.radians(8.0), places=12)
+        self.assertAlmostEqual(clamped[face_count], 0.05, places=12)
+        self.assertAlmostEqual(clamped[2 * face_count], -0.02, places=12)
+
+    def test_flex_face_geometry_prior_penalizes_invalid_adjacent_separation(self):
+        args = type("Args", (), {
+            "tower_model": "flex_yaw_offset_tower",
+            "tower_face_count": 8,
+            "tower_face0_angle_degrees": 0.0,
+            "tower_face_width_initial_m": 0.25,
+            "flex_face_yaw_max_deg": 8.0,
+            "flex_face_radial_offset_max_m": 0.05,
+            "flex_face_tangent_offset_max_m": 0.02,
+            "flex_face_yaw_sigma_deg": 3.0,
+            "flex_face_radial_offset_sigma_m": 0.015,
+            "flex_face_tangent_offset_sigma_m": 0.010,
+            "flex_face_adjacent_angle_sigma_deg": 1.0,
+            "flex_face_adjacent_angle_min_deg": 40.0,
+            "flex_face_adjacent_angle_max_deg": 50.0,
+        })()
+        valid = refine_ff.zero_face_geometry_delta(args)
+        invalid = refine_ff.zero_face_geometry_delta(args)
+        invalid[0] = refine_ff.math.radians(8.0)
+        invalid[1] = refine_ff.math.radians(-8.0)
+
+        valid_prior = refine_ff.face_geometry_prior_residual(args, valid)
+        invalid_prior = refine_ff.face_geometry_prior_residual(args, invalid)
+
+        self.assertAlmostEqual(float(refine_ff.base.np.linalg.norm(valid_prior)), 0.0)
+        self.assertGreater(float(refine_ff.base.np.linalg.norm(invalid_prior)), 5.0)
+
     def test_residuals_are_zero_at_ground_truth_frame_face_and_camera_poses(self):
         layout = refine_ff.default_tower_layout()
         intrinsic = {

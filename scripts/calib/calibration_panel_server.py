@@ -29,12 +29,12 @@ import uuid
 DEFAULT_T0_PYTHON = "/home/ubuntu/miniconda3/bin/python"
 DEFAULT_T0_REPO = "/home/ubuntu/camera_calibration"
 DEFAULT_T0_STAGE_ROOT = "/home/ubuntu/calib_data/calib_2026_05_31_v3"
-DEFAULT_T0_WHOLE_ROOT = DEFAULT_T0_STAGE_ROOT
+DEFAULT_T0_WHOLE_ROOT = "/home/ubuntu/calib_data/calib_2026_05_31_fullres_probe_v1"
 DEFAULT_T0_WHOLE_OUTER24_DIR = (
-    DEFAULT_T0_WHOLE_ROOT + "/whole_outer24_filtered_min4_hybrid_min4cam"
+    DEFAULT_T0_WHOLE_ROOT + "/whole_outer24_filtered_min4_fullres_min4cam"
 )
 DEFAULT_T0_BINARY = (
-    "/home/ubuntu/camera_calibration/build_t0/applications/"
+    "/home/ubuntu/camera_calibration/build_t0_current/applications/"
     "camera_calibration/camera_calibration"
 )
 DEFAULT_TRUSTED_INNER_ROOT = "/home/ubuntu/calib_data/calib_2026_05_26_jpg_v3"
@@ -52,11 +52,11 @@ SMALL_MARKER_PATTERN = (
 )
 DEFAULT_CURRENT_STUDIO_RUN = (
     "/home/ubuntu/calib_data/studio_calibration_runs/"
-    "recalib_20260531_193215_v2_outer_wide50"
+    "recalib_20260608_rigid_yaw45_v2"
 )
 DEFAULT_CURRENT_OUTER_FRAME_FACE_DIR = (
     DEFAULT_CURRENT_STUDIO_RUN
-    + "/outer_tower/frame_face_refine_fullres_raw_ransac1000_wide50_gate6_v1"
+    + "/outer_tower/frame_face_refine_wide50_then_gate6"
 )
 DEFAULT_CURRENT_OUTER_POSE_YAML = (
     DEFAULT_CURRENT_OUTER_FRAME_FACE_DIR + "/camera_tr_rig_delta_refined.yaml"
@@ -120,7 +120,7 @@ MODE_DEFINITIONS = {
                 "default": DEFAULT_STUDIO_PIPELINE_OUTPUT,
             },
             {"name": "run_tag", "label": "Run tag", "type": "text", "default": "latest"},
-            {"name": "outer_preset", "label": "Outer frame-face preset", "type": "text", "default": "wide50_then_gate6"},
+            {"name": "outer_preset", "label": "Outer frame-face preset", "type": "text", "default": "wide200_then_gate6"},
             {"name": "outer_only", "label": "Outer only", "type": "checkbox", "default": False},
             {"name": "bridge_only", "label": "Bridge/export only", "type": "checkbox", "default": False},
             {"name": "run_large_inner_init", "label": "Run large-inner init", "type": "checkbox", "default": False},
@@ -189,7 +189,7 @@ MODE_DEFINITIONS = {
             {"name": "run_side_prior", "label": "Run side prior", "type": "checkbox", "default": False},
             {"name": "run_tag_refine", "label": "Run tag refine", "type": "checkbox", "default": False},
             {"name": "run_frame_face_refine", "label": "Run frame-face refine", "type": "checkbox", "default": True},
-            {"name": "frame_face_refine_preset", "label": "Frame-face preset", "type": "text", "default": "wide50_then_gate6"},
+            {"name": "frame_face_refine_preset", "label": "Frame-face preset", "type": "text", "default": "wide200_then_gate6"},
             {
                 "name": "frame_face_prior_pose_yaml",
                 "label": "Frame-face prior pose YAML",
@@ -498,7 +498,7 @@ MODE_DEFINITIONS = {
             {"name": "run_side_prior", "label": "Run side prior", "type": "checkbox", "default": True},
             {"name": "run_tag_refine", "label": "Run tag refine", "type": "checkbox", "default": True},
             {"name": "run_frame_face_refine", "label": "Run frame-face refine", "type": "checkbox", "default": True},
-            {"name": "frame_face_refine_preset", "label": "Frame-face preset", "type": "text", "default": "wide50_then_gate6"},
+            {"name": "frame_face_refine_preset", "label": "Frame-face preset", "type": "text", "default": "wide200_then_gate6"},
             {
                 "name": "frame_face_prior_pose_yaml",
                 "label": "Frame-face prior pose YAML",
@@ -891,7 +891,7 @@ def outer_tower_pipeline_reports(output_root):
     return [
         report_item("3. Outer capture quality: whole tower AprilTag", output_root / "quality_report" / "index.html", primary=True),
         report_item("4. Outer solve 3D viewer", output_root / "viewer" / "index.html"),
-        report_item("4. Outer frame-face refine report", output_root / "frame_face_refine_wide50_then_gate6" / "index.html"),
+        report_item("4. Outer frame-face refine report", output_root / "frame_face_refine_wide200_then_gate6" / "index.html"),
         report_item("Outer tower final report", output_root / "final_report" / "index.html"),
         report_item("Latest summary.json", output_root / "summary.json"),
     ]
@@ -901,7 +901,7 @@ def studio_pipeline_reports(output_root):
     output_root = Path(output_root)
     return [
         report_item("Studio pipeline index", output_root / "index.html", primary=True),
-        report_item("4. Outer frame-face report", output_root / "outer_tower" / "frame_face_refine_wide50_then_gate6" / "index.html"),
+        report_item("4. Outer frame-face report", output_root / "outer_tower" / "frame_face_refine_wide200_then_gate6" / "index.html"),
         report_item("5. Unified 32-camera viewer", output_root / "inner_bridge" / "combined_studio_rig_viewer_v1" / "index.html"),
         report_item("Unified studio_32_cameras.yaml", output_root / "calibration_artifacts" / "studio_32_cameras_current" / "studio_32_cameras.yaml"),
         report_item("Latest summary.json", output_root / "summary.json"),
@@ -941,7 +941,7 @@ def build_studio_calibration_pipeline_plan(params, context, job_dir):
         "--run-tag",
         string_param(params, "run_tag", "latest") or "latest",
         "--outer-preset",
-        string_param(params, "outer_preset", "wide50_then_gate6") or "wide50_then_gate6",
+        string_param(params, "outer_preset", "wide200_then_gate6") or "wide200_then_gate6",
         "--outer-frame-face-prior-pose-yaml",
         string_param(params, "outer_frame_face_prior_pose_yaml", DEFAULT_CURRENT_OUTER_POSE_YAML, required=True),
         "--outer-frame-face-intrinsics-dir",
@@ -1052,7 +1052,7 @@ def build_outer_tower_pipeline_plan(params, context, job_dir):
     previous_intrinsics_dir = string_param(params, "previous_intrinsics_dir", "")
     anchor_pose_yaml = string_param(params, "anchor_pose_yaml", "")
     anchor_label_to_pose_index = string_param(params, "anchor_label_to_pose_index", "")
-    frame_face_refine_preset = string_param(params, "frame_face_refine_preset", "wide50_then_gate6") or "wide50_then_gate6"
+    frame_face_refine_preset = string_param(params, "frame_face_refine_preset", "wide200_then_gate6") or "wide200_then_gate6"
     frame_face_prior_pose_yaml = string_param(params, "frame_face_prior_pose_yaml", "")
     frame_face_intrinsics_dir = string_param(params, "frame_face_intrinsics_dir", "")
     frame_face_output_dir = string_param(params, "frame_face_output_dir", "")
@@ -1388,7 +1388,7 @@ def build_whole_outer_cage_operation_plan(params, context, job_dir):
         "run_side_prior": False,
         "run_tag_refine": False,
         "run_frame_face_refine": True,
-        "frame_face_refine_preset": "wide50_then_gate6",
+        "frame_face_refine_preset": "wide200_then_gate6",
         "frame_face_prior_pose_yaml": DEFAULT_CURRENT_OUTER_POSE_YAML,
         "frame_face_intrinsics_dir": DEFAULT_CURRENT_OUTER_INTRINSICS_DIR,
         "run_quality": True,

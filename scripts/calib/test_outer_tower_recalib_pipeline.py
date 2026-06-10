@@ -20,7 +20,7 @@ import run_outer_tower_recalib_pipeline as outer_pipeline  # noqa: E402
 
 
 class OuterTowerRecalibPipelineTest(unittest.TestCase):
-    def test_frame_face_default_uses_fullres_raw_wide_then_strict_preset_and_safe_geometry_prior(self):
+    def test_frame_face_default_uses_black_tile_wide200_then_strict_preset_and_safe_geometry_prior(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data_root = root / "calib_2026_05_31_v3"
@@ -34,7 +34,7 @@ class OuterTowerRecalibPipelineTest(unittest.TestCase):
             selected = frame_root / "selected_outer_frame_face_current"
             safe_geometry = frame_root / "tag_refine_safe5coeff_percam_fxfycxcy_optwidth_v1"
             weakk = frame_root / "frame_face_planes_all616_weakK_then_fixed_gate20_v1"
-            dataset = whole_dir / "opencv_tower_dataset_fullres.bin"
+            dataset = whole_dir / "opencv_tower_dataset_black_tile_red_scale_edge.bin"
             manifest = whole_dir / "manifest.tsv"
             selected_prior = selected / "camera_tr_rig_delta_refined.yaml"
             prior = safe_geometry / "camera_tr_rig_prior.yaml"
@@ -73,24 +73,26 @@ class OuterTowerRecalibPipelineTest(unittest.TestCase):
             self.assertIn(f"--dataset {dataset}", command)
             self.assertIn(f"--manifest {manifest}", command)
             self.assertIn(f"--intrinsics_dir {intrinsics}", command)
-            self.assertIn("--initial_observation_residual_gate_px 50.0", command)
+            self.assertIn("--initial_observation_residual_gate_px 200.0", command)
             self.assertIn("--observation_residual_gate_px 6.0", command)
             self.assertIn("--pnp_ransac_iterations 1000", command)
             self.assertIn("--max_pnp_median_error_px 5.0", command)
             self.assertIn("--min_frame_face_observations 8", command)
             self.assertIn("--min_camera_observations_for_delta 8", command)
+            self.assertIn("--tower_tag_size_m 0.08", command)
+            self.assertIn("--tower_tag_spacing_m 0.020000000000000004", command)
             self.assertIn("--outer_iterations 12", command)
-            self.assertIn("frame_face_refine_wide50_then_gate6", command)
+            self.assertIn("frame_face_refine_wide200_then_gate6", command)
             self.assertEqual(summary["inputs"]["frame_face_prior_pose_yaml"]["path"], str(prior.resolve()))
             self.assertEqual(summary["inputs"]["frame_face_intrinsics_dir"]["path"], str(intrinsics.resolve()))
 
-    def test_frame_face_default_discovers_fullres_filtered_stage_root(self):
+    def test_frame_face_default_discovers_black_tile_filtered_stage_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data_root = root / "calib_2026_05_31_fullres_probe_v1"
             output_root = root / "out"
             stage_root = data_root / "whole_outer24_filtered_min4_fullres_min4cam"
-            dataset = stage_root / "opencv_tower_dataset_fullres.bin"
+            dataset = stage_root / "opencv_tower_dataset_black_tile_red_scale_edge.bin"
             manifest = stage_root / "manifest.tsv"
             prior = root / "prior.yaml"
             intrinsics = root / "intrinsics"
@@ -126,6 +128,96 @@ class OuterTowerRecalibPipelineTest(unittest.TestCase):
             self.assertIn(f"--manifest {manifest}", command)
             self.assertEqual(summary["inputs"]["frame_face_dataset"]["path"], str(dataset.resolve()))
             self.assertEqual(summary["inputs"]["frame_face_manifest"]["path"], str(manifest.resolve()))
+
+    def test_frame_face_default_rejects_legacy_raw_dataset_without_black_tile_dataset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "calib_2026_05_31_fullres_probe_v1"
+            output_root = root / "out"
+            stage_root = data_root / "whole_outer24_filtered_min4_fullres_min4cam"
+            legacy_dataset = stage_root / "opencv_tower_dataset_fullres.bin"
+            manifest = stage_root / "manifest.tsv"
+            prior = root / "prior.yaml"
+            intrinsics = root / "intrinsics"
+            stage_root.mkdir(parents=True)
+            intrinsics.mkdir()
+            legacy_dataset.write_bytes(b"")
+            manifest.write_text("camera_index\tcamera_id\n", encoding="utf-8")
+            prior.write_text("poses: []\n", encoding="utf-8")
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--data-root", str(data_root),
+                    "--output-root", str(output_root),
+                    "--dry-run",
+                    "--run-frame-face-refine",
+                    "--frame-face-prior-pose-yaml", str(prior),
+                    "--frame-face-intrinsics-dir", str(intrinsics),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
+            stages = {stage["name"]: stage for stage in summary["stages"]}
+
+            self.assertEqual(stages["frame_face_refine"]["status"], "planned_with_missing_inputs")
+            self.assertIn(
+                "opencv_tower_dataset_black_tile_red_scale_edge.bin",
+                summary["inputs"]["frame_face_dataset"]["path"],
+            )
+            self.assertIn(
+                "opencv_tower_dataset_black_tile_red_scale_edge.bin",
+                "\n".join(stages["frame_face_refine"]["missing_inputs"]),
+            )
+
+    def test_frame_face_default_prefers_black_tile_dataset_when_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "calib_2026_05_31_fullres_probe_v1"
+            output_root = root / "out"
+            stage_root = data_root / "whole_outer24_filtered_min4_fullres_min4cam"
+            legacy_dataset = stage_root / "opencv_tower_dataset_fullres.bin"
+            black_tile_dataset = stage_root / "opencv_tower_dataset_black_tile_red_scale_edge.bin"
+            manifest = stage_root / "manifest.tsv"
+            prior = root / "prior.yaml"
+            intrinsics = root / "intrinsics"
+            stage_root.mkdir(parents=True)
+            intrinsics.mkdir()
+            legacy_dataset.write_bytes(b"")
+            black_tile_dataset.write_bytes(b"")
+            manifest.write_text("camera_index\tcamera_id\n", encoding="utf-8")
+            prior.write_text("poses: []\n", encoding="utf-8")
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--data-root", str(data_root),
+                    "--output-root", str(output_root),
+                    "--dry-run",
+                    "--run-frame-face-refine",
+                    "--frame-face-prior-pose-yaml", str(prior),
+                    "--frame-face-intrinsics-dir", str(intrinsics),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
+            stages = {stage["name"]: stage for stage in summary["stages"]}
+            command = stages["frame_face_refine"]["commands"][0]
+
+            self.assertIn(f"--dataset {black_tile_dataset}", command)
+            self.assertEqual(summary["inputs"]["frame_face_dataset"]["path"], str(black_tile_dataset.resolve()))
 
     def test_frame_face_wide50_gate4_refine_stage_is_planned(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -218,6 +310,10 @@ class OuterTowerRecalibPipelineTest(unittest.TestCase):
 
             self.assertTrue(stages["frame_face_refine"]["requested"])
             self.assertIn("refine_outer_tower_frame_face_planes.py", command)
+            self.assertIn("--tower_model rigid_yaw45_tower", command)
+            self.assertIn("--tower_face_count 8", command)
+            self.assertIn("--tower_face_width_initial_m 0.25", command)
+            self.assertIn("--optimize_tower_face_width", command)
             self.assertIn("--observation_residual_gate_px 10.0", command)
             self.assertIn("--pnp_ransac_threshold_px 4.0", command)
             self.assertIn("--max_pnp_median_error_px 4.0", command)
@@ -244,6 +340,117 @@ class OuterTowerRecalibPipelineTest(unittest.TestCase):
             )
             final_html = (output_root / "final_report/index.html").read_text(encoding="utf-8")
             self.assertIn("Intrinsic feature coverage report", final_html)
+
+    def test_frame_face_wide50_then_gate16_refine_stage_is_planned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "calib_data"
+            output_root = root / "out"
+            data_root.mkdir()
+            dataset = root / "tower_fullres.bin"
+            manifest = root / "manifest.tsv"
+            prior = root / "camera_tr_rig.yaml"
+            intrinsics = root / "intrinsics"
+            dataset.write_bytes(b"")
+            manifest.write_text("camera_index\tcamera_id\n", encoding="utf-8")
+            prior.write_text("poses: []\n", encoding="utf-8")
+            intrinsics.mkdir()
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--data-root", str(data_root),
+                    "--output-root", str(output_root),
+                    "--dry-run",
+                    "--run-frame-face-refine",
+                    "--frame-face-refine-preset", "wide50_then_gate16",
+                    "--frame-face-dataset", str(dataset),
+                    "--frame-face-manifest", str(manifest),
+                    "--frame-face-prior-pose-yaml", str(prior),
+                    "--frame-face-intrinsics-dir", str(intrinsics),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
+            stages = {stage["name"]: stage for stage in summary["stages"]}
+            command = stages["frame_face_refine"]["commands"][0]
+            coverage_command = stages["intrinsic_feature_coverage_report"]["commands"][0]
+
+            self.assertIn("--initial_observation_residual_gate_px 50.0", command)
+            self.assertIn("--observation_residual_gate_px 16.0", command)
+            self.assertIn("--optimizer_residual_clip_px 40.0", command)
+            self.assertIn("--tower_model rigid_yaw45_tower", command)
+            self.assertIn("--tower_tag_size_m 0.08", command)
+            self.assertIn("--tower_tag_spacing_m 0.020000000000000004", command)
+            self.assertIn("frame_face_refine_wide50_then_gate16", command)
+            self.assertIn(
+                f"--residuals-tsv {output_root / 'frame_face_refine_wide50_then_gate16/diagnostics/observation_residuals.tsv'}",
+                coverage_command,
+            )
+
+    def test_frame_face_wide50_then_gate16_flex_faces_refine_stage_is_planned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_root = root / "calib_data"
+            output_root = root / "out"
+            data_root.mkdir()
+            dataset = root / "tower_fullres.bin"
+            manifest = root / "manifest.tsv"
+            prior = root / "camera_tr_rig.yaml"
+            intrinsics = root / "intrinsics"
+            dataset.write_bytes(b"")
+            manifest.write_text("camera_index\tcamera_id\n", encoding="utf-8")
+            prior.write_text("poses: []\n", encoding="utf-8")
+            intrinsics.mkdir()
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--data-root", str(data_root),
+                    "--output-root", str(output_root),
+                    "--dry-run",
+                    "--run-frame-face-refine",
+                    "--frame-face-refine-preset", "wide50_then_gate16_flex_faces",
+                    "--frame-face-dataset", str(dataset),
+                    "--frame-face-manifest", str(manifest),
+                    "--frame-face-prior-pose-yaml", str(prior),
+                    "--frame-face-intrinsics-dir", str(intrinsics),
+                ],
+                cwd=REPO_ROOT,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
+            stages = {stage["name"]: stage for stage in summary["stages"]}
+            command = stages["frame_face_refine"]["commands"][0]
+            coverage_command = stages["intrinsic_feature_coverage_report"]["commands"][0]
+
+            self.assertIn("--tower_model flex_yaw_offset_tower", command)
+            self.assertIn("--no-optimize_tower_face_width", command)
+            self.assertIn("--initial_observation_residual_gate_px 50.0", command)
+            self.assertIn("--observation_residual_gate_px 16.0", command)
+            self.assertIn("--optimizer_residual_clip_px 40.0", command)
+            self.assertIn("--flex_face_yaw_max_deg 8.0", command)
+            self.assertIn("--flex_face_radial_offset_max_m 0.05", command)
+            self.assertIn("--flex_face_tangent_offset_max_m 0.02", command)
+            self.assertIn("--flex_face_adjacent_angle_min_deg 30.0", command)
+            self.assertIn("--flex_face_adjacent_angle_max_deg 60.0", command)
+            self.assertIn("--flex_face_geometry_block_iterations 6", command)
+            self.assertIn("frame_face_refine_wide50_then_gate16_flex_faces", command)
+            self.assertIn(
+                f"--residuals-tsv {output_root / 'frame_face_refine_wide50_then_gate16_flex_faces/diagnostics/observation_residuals.tsv'}",
+                coverage_command,
+            )
 
     def test_tag_intrinsics_refine_mode_is_planned_for_tag_refine(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -302,6 +509,8 @@ class OuterTowerRecalibPipelineTest(unittest.TestCase):
             self.assertIn("--post_refine_outer_iterations 2", command)
             self.assertIn("--tower_face_width_initial_m 0.25", command)
             self.assertIn("--tower_face_width_sigma_m 0.02", command)
+            self.assertIn("--tower_tag_size_m 0.08", command)
+            self.assertIn("--tower_tag_spacing_m 0.020000000000000004", command)
             self.assertIn("--optimize_tower_face_width", command)
 
     def test_tag_opencv5_distortion_refine_args_are_planned_for_tag_refine(self):

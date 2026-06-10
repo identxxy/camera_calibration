@@ -194,6 +194,20 @@ class InnerBridgeRecalibPipelineTest(unittest.TestCase):
 
             self.assertEqual(inferred, metrics.resolve(strict=False))
 
+    def test_infer_whole_coverage_prefers_fullres_before_hybrid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fullres = root / "whole_outer24_filtered_min4_fullres_min4cam" / "per_camera_stats.tsv"
+            hybrid = root / "whole_outer24_filtered_min4_hybrid_min4cam" / "per_camera_stats.tsv"
+            fullres.parent.mkdir(parents=True)
+            hybrid.parent.mkdir(parents=True)
+            fullres.write_text("camera_id\tpassing_images\n", encoding="utf-8")
+            hybrid.write_text("camera_id\tpassing_images\n", encoding="utf-8")
+
+            inferred = inner_pipeline.infer_whole_coverage_tsv(root)
+
+            self.assertEqual(inferred, fullres.resolve(strict=False))
+
     def test_combined_viewer_uses_outer_final_pose_yaml_for_outer_ring(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

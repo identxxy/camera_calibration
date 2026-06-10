@@ -26,15 +26,15 @@ artifact, one overall 3D viewer, and seven human reports:
 3. Inner data capture report:
    `/current_calibration/reports/02_inner_capture_small_marker/index.html`.
 4. Inner intrinsic report:
-   `/current_calibration/reports/03_inner_intrinsic_small_marker/index.html`.
+   `/current_calibration/reports/03_inner_intrinsics_small_marker/index.html`.
 5. Inner extrinsic report:
-   `/current_calibration/reports/04_inner_extrinsic_small_marker/index.html`.
+   `/current_calibration/reports/04_inner_extrinsics_small_marker/index.html`.
 6. Outer data capture report:
-   `/current_calibration/reports/05_outer_capture_whole_and_outer_large_marker/index.html`.
+   `/current_calibration/reports/05_outer_capture_outer_large_marker_whole/index.html`.
 7. Outer intrinsic report:
-   `/current_calibration/reports/06_outer_intrinsic_outer_large_marker/index.html`.
+   `/current_calibration/reports/06_outer_intrinsics_outer_large_marker/index.html`.
 8. Outer extrinsic report:
-   `/current_calibration/reports/07_outer_extrinsic_whole/index.html`.
+   `/current_calibration/reports/07_outer_extrinsics_whole/index.html`.
 9. Bridge result report:
    `/current_calibration/reports/09_bridge_result_large_marker/index.html`.
 
@@ -67,7 +67,7 @@ scripts/ops/publish_t0_clean_calib_reports.py
 The cleanup/publish record lives at:
 
 ```text
-/home/ubuntu/calib_data/report_cleanup_manifest_latest.json
+/home/ubuntu/calib_data/current_calibration/report_cleanup_manifest_latest.json
 ```
 
 `report_registry.json` may still be emitted for compatibility by older entry

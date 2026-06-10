@@ -94,6 +94,17 @@ There are four capture/data modes:
   from trusted outer intrinsics and a trusted coarse outer rig. The production
   tower path uses independent frame/face poses and does not depend on an ideal
   octagonal-prism `face_width_m`.
+  The physical printed tower black tiles are 8 cm with 2 cm white tile gaps.
+  OpenCV AprilTag detector corners land on the inner detector square, so they
+  should only identify tag IDs and provide a red-box scale prior. Production
+  whole BA must use red-box scale + local edge-supported black-tile outer
+  corners, with physical geometry `tower_tag_size_m = 0.08` and
+  `tower_tag_spacing_m = 0.02`. The production outer-tower refine preset is
+  `wide200_then_gate6`: keep same-ID support with a loose 200 px initialization
+  gate, then write the accepted result with a strict 6 px final gate. The older
+  detector-corner geometry
+  `0.06710408594834662 / 0.03289591405165339` is legacy diagnostic-only for
+  datasets that still store raw OpenCV inner detector corners.
 - `large_marker`: low-density A4 board, pattern `_0`. This is the production
   inner/outer bridge board. It binds the refined inner rig to the outer studio
   frame through all32 observations.

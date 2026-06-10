@@ -1184,7 +1184,7 @@ HTML_TEMPLATE = """<!doctype html>
           <div class="correspondence-controls" id="correspondence-controls">
             <label>Group by
               <select id="correspondence-group-mode">
-                <option value="rigid_tower">Timeline</option>
+                <option value="timeline">Timeline</option>
                 <option value="face_id">Face ID</option>
               </select>
             </label>
@@ -1196,10 +1196,14 @@ HTML_TEMPLATE = """<!doctype html>
               <input id="correspondence-all-frames" type="checkbox">
               <span>All frames</span>
             </label>
+            <label class="checkbox-row" id="correspondence-shared-only-row">
+              <input id="correspondence-shared-only" type="checkbox" checked>
+              <span>Shared tracks only</span>
+            </label>
             <label>Frame <span class="correspondence-value" id="correspondence-frame-value"></span>
               <input id="correspondence-frame-slider" type="range" min="0" max="0" step="1" value="0">
             </label>
-            <label><span id="correspondence-point-group-title">Point group</span>
+            <label id="correspondence-point-group-row"><span id="correspondence-point-group-title">Point group</span>
               <select id="correspondence-point-group"></select>
             </label>
             <div class="correspondence-grid">
@@ -1359,13 +1363,13 @@ let correspondenceSelectedFrameByDataset = {};
 let correspondenceAllFramesByDataset = {};
 let correspondenceGroupModeByDataset = {};
 let correspondenceSelectedPointGroupByDataset = {};
+let correspondenceSharedOnlyByDataset = {whole: true};
 let correspondenceTimelineTrailVisible = true;
 let correspondenceMaxShown = 8000;
 let correspondenceResidualMax = 200;
-const RIGID_TOWER_FACE_COUNT = 8;
-const RIGID_TOWER_FACE_WIDTH_M = 0.25;
-const RIGID_TOWER_TAG_AREA_HEIGHT_M = 16 * 0.08 + 15 * 0.02;
-const worldGizmoDragAnchor = new THREE.Vector3();
+const TOWER_FACE_PLANE_WIDTH_M = 0.25;
+const TOWER_TAG_AREA_HEIGHT_M = 16 * 0.08 + 15 * 0.02;
+const worldGizmoDragStart = new THREE.Vector3();
 
 function createOrbitControls(target) {
   const nextControls = new THREE.OrbitControls(camera, renderer.domElement);
@@ -1830,15 +1834,15 @@ function correspondenceDataset() {
 
 function correspondenceFrameStats(dataset) {
   const counts = new Map();
+  const listedFrames = dataset && dataset.frames ? dataset.frames : [];
+  listedFrames.forEach((frame) => {
+    counts.set(String(frame), 0);
+  });
   const observations = dataset && dataset.observations ? dataset.observations : [];
   observations.forEach((obs) => {
     const key = String(obs.frame_index);
     counts.set(key, (counts.get(key) || 0) + 1);
   });
-  if (!counts.size) {
-    const frames = dataset && dataset.frames ? dataset.frames : [];
-    frames.forEach((frame) => counts.set(String(frame), 0));
-  }
   return Array.from(counts.entries())
     .map(([frame, count]) => ({frame, count}))
     .sort((a, b) => {
@@ -1870,6 +1874,90 @@ function correspondenceFrameObservationCount(dataset, frame) {
   return observations.filter((obs) => String(obs.frame_index) === String(frame)).length;
 }
 
+function correspondenceCameraKey(obs) {
+  if (obs.viewer_camera_label !== undefined && obs.viewer_camera_label !== null && obs.viewer_camera_label !== "") {
+    return String(obs.viewer_camera_label);
+  }
+  if (obs.camera_id !== undefined && obs.camera_id !== null && obs.camera_id !== "") {
+    return String(obs.camera_id);
+  }
+  if (obs.camera_index !== undefined && obs.camera_index !== null) {
+    return "camera_index:" + String(obs.camera_index);
+  }
+  return "unknown";
+}
+
+function correspondenceTrackKey(obs, includeFrame) {
+  const framePrefix = includeFrame ? ("frame:" + String(obs.frame_index) + "|") : "";
+  if (obs.tag_id !== undefined && obs.tag_id !== null
+      && obs.corner_id !== undefined && obs.corner_id !== null) {
+    return framePrefix + "tag:" + String(obs.tag_id) + "|corner:" + String(obs.corner_id);
+  }
+  if (obs.feature_id !== undefined && obs.feature_id !== null) {
+    return framePrefix + "feature:" + String(obs.feature_id);
+  }
+  if (obs.point_index !== undefined && obs.point_index !== null) {
+    return framePrefix + "point:" + String(obs.point_index);
+  }
+  return framePrefix + "obs:" + String(obs.frame_index) + "|cam:" + correspondenceCameraKey(obs);
+}
+
+function correspondenceSharedOnly(name) {
+  return name === "whole" && correspondenceSharedOnlyByDataset[name] !== false;
+}
+
+function correspondenceFrameSharedTrackStats(dataset) {
+  const listedFrames = dataset && dataset.frames ? dataset.frames : [];
+  const byFrame = new Map();
+  listedFrames.forEach((frame) => {
+    byFrame.set(String(frame), {frame: Number(frame), tracks: new Map()});
+  });
+  const observations = dataset && dataset.observations ? dataset.observations : [];
+  observations.forEach((obs) => {
+    const frameKey = String(obs.frame_index);
+    let frameEntry = byFrame.get(frameKey);
+    if (!frameEntry) {
+      frameEntry = {frame: Number(obs.frame_index), tracks: new Map()};
+      byFrame.set(frameKey, frameEntry);
+    }
+    const trackKey = correspondenceTrackKey(obs, false);
+    let track = frameEntry.tracks.get(trackKey);
+    if (!track) {
+      track = {cameraKeys: new Set(), observationCount: 0};
+      frameEntry.tracks.set(trackKey, track);
+    }
+    track.cameraKeys.add(correspondenceCameraKey(obs));
+    track.observationCount += 1;
+  });
+  return Array.from(byFrame.values())
+    .map((entry) => {
+      let sharedTrackCount = 0;
+      let sharedObservationCount = 0;
+      entry.tracks.forEach((track) => {
+        if (track.cameraKeys.size >= 2) {
+          sharedTrackCount += 1;
+          sharedObservationCount += track.observationCount;
+        }
+      });
+      return {
+        frame: entry.frame,
+        sharedTrackCount,
+        sharedObservationCount,
+      };
+    })
+    .sort((a, b) => {
+      if (b.sharedTrackCount !== a.sharedTrackCount) return b.sharedTrackCount - a.sharedTrackCount;
+      if (b.sharedObservationCount !== a.sharedObservationCount) return b.sharedObservationCount - a.sharedObservationCount;
+      return a.frame - b.frame;
+    });
+}
+
+function correspondenceSharedTrackCount(dataset, frame) {
+  const stats = correspondenceFrameSharedTrackStats(dataset);
+  const found = stats.find((item) => String(item.frame) === String(frame));
+  return found ? found.sharedTrackCount : 0;
+}
+
 function correspondenceUsesAllFrames(name) {
   return correspondenceAllFramesByDataset[name] === true;
 }
@@ -1877,11 +1965,11 @@ function correspondenceUsesAllFrames(name) {
 function correspondenceGroupModeName() {
   const name = correspondenceDatasetName();
   if (name !== "whole") return "frame";
-  return correspondenceGroupModeByDataset[name] || "rigid_tower";
+  return correspondenceGroupModeByDataset[name] || "timeline";
 }
 
 function correspondenceGroupModeLabel(mode) {
-  if (mode === "rigid_tower") return "timeline";
+  if (mode === "timeline") return "timeline";
   if (mode === "face_id") return "face ID";
   return "frame feature debug";
 }
@@ -1890,6 +1978,11 @@ function correspondenceDefaultFrame(name, dataset) {
   if (correspondenceSelectedFrameByDataset[name] !== undefined
       && correspondenceSelectedFrameByDataset[name] !== "__all__") {
     return correspondenceSelectedFrameByDataset[name];
+  }
+  if (name === "whole" && correspondenceSharedOnly(name)) {
+    const sharedStats = correspondenceFrameSharedTrackStats(dataset);
+    const topShared = sharedStats.find((item) => item.sharedTrackCount > 0);
+    if (topShared) return topShared.frame;
   }
   const defaults = (correspondenceData && correspondenceData.defaults && correspondenceData.defaults.frame_by_dataset) || {};
   if (defaults[name] !== undefined && defaults[name] !== null) {
@@ -1937,7 +2030,7 @@ function correspondenceGroupKey(obs, includeFrame) {
     const face = obs.face_id === undefined || obs.face_id === null ? "unknown" : String(obs.face_id);
     return "face:" + face;
   }
-  if (name === "whole" && mode === "rigid_tower") {
+  if (name === "whole" && mode === "timeline") {
     const face = obs.face_id === undefined || obs.face_id === null ? "unknown" : String(obs.face_id);
     return framePrefix + "face:" + face;
   }
@@ -1952,9 +2045,9 @@ function correspondenceGroupLabel(obs, includeFrame) {
     const face = obs.face_id === undefined || obs.face_id === null ? "unknown" : String(obs.face_id);
     return "face " + face;
   }
-  if (name === "whole" && mode === "rigid_tower") {
+  if (name === "whole" && mode === "timeline") {
     const face = obs.face_id === undefined || obs.face_id === null ? "unknown" : String(obs.face_id);
-    return prefix + "anchor face " + face;
+    return prefix + "face " + face;
   }
   return correspondencePointLabel(obs, includeFrame);
 }
@@ -1970,188 +2063,6 @@ function unitVectorFromArray(value) {
   return vector.normalize();
 }
 
-function frameFacePoseForDataset(dataset, frame, face) {
-  if (!dataset) return null;
-  if (!dataset._frameFacePoseMap) {
-    dataset._frameFacePoseMap = new Map();
-    const poses = Array.isArray(dataset.frame_face_poses) ? dataset.frame_face_poses : [];
-    poses.forEach((pose) => {
-      dataset._frameFacePoseMap.set(String(pose.frame_index) + "|" + String(pose.face_id), pose);
-    });
-  }
-  return dataset._frameFacePoseMap.get(String(frame) + "|" + String(face)) || null;
-}
-
-function fitFromFrameFacePose(pose) {
-  if (!pose || !validVec3(pose.origin_three)) return null;
-  const ex = unitVectorFromArray(pose.axis_x_three);
-  const ey = unitVectorFromArray(pose.axis_y_three);
-  const ez = unitVectorFromArray(pose.axis_z_three);
-  if (!ex || !ey || !ez) return null;
-  return {
-    origin: new THREE.Vector3(Number(pose.origin_three[0]), Number(pose.origin_three[1]), Number(pose.origin_three[2])),
-    ex,
-    ey,
-    ez,
-    observationCount: 0,
-    source: "frame_face_pose",
-  };
-}
-
-function solveLinear3x3(matrix, rhs) {
-  const a = matrix.map((row, i) => row.map(Number).concat([Number(rhs[i])]));
-  for (let col = 0; col < 3; ++col) {
-    let pivot = col;
-    for (let row = col + 1; row < 3; ++row) {
-      if (Math.abs(a[row][col]) > Math.abs(a[pivot][col])) pivot = row;
-    }
-    if (Math.abs(a[pivot][col]) < 1e-10) return null;
-    if (pivot !== col) {
-      const tmp = a[col];
-      a[col] = a[pivot];
-      a[pivot] = tmp;
-    }
-    const scale = a[col][col];
-    for (let j = col; j < 4; ++j) a[col][j] /= scale;
-    for (let row = 0; row < 3; ++row) {
-      if (row === col) continue;
-      const factor = a[row][col];
-      for (let j = col; j < 4; ++j) a[row][j] -= factor * a[col][j];
-    }
-  }
-  return [a[0][3], a[1][3], a[2][3]];
-}
-
-function fitFaceLocalToDisplay(observations) {
-  const usable = observations.filter((obs) => validVec3(obs.local) && validVec3(obs.three));
-  if (usable.length < 3) return null;
-  const localY = usable.map((obs) => Number(obs.local[1]));
-  const localZ = usable.map((obs) => Number(obs.local[2]));
-  const spanY = Math.max(...localY) - Math.min(...localY);
-  const spanZ = Math.max(...localZ) - Math.min(...localZ);
-  if (spanY < 0.015 || spanZ < 0.015) return null;
-  const normal = [
-    [1e-9, 0, 0],
-    [0, 1e-9, 0],
-    [0, 0, 1e-9],
-  ];
-  const rhs = [
-    [0, 0, 0],
-    [0, 0, 0],
-    [0, 0, 0],
-  ];
-  for (const obs of usable) {
-    const y = Number(obs.local[1]);
-    const z = Number(obs.local[2]);
-    const basis = [1, y, z];
-    for (let r = 0; r < 3; ++r) {
-      for (let c = 0; c < 3; ++c) normal[r][c] += basis[r] * basis[c];
-      for (let dim = 0; dim < 3; ++dim) rhs[r][dim] += basis[r] * Number(obs.three[dim]);
-    }
-  }
-  const coeff = [];
-  for (let dim = 0; dim < 3; ++dim) {
-    const solved = solveLinear3x3(normal, [rhs[0][dim], rhs[1][dim], rhs[2][dim]]);
-    if (!solved) return null;
-    coeff.push(solved);
-  }
-  const origin = new THREE.Vector3(coeff[0][0], coeff[1][0], coeff[2][0]);
-  const axisY = new THREE.Vector3(coeff[0][1], coeff[1][1], coeff[2][1]);
-  const axisZ = new THREE.Vector3(coeff[0][2], coeff[1][2], coeff[2][2]);
-  if (axisY.lengthSq() < 1e-8 || axisZ.lengthSq() < 1e-8) return null;
-  const ey = axisY.clone().normalize();
-  const ez = axisZ.clone().addScaledVector(ey, -axisZ.dot(ey));
-  if (ez.lengthSq() < 1e-8) return null;
-  ez.normalize();
-  const ex = new THREE.Vector3().crossVectors(ey, ez);
-  if (ex.lengthSq() < 1e-8) return null;
-  ex.normalize();
-  return {origin, ex, ey, ez, observationCount: usable.length, source: "local_point_fit"};
-}
-
-function transformAnchorLocalPoint(fit, localPoint) {
-  return fit.origin.clone()
-    .addScaledVector(fit.ex, Number(localPoint[0] || 0))
-    .addScaledVector(fit.ey, Number(localPoint[1] || 0))
-    .addScaledVector(fit.ez, Number(localPoint[2] || 0));
-}
-
-function nominalTowerPoint(faceId, localPoint) {
-  const face = ((Number(faceId) % RIGID_TOWER_FACE_COUNT) + RIGID_TOWER_FACE_COUNT) % RIGID_TOWER_FACE_COUNT;
-  const angle = face * 2.0 * Math.PI / RIGID_TOWER_FACE_COUNT;
-  const apothem = RIGID_TOWER_FACE_WIDTH_M / (2.0 * Math.tan(Math.PI / RIGID_TOWER_FACE_COUNT));
-  const localX = Number(localPoint[0] || 0);
-  const localY = Number(localPoint[1] || 0);
-  const localZ = Number(localPoint[2] || 0);
-  const faceX = apothem + localX;
-  const faceY = localY;
-  const ca = Math.cos(angle);
-  const sa = Math.sin(angle);
-  return new THREE.Vector3(
-    ca * faceX - sa * faceY,
-    sa * faceX + ca * faceY,
-    localZ
-  );
-}
-
-function nominalTowerPointInAnchorFaceLocal(faceId, localPoint, anchorFaceId) {
-  const point = nominalTowerPoint(faceId, localPoint);
-  const anchor = ((Number(anchorFaceId) % RIGID_TOWER_FACE_COUNT) + RIGID_TOWER_FACE_COUNT) % RIGID_TOWER_FACE_COUNT;
-  const angle = anchor * 2.0 * Math.PI / RIGID_TOWER_FACE_COUNT;
-  const apothem = RIGID_TOWER_FACE_WIDTH_M / (2.0 * Math.tan(Math.PI / RIGID_TOWER_FACE_COUNT));
-  const normal = new THREE.Vector3(Math.cos(angle), Math.sin(angle), 0);
-  const tangent = new THREE.Vector3(-Math.sin(angle), Math.cos(angle), 0);
-  const origin = normal.clone().multiplyScalar(apothem);
-  const delta = point.clone().sub(origin);
-  return [delta.dot(normal), delta.dot(tangent), delta.z];
-}
-
-function nominalTowerCenterInAnchorFaceLocal(anchorFaceId) {
-  const anchor = ((Number(anchorFaceId) % RIGID_TOWER_FACE_COUNT) + RIGID_TOWER_FACE_COUNT) % RIGID_TOWER_FACE_COUNT;
-  const angle = anchor * 2.0 * Math.PI / RIGID_TOWER_FACE_COUNT;
-  const apothem = RIGID_TOWER_FACE_WIDTH_M / (2.0 * Math.tan(Math.PI / RIGID_TOWER_FACE_COUNT));
-  const normal = new THREE.Vector3(Math.cos(angle), Math.sin(angle), 0);
-  const tangent = new THREE.Vector3(-Math.sin(angle), Math.cos(angle), 0);
-  const origin = normal.clone().multiplyScalar(apothem);
-  const delta = new THREE.Vector3(0, 0, 0).sub(origin);
-  return [delta.dot(normal), delta.dot(tangent), 0];
-}
-
-function parseFaceFromGroupKey(key) {
-  const match = String(key || "").match(/(?:^|[|])face:([^|]+)/);
-  if (!match) return null;
-  const parsed = Number(match[1]);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function buildRigidTowerContext(dataset, observations, frame, selectedGroupKey) {
-  const byFace = new Map();
-  for (const obs of observations) {
-    if (String(obs.frame_index) !== String(frame)) continue;
-    if (!validVec3(obs.local) || !validVec3(obs.three)) continue;
-    const face = Number(obs.face_id);
-    if (!Number.isFinite(face)) continue;
-    if (!byFace.has(face)) byFace.set(face, []);
-    byFace.get(face).push(obs);
-  }
-  if (!byFace.size) return null;
-  let anchorFace = parseFaceFromGroupKey(selectedGroupKey);
-  if (anchorFace === null || !byFace.has(anchorFace)) {
-    anchorFace = Array.from(byFace.entries())
-      .sort((a, b) => b[1].length - a[1].length)[0][0];
-  }
-  const poseFit = fitFromFrameFacePose(frameFacePoseForDataset(dataset, frame, anchorFace));
-  const fit = poseFit || fitFaceLocalToDisplay(byFace.get(anchorFace) || []);
-  if (!fit) return null;
-  return {
-    anchorFace,
-    fit,
-    poseSource: fit.source || "unknown",
-    faceCount: byFace.size,
-    anchorObservationCount: (byFace.get(anchorFace) || []).length,
-  };
-}
-
 function appendColoredLine(linePositions, lineColors, a, b, color) {
   linePositions.push(a.x, a.y, a.z, b.x, b.y, b.z);
   lineColors.push(color.r, color.g, color.b, color.r, color.g, color.b);
@@ -2160,35 +2071,6 @@ function appendColoredLine(linePositions, lineColors, a, b, color) {
 function appendColoredPoint(pointPositions, pointColors, p, color) {
   pointPositions.push(p.x, p.y, p.z);
   pointColors.push(color.r, color.g, color.b);
-}
-
-function rigidTowerCenterForContext(context) {
-  const centerLocal = nominalTowerCenterInAnchorFaceLocal(context.anchorFace);
-  return transformAnchorLocalPoint(context.fit, centerLocal);
-}
-
-function rigidTowerFaceOutlinePoints(context, faceId) {
-  const halfWidth = RIGID_TOWER_FACE_WIDTH_M * 0.5;
-  const halfHeight = RIGID_TOWER_TAG_AREA_HEIGHT_M * 0.5;
-  return [
-    [0, -halfWidth, -halfHeight],
-    [0, halfWidth, -halfHeight],
-    [0, halfWidth, halfHeight],
-    [0, -halfWidth, halfHeight],
-  ].map((local) => {
-    const anchorLocal = nominalTowerPointInAnchorFaceLocal(faceId, local, context.anchorFace);
-    return transformAnchorLocalPoint(context.fit, anchorLocal);
-  });
-}
-
-function appendRigidTowerOutline(context, linePositions, lineColors) {
-  const outlineColor = new THREE.Color(0x4fd1c5);
-  for (let face = 0; face < RIGID_TOWER_FACE_COUNT; ++face) {
-    const pts = rigidTowerFaceOutlinePoints(context, face);
-    for (let i = 0; i < pts.length; ++i) {
-      appendColoredLine(linePositions, lineColors, pts[i], pts[(i + 1) % pts.length], outlineColor);
-    }
-  }
 }
 
 function frameNumbersFromObservations(observations) {
@@ -2200,22 +2082,77 @@ function frameNumbersFromObservations(observations) {
   return Array.from(frames).sort((a, b) => a - b);
 }
 
-function appendRigidTowerTimelineTrail(dataset, observations, currentFrame, linePositions, lineColors, pointPositions, pointColors) {
+function frameFacePosesForFrame(dataset, frame) {
+  const poses = Array.isArray(dataset && dataset.frame_face_poses) ? dataset.frame_face_poses : [];
+  return poses.filter((pose) => String(pose.frame_index) === String(frame) && validVec3(pose.origin_three));
+}
+
+function frameFacePoseCenter(pose) {
+  return new THREE.Vector3(
+    Number(pose.origin_three[0]),
+    Number(pose.origin_three[1]),
+    Number(pose.origin_three[2])
+  );
+}
+
+function averageFrameFacePoseCenter(poses) {
+  if (!poses.length) return null;
+  const center = new THREE.Vector3(0, 0, 0);
+  poses.forEach((pose) => center.add(frameFacePoseCenter(pose)));
+  return center.multiplyScalar(1.0 / poses.length);
+}
+
+function frameFaceOutlinePoints(pose) {
+  const origin = frameFacePoseCenter(pose);
+  const ey = unitVectorFromArray(pose.axis_y_three);
+  const ez = unitVectorFromArray(pose.axis_z_three);
+  if (!ey || !ez) return [];
+  const halfWidth = TOWER_FACE_PLANE_WIDTH_M * 0.5;
+  const halfHeight = TOWER_TAG_AREA_HEIGHT_M * 0.5;
+  return [
+    origin.clone().addScaledVector(ey, -halfWidth).addScaledVector(ez, -halfHeight),
+    origin.clone().addScaledVector(ey, halfWidth).addScaledVector(ez, -halfHeight),
+    origin.clone().addScaledVector(ey, halfWidth).addScaledVector(ez, halfHeight),
+    origin.clone().addScaledVector(ey, -halfWidth).addScaledVector(ez, halfHeight),
+  ];
+}
+
+function appendFrameFaceOutlines(dataset, frame, linePositions, lineColors) {
+  const outlineColor = new THREE.Color(0x4fd1c5);
+  const poses = frameFacePosesForFrame(dataset, frame);
+  for (const pose of poses) {
+    const pts = frameFaceOutlinePoints(pose);
+    if (pts.length !== 4) continue;
+    for (let i = 0; i < pts.length; ++i) {
+      appendColoredLine(linePositions, lineColors, pts[i], pts[(i + 1) % pts.length], outlineColor);
+    }
+  }
+  return {count: poses.length};
+}
+
+function appendFrameFaceTimelineTrail(dataset, currentFrame, linePositions, lineColors, pointPositions, pointColors) {
   if (!correspondenceTimelineTrailVisible) return {count: 0};
+  const poses = Array.isArray(dataset && dataset.frame_face_poses) ? dataset.frame_face_poses : [];
+  const byFrame = new Map();
+  for (const pose of poses) {
+    if (!validVec3(pose.origin_three)) continue;
+    const frame = Number(pose.frame_index);
+    if (!Number.isFinite(frame)) continue;
+    if (!byFrame.has(frame)) byFrame.set(frame, []);
+    byFrame.get(frame).push(pose);
+  }
   const trailColor = new THREE.Color(0xf6ad55);
   const currentColor = new THREE.Color(0xffffff);
-  const frames = frameNumbersFromObservations(observations);
   let previous = null;
   let count = 0;
-  for (const frame of frames) {
-    const context = buildRigidTowerContext(dataset, observations, frame, "__auto__");
-    if (!context) continue;
-    const center = rigidTowerCenterForContext(context);
+  Array.from(byFrame.keys()).sort((a, b) => a - b).forEach((frame) => {
+    const center = averageFrameFacePoseCenter(byFrame.get(frame) || []);
+    if (!center) return;
     appendColoredPoint(pointPositions, pointColors, center, String(frame) === String(currentFrame) ? currentColor : trailColor);
     if (previous) appendColoredLine(linePositions, lineColors, previous, center, trailColor);
     previous = center;
     count += 1;
-  }
+  });
   return {count};
 }
 
@@ -2232,8 +2169,12 @@ function syncCorrespondenceControlValues() {
   const residualValue = document.getElementById("correspondence-residual-max-value");
   const groupModeSelect = document.getElementById("correspondence-group-mode");
   const pointGroupTitle = document.getElementById("correspondence-point-group-title");
+  const pointGroupRow = document.getElementById("correspondence-point-group-row");
   const timelineTrailRow = document.getElementById("correspondence-timeline-trail-row");
   const timelineTrailInput = document.getElementById("correspondence-timeline-trail");
+  const sharedOnlyRow = document.getElementById("correspondence-shared-only-row");
+  const sharedOnlyInput = document.getElementById("correspondence-shared-only");
+  const name = correspondenceDatasetName();
   if (maxInput) {
     correspondenceMaxShown = Math.max(1, Number(maxInput.value || correspondenceMaxShown));
   }
@@ -2243,25 +2184,34 @@ function syncCorrespondenceControlValues() {
   if (maxValue) maxValue.textContent = String(correspondenceMaxShown);
   if (residualValue) residualValue.textContent = correspondenceResidualMax >= 200 ? "200+ px" : correspondenceResidualMax + " px";
   if (groupModeSelect) {
-    const name = correspondenceDatasetName();
     groupModeSelect.disabled = name !== "whole";
     groupModeSelect.value = correspondenceGroupModeName();
   }
   if (pointGroupTitle) {
     const mode = correspondenceGroupModeName();
-    if (mode === "rigid_tower") {
-      pointGroupTitle.textContent = "Anchor face";
+    if (mode === "timeline") {
+      pointGroupTitle.textContent = "Frame face";
     } else if (mode === "face_id") {
       pointGroupTitle.textContent = "Face ID";
     } else {
       pointGroupTitle.textContent = "Point group";
     }
   }
+  if (pointGroupRow) {
+    const mode = correspondenceGroupModeName();
+    pointGroupRow.style.display = name === "whole" && mode === "timeline" ? "none" : "block";
+  }
   if (timelineTrailRow) {
-    timelineTrailRow.style.display = correspondenceGroupModeName() === "rigid_tower" ? "inline-flex" : "none";
+    timelineTrailRow.style.display = correspondenceGroupModeName() === "timeline" ? "inline-flex" : "none";
   }
   if (timelineTrailInput) {
     timelineTrailInput.checked = correspondenceTimelineTrailVisible;
+  }
+  if (sharedOnlyRow) {
+    sharedOnlyRow.style.display = name === "whole" ? "inline-flex" : "none";
+  }
+  if (sharedOnlyInput) {
+    sharedOnlyInput.checked = correspondenceSharedOnly(name);
   }
 }
 
@@ -2290,20 +2240,24 @@ function populateCorrespondenceFrameControl() {
   selected = Math.max(minFrame, Math.min(maxFrame, selected));
   slider.value = String(Math.round(selected));
   correspondenceSelectedFrameByDataset[name] = slider.value;
-  if (groupMode === "rigid_tower") {
+  if (groupMode === "timeline") {
     correspondenceAllFramesByDataset[name] = false;
   } else if (groupMode === "face_id") {
     correspondenceAllFramesByDataset[name] = true;
   }
   allFramesCheckbox.checked = correspondenceUsesAllFrames(name);
-  allFramesCheckbox.disabled = groupMode === "rigid_tower" || groupMode === "face_id";
+  allFramesCheckbox.disabled = groupMode === "timeline" || groupMode === "face_id";
   slider.disabled = allFramesCheckbox.checked || !frames.length || groupMode === "face_id";
   const obsCount = correspondenceFrameObservationCount(dataset, slider.value);
+  const sharedTrackCount = name === "whole" ? correspondenceSharedTrackCount(dataset, slider.value) : 0;
+  const frameLabel = name === "whole"
+    ? String(slider.value) + " (" + obsCount + " obs, " + sharedTrackCount + " shared tracks)"
+    : String(slider.value) + " (" + obsCount + " obs)";
   frameValue.textContent = groupMode === "face_id"
     ? "all frames"
     : allFramesCheckbox.checked
     ? "all"
-    : String(slider.value) + " (" + obsCount + " obs)";
+    : frameLabel;
   if (!frames.length) {
     frameValue.textContent = "none";
   }
@@ -2320,6 +2274,11 @@ function populateCorrespondencePointGroupControl() {
   const frame = correspondenceDefaultFrame(name, dataset);
   const allFrames = correspondenceUsesAllFrames(name);
   const observations = dataset && dataset.observations ? dataset.observations : [];
+  if (name === "whole" && groupMode === "timeline") {
+    select.innerHTML = "";
+    correspondenceSelectedPointGroupByDataset[name] = "__all__";
+    return;
+  }
   const groups = new Map();
   let frameObservationCount = 0;
   for (const obs of observations) {
@@ -2337,9 +2296,9 @@ function populateCorrespondencePointGroupControl() {
   select.innerHTML = "";
   const allOption = document.createElement("option");
   allOption.value = "__all__";
-  allOption.textContent = (name === "whole" && (groupMode === "face_id" || groupMode === "rigid_tower") ? "All faces" : "All points")
+  allOption.textContent = (name === "whole" && (groupMode === "face_id" || groupMode === "timeline") ? "All faces" : "All points")
     + " (" + frameObservationCount + " obs)";
-  if (groupMode !== "rigid_tower" && groupMode !== "face_id") {
+  if (groupMode !== "timeline" && groupMode !== "face_id") {
     select.appendChild(allOption);
   }
   const sortedGroups = Array.from(groups.values())
@@ -2358,7 +2317,7 @@ function populateCorrespondencePointGroupControl() {
     && Array.from(select.options).some((option) => option.value === previous);
   if (hasPrevious) {
     select.value = previous;
-  } else if (name === "whole" && (groupMode === "face_id" || groupMode === "rigid_tower") && sortedGroups.length) {
+  } else if (name === "whole" && (groupMode === "face_id" || groupMode === "timeline") && sortedGroups.length) {
     select.value = sortedGroups[0].key;
   } else {
     select.value = "__all__";
@@ -2370,6 +2329,91 @@ function residualColor(residualPx) {
   const value = Number(residualPx || 0);
   const t = Math.max(0, Math.min(1, Math.log1p(value) / Math.log1p(50)));
   return new THREE.Color().setHSL((1 - t) * 0.33, 0.9, 0.48);
+}
+
+function makeCorrespondenceSelectionStats(candidates) {
+  const tracks = new Map();
+  const cameras = new Set();
+  candidates.forEach((item) => {
+    cameras.add(item.cameraKey);
+    let track = tracks.get(item.trackKey);
+    if (!track) {
+      track = {cameraKeys: new Set(), count: 0};
+      tracks.set(item.trackKey, track);
+    }
+    track.cameraKeys.add(item.cameraKey);
+    track.count += 1;
+  });
+  let sharedTrackCount = 0;
+  tracks.forEach((track) => {
+    if (track.cameraKeys.size >= 2) sharedTrackCount += 1;
+  });
+  return {
+    observationCount: candidates.length,
+    trackCount: tracks.size,
+    sharedTrackCount,
+    cameraCount: cameras.size,
+  };
+}
+
+function filterSharedCorrespondenceTracks(candidates) {
+  const tracks = new Map();
+  candidates.forEach((item) => {
+    let track = tracks.get(item.trackKey);
+    if (!track) {
+      track = {cameraKeys: new Set(), items: []};
+      tracks.set(item.trackKey, track);
+    }
+    track.cameraKeys.add(item.cameraKey);
+    track.items.push(item);
+  });
+  const shared = [];
+  tracks.forEach((track) => {
+    if (track.cameraKeys.size >= 2) {
+      shared.push(...track.items);
+    }
+  });
+  return shared;
+}
+
+function balancedCorrespondenceSelection(candidates, maxShown) {
+  const trackMap = new Map();
+  candidates.forEach((item) => {
+    let track = trackMap.get(item.trackKey);
+    if (!track) {
+      track = {key: item.trackKey, cameraMap: new Map(), count: 0};
+      trackMap.set(item.trackKey, track);
+    }
+    if (!track.cameraMap.has(item.cameraKey)) track.cameraMap.set(item.cameraKey, []);
+    track.cameraMap.get(item.cameraKey).push(item);
+    track.count += 1;
+  });
+  const tracks = Array.from(trackMap.values())
+    .sort((a, b) => {
+      if (b.cameraMap.size !== a.cameraMap.size) return b.cameraMap.size - a.cameraMap.size;
+      if (b.count !== a.count) return b.count - a.count;
+      return a.key.localeCompare(b.key);
+    });
+  const selected = [];
+  let round = 0;
+  while (selected.length < maxShown) {
+    let added = 0;
+    for (const track of tracks) {
+      if (selected.length >= maxShown) break;
+      const cameraKeys = Array.from(track.cameraMap.keys()).sort();
+      for (const cameraKey of cameraKeys) {
+        if (selected.length >= maxShown) break;
+        const items = track.cameraMap.get(cameraKey) || [];
+        if (round < items.length) {
+          selected.push(items[round]);
+          added += 1;
+        }
+      }
+    }
+    if (!added) break;
+    round += 1;
+  }
+  return selected;
 }
 
 function clearCorrespondenceOverlay() {
@@ -2401,22 +2445,12 @@ function updateCorrespondenceOverlay() {
   const allFrames = correspondenceUsesAllFrames(name);
   const groupMode = correspondenceGroupModeName();
   const pointGroupKey = selectedCorrespondencePointGroupKey();
-  const rigidTowerContext = groupMode === "rigid_tower"
-    ? buildRigidTowerContext(dataset, observations, frame, pointGroupKey)
-    : null;
-  if (groupMode === "rigid_tower" && !rigidTowerContext) {
-    correspondenceGroup.visible = false;
-    status.textContent = name + " rigid tower hypothesis frame " + frame
-      + ": no face has enough local/world points to anchor the nominal tower.";
-    return;
-  }
   const cameraLabelById = new Map(RIG_DATA.cameras.map((cam) => [String(cam.label), cam]));
   const cameraIdByIndex = new Map(RIG_DATA.cameras.map((cam) => [Number(cam.index), cam]));
-  const selected = [];
-  let available = 0;
+  const baseCandidates = [];
   for (const obs of observations) {
     if (!allFrames && frame !== null && frame !== undefined && String(obs.frame_index) !== String(frame)) continue;
-    if (groupMode !== "rigid_tower"
+    if (groupMode !== "timeline"
         && pointGroupKey !== "__all__"
         && correspondenceGroupKey(obs, allFrames) !== pointGroupKey) continue;
     if (Number(obs.residual_px || 0) > correspondenceResidualMax) continue;
@@ -2425,23 +2459,28 @@ function updateCorrespondenceOverlay() {
       || cameraIdByIndex.get(Number(obs.camera_index));
     if (cam && !cameraIsVisible(cam)) continue;
     let displayPoint = obs.three;
-    if (groupMode === "rigid_tower") {
+    if (groupMode === "timeline") {
       const face = Number(obs.face_id);
       if (!Number.isFinite(face) || !validVec3(obs.local)) continue;
-      const anchorLocal = nominalTowerPointInAnchorFaceLocal(
-        face,
-        obs.local,
-        rigidTowerContext.anchorFace
-      );
-      displayPoint = transformAnchorLocalPoint(rigidTowerContext.fit, anchorLocal).toArray();
+      displayPoint = obs.three;
     }
     if (!validVec3(displayPoint)) continue;
-    available += 1;
-    if (selected.length < correspondenceMaxShown) selected.push({obs, cam, point: displayPoint});
+    const trackKey = correspondenceTrackKey(obs, true);
+    const cameraKey = correspondenceCameraKey(obs);
+    baseCandidates.push({obs, cam, point: displayPoint, trackKey, cameraKey});
   }
+  const rawStats = makeCorrespondenceSelectionStats(baseCandidates);
+  const sharedOnly = correspondenceSharedOnly(name);
+  const candidates = sharedOnly ? filterSharedCorrespondenceTracks(baseCandidates) : baseCandidates;
+  const candidateStats = makeCorrespondenceSelectionStats(candidates);
+  const selected = balancedCorrespondenceSelection(candidates, correspondenceMaxShown);
+  const selectedStats = makeCorrespondenceSelectionStats(selected);
   if (!selected.length) {
     correspondenceGroup.visible = false;
-    status.textContent = name + " " + (allFrames ? "all frames" : "frame " + frame) + ": no visible correspondences.";
+    const sharedNote = sharedOnly
+      ? " No shared tracks survived the current frame/camera/residual filters; disable Shared tracks only to inspect raw single-camera observations."
+      : "";
+    status.textContent = name + " " + (allFrames ? "all frames" : "frame " + frame) + ": no visible correspondences." + sharedNote;
     return;
   }
 
@@ -2470,11 +2509,16 @@ function updateCorrespondenceOverlay() {
     }
   }
   let trailInfo = {count: 0};
-  if (groupMode === "rigid_tower" && rigidTowerContext) {
-    appendRigidTowerOutline(rigidTowerContext, diagnosticLinePositions, diagnosticLineColors);
-    trailInfo = appendRigidTowerTimelineTrail(
+  let faceOutlineInfo = {count: 0};
+  if (groupMode === "timeline") {
+    faceOutlineInfo = appendFrameFaceOutlines(
       dataset,
-      observations,
+      frame,
+      diagnosticLinePositions,
+      diagnosticLineColors
+    );
+    trailInfo = appendFrameFaceTimelineTrail(
+      dataset,
       frame,
       diagnosticLinePositions,
       diagnosticLineColors,
@@ -2543,17 +2587,22 @@ function updateCorrespondenceOverlay() {
   let modeNote = name === "whole" && groupMode === "face_id"
     ? " Face ID mode arranges the whole capture by one tower face across all selected frames using final independent face-plane poses."
     : "";
-  if (name === "whole" && groupMode === "rigid_tower" && rigidTowerContext) {
-    modeNote = " Timeline mode shows one synchronized frame as a nominal rigid tower with 8 faces, 0.25 m face width, and the existing 8 cm tag / 2 cm spacing local corners; anchor face "
-      + rigidTowerContext.anchorFace + " fitted from " + rigidTowerContext.anchorObservationCount
-      + " points using " + rigidTowerContext.poseSource + ". Cyan outline is the current frame tower; orange trail has "
-      + trailInfo.count + " frame centers. Diagnostic only, not a BA constraint.";
+  if (name === "whole" && groupMode === "timeline") {
+    modeNote = " Timeline mode shows the selected synchronized frame using final independent frame-face plane poses from BA; no ideal octagon and no face-width constraint are applied. Cyan rectangles are "
+      + faceOutlineInfo.count + " accepted frame-face planes in this frame; orange trail has "
+      + trailInfo.count + " frame centers.";
   }
   status.textContent = name + " " + correspondenceGroupModeLabel(groupMode)
     + " " + (allFrames ? "all frames" : "frame " + frame) + ": "
-    + selected.length + "/" + available + " correspondences shown; residual <= "
+    + selected.length + "/" + candidateStats.observationCount
+    + (sharedOnly ? " shared-track observations" : " observations")
+    + " shown; raw obs=" + rawStats.observationCount
+    + ", candidate tracks=" + candidateStats.trackCount
+    + ", shared tracks=" + candidateStats.sharedTrackCount
+    + ", cameras=" + selectedStats.cameraCount
+    + "; residual <= "
     + (correspondenceResidualMax >= 200 ? "200+" : correspondenceResidualMax)
-    + " px; group = " + selectedGroupLabel
+    + " px" + (name === "whole" && groupMode === "timeline" ? "" : "; group = " + selectedGroupLabel)
     + "; color = log residual px." + modeNote;
 }
 
@@ -2781,7 +2830,7 @@ function buildPivotFrameGizmo() {
   transformControl.attach(pivotFrameGroup);
   transformControl.addEventListener("mouseDown", () => {
     worldGizmoPointerActive = true;
-    worldGizmoDragAnchor.copy(pivotFrameGroup.position);
+    worldGizmoDragStart.copy(pivotFrameGroup.position);
     if (controls) {
       controls.enabled = false;
     }
@@ -2793,7 +2842,7 @@ function buildPivotFrameGizmo() {
     worldGizmoDragging = event.value;
     if (event.value) {
       worldGizmoPointerActive = true;
-      worldGizmoDragAnchor.copy(pivotFrameGroup.position);
+      worldGizmoDragStart.copy(pivotFrameGroup.position);
       if (controls) {
         controls.enabled = false;
       }
@@ -3013,7 +3062,7 @@ function applyWorldFromCam0(refit, syncPivotPosition = true) {
   if (syncPivotPosition) {
     pivotFrameGroup.position.copy(cam0ToWorldPoint(bounds.center));
   } else {
-    pivotFrameGroup.position.copy(worldGizmoDragAnchor);
+    pivotFrameGroup.position.copy(worldGizmoDragStart);
   }
   if (refit) {
     frameRig(currentFrameMode);
@@ -3219,6 +3268,7 @@ function setupCorrespondenceControls() {
   const allFramesCheckbox = document.getElementById("correspondence-all-frames");
   const groupModeSelect = document.getElementById("correspondence-group-mode");
   const timelineTrailInput = document.getElementById("correspondence-timeline-trail");
+  const sharedOnlyInput = document.getElementById("correspondence-shared-only");
   const pointSelect = document.getElementById("correspondence-point-group");
   const maxInput = document.getElementById("correspondence-max");
   const residualInput = document.getElementById("correspondence-residual-max");
@@ -3262,6 +3312,16 @@ function setupCorrespondenceControls() {
     timelineTrailInput.addEventListener("change", () => {
       correspondenceTimelineTrailVisible = timelineTrailInput.checked;
       syncCorrespondenceControlValues();
+      updateCorrespondenceOverlay();
+    });
+  }
+  if (sharedOnlyInput) {
+    sharedOnlyInput.addEventListener("change", () => {
+      const name = correspondenceDatasetName();
+      correspondenceSharedOnlyByDataset[name] = sharedOnlyInput.checked;
+      delete correspondenceSelectedPointGroupByDataset[name];
+      populateCorrespondenceFrameControl();
+      populateCorrespondencePointGroupControl();
       updateCorrespondenceOverlay();
     });
   }

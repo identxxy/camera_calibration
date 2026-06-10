@@ -4,6 +4,7 @@
 import csv
 import importlib.util
 import json
+import struct
 import subprocess
 import sys
 import tempfile
@@ -61,6 +62,37 @@ def write_intrinsics_yaml(path):
         "parameters : [3000, 3000, 2048, 1500, 0, 0, 0, 0, 0, 0, 0, 0]\n",
         encoding="utf-8",
     )
+
+
+def write_minimal_calib_dataset(path, imagesets, camera_count=2, width=640, height=480):
+    def u32(value):
+        return struct.pack(">I", int(value))
+
+    def i32(value):
+        return struct.pack(">i", int(value))
+
+    def f32(value):
+        return struct.pack("<f", float(value))
+
+    with Path(path).open("wb") as stream:
+        stream.write(b"calib_data")
+        stream.write(u32(1))
+        stream.write(u32(camera_count))
+        for _ in range(camera_count):
+            stream.write(u32(width))
+            stream.write(u32(height))
+        stream.write(u32(len(imagesets)))
+        for filename, camera_features in imagesets:
+            encoded = filename.encode("utf-8")
+            stream.write(u32(len(encoded)))
+            stream.write(encoded)
+            for features in camera_features:
+                stream.write(u32(len(features)))
+                for x, y, feature_id in features:
+                    stream.write(f32(x))
+                    stream.write(f32(y))
+                    stream.write(i32(feature_id))
+        stream.write(u32(0))
 
 
 class StudioCorrespondenceViewerTest(unittest.TestCase):
@@ -310,6 +342,293 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
             self.assertEqual(len(data["sample_points_three"]), 2)
             self.assertEqual(data["summary"]["observation_count"], 2)
             self.assertEqual(data["summary"]["loaded_observation_count"], 2)
+
+    def test_marker_correspondence_uses_original_frame_index_for_timeline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            correspondence = root / "large_correspondences.tsv"
+            fieldnames = [
+                "dataset", "imageset_index", "frame_index", "camera_index", "camera_label",
+                "filename", "feature_id", "point_index",
+                "world_x", "world_y", "world_z",
+                "camera_center_x", "camera_center_y", "camera_center_z",
+                "observed_x", "observed_y", "projected_x", "projected_y",
+                "residual_x_px", "residual_y_px", "residual_px",
+                "projection_status",
+            ]
+            rows = [
+                ("3", "101", "10", "0.25"),
+                ("4", "103", "11", "0.5"),
+            ]
+            with correspondence.open("w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, delimiter="\t", fieldnames=fieldnames)
+                writer.writeheader()
+                for imageset_index, frame_index, feature_id, residual in rows:
+                    writer.writerow({
+                        "dataset": "large",
+                        "imageset_index": imageset_index,
+                        "frame_index": frame_index,
+                        "camera_index": "0",
+                        "camera_label": "1-1",
+                        "filename": f"frame_{frame_index}.jpg",
+                        "feature_id": feature_id,
+                        "point_index": str(int(feature_id) - 10),
+                        "world_x": str(0.1 * int(feature_id)),
+                        "world_y": "0.0",
+                        "world_z": "1.0",
+                        "camera_center_x": "0.0",
+                        "camera_center_y": "0.0",
+                        "camera_center_z": "0.0",
+                        "observed_x": "100.0",
+                        "observed_y": "101.0",
+                        "projected_x": "100.1",
+                        "projected_y": "101.1",
+                        "residual_x_px": "0.1",
+                        "residual_y_px": "0.2",
+                        "residual_px": residual,
+                        "projection_status": "ok",
+                    })
+
+            data = viewer.load_marker_correspondences(
+                "large",
+                correspondence,
+                max_rows=10,
+                cameras=[{
+                    "index": 0,
+                    "label": "1-1",
+                    "camera_id": "1-1",
+                    "center": [0.0, 0.0, 0.0],
+                }],
+            )
+
+            self.assertEqual([obs["imageset_index"] for obs in data["observations"]], [3, 4])
+            self.assertEqual([obs["frame_index"] for obs in data["observations"]], [101, 103])
+            self.assertEqual(data["observed_frames"], [101, 103])
+            self.assertEqual(data["frames"], [101, 102, 103])
+            self.assertEqual(data["timeline_frames"], [101, 102, 103])
+            self.assertEqual([item["frame_index"] for item in data["top_frames"]], [101, 103])
+
+    def test_outer_correspondence_frames_include_empty_original_indices(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            residuals = root / "observation_residuals.tsv"
+            frame_face_poses = root / "rig_tr_frame_face.yaml"
+            frame_face_poses.write_text(
+                "type: rig_tr_frame_face\n"
+                "poses:\n"
+                "- frame_index: 10\n"
+                "  face_id: 0\n"
+                "  tx: 0.0\n"
+                "  ty: 0.0\n"
+                "  tz: 1.0\n"
+                "  qx: 0.0\n"
+                "  qy: 0.0\n"
+                "  qz: 0.0\n"
+                "  qw: 1.0\n"
+                "- frame_index: 12\n"
+                "  face_id: 0\n"
+                "  tx: 0.0\n"
+                "  ty: 0.0\n"
+                "  tz: 2.0\n"
+                "  qx: 0.0\n"
+                "  qy: 0.0\n"
+                "  qz: 0.0\n"
+                "  qw: 1.0\n",
+                encoding="utf-8",
+            )
+            with residuals.open("w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(
+                    f,
+                    delimiter="\t",
+                    fieldnames=[
+                        "frame_index", "filename", "camera_index", "camera_id",
+                        "feature_id", "tag_id", "corner_id", "face_id",
+                        "local_x", "local_y", "local_z",
+                        "observed_x", "observed_y", "projected_x", "projected_y",
+                        "residual_x_px", "residual_y_px", "residual_px",
+                        "projection_status",
+                    ],
+                )
+                writer.writeheader()
+                for frame_index in (10, 12):
+                    writer.writerow({
+                        "frame_index": str(frame_index),
+                        "filename": f"frame_{frame_index}.jpg",
+                        "camera_index": "0",
+                        "camera_id": "1-1",
+                        "feature_id": str(frame_index),
+                        "tag_id": "0",
+                        "corner_id": "0",
+                        "face_id": "0",
+                        "local_x": "0.0",
+                        "local_y": "0.0",
+                        "local_z": "0.0",
+                        "observed_x": "100.0",
+                        "observed_y": "110.0",
+                        "projected_x": "101.0",
+                        "projected_y": "111.0",
+                        "residual_x_px": "1.0",
+                        "residual_y_px": "1.0",
+                        "residual_px": "1.414",
+                        "projection_status": "ok",
+                    })
+
+            data = viewer.load_outer_observations(
+                residuals,
+                frame_face_poses,
+                cameras=[{
+                    "index": 0,
+                    "label": "1-1",
+                    "camera_id": "1-1",
+                    "center": [0.0, 0.0, 0.0],
+                }],
+            )
+
+            self.assertEqual([obs["frame_index"] for obs in data["observations"]], [10, 12])
+            self.assertEqual(data["observed_frames"], [10, 12])
+            self.assertEqual(data["frames"], [10, 11, 12])
+            self.assertEqual(data["timeline_frames"], [10, 11, 12])
+
+    def test_outer_raw_dataset_loads_only_shared_tag_corner_tracks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "raw.bin"
+            manifest = root / "manifest.tsv"
+            frame_face_poses = root / "rig_tr_frame_face.yaml"
+            write_minimal_calib_dataset(
+                dataset,
+                [
+                    ("000000.jpg", [
+                        [(10.0, 20.0, 0), (30.0, 20.0, 1)],
+                        [(110.0, 120.0, 0)],
+                    ]),
+                    ("000002.jpg", [
+                        [(40.0, 50.0, 4)],
+                        [],
+                    ]),
+                ],
+                camera_count=2,
+            )
+            manifest.write_text(
+                "camera_index\tcamera_id\tstage_name\n"
+                "0\t1-1\tcam00_w4_1-1\n"
+                "1\t1-2\tcam01_w4_1-2\n",
+                encoding="utf-8",
+            )
+            frame_face_poses.write_text(
+                "type: rig_tr_frame_face\n"
+                "poses:\n"
+                "- frame_index: 0\n"
+                "  face_id: 0\n"
+                "  tx: 1.0\n"
+                "  ty: 2.0\n"
+                "  tz: 3.0\n"
+                "  qx: 0.0\n"
+                "  qy: 0.0\n"
+                "  qz: 0.0\n"
+                "  qw: 1.0\n"
+                "- frame_index: 2\n"
+                "  face_id: 0\n"
+                "  tx: 4.0\n"
+                "  ty: 5.0\n"
+                "  tz: 6.0\n"
+                "  qx: 0.0\n"
+                "  qy: 0.0\n"
+                "  qz: 0.0\n"
+                "  qw: 1.0\n",
+                encoding="utf-8",
+            )
+
+            data = viewer.load_outer_raw_shared_observations(
+                dataset,
+                manifest,
+                frame_face_poses,
+                cameras=[
+                    {"index": 0, "label": "1-1", "camera_id": "1-1", "center": [0.0, 0.0, 0.0]},
+                    {"index": 1, "label": "1-2", "camera_id": "1-2", "center": [1.0, 0.0, 0.0]},
+                ],
+                max_shared_tracks_per_frame=10,
+            )
+
+            self.assertEqual(len(data["observations"]), 2)
+            self.assertEqual(data["frames"], [0, 1, 2])
+            self.assertEqual(data["observed_frames"], [0])
+            self.assertEqual(data["camera_ids"], ["1-1", "1-2"])
+            self.assertEqual(data["summary"]["source"], "raw_apriltag_dataset_shared_tracks")
+            self.assertEqual(data["summary"]["raw_shared_track_count"], 1)
+            self.assertEqual(data["summary"]["selected_shared_track_count"], 1)
+            self.assertEqual({obs["feature_id"] for obs in data["observations"]}, {0})
+            self.assertEqual({obs["projection_status"] for obs in data["observations"]}, {"raw_detection_shared_track"})
+
+    def test_outer_raw_dataset_respects_final_ba_frame_face_filter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "raw.bin"
+            manifest = root / "manifest.tsv"
+            frame_face_poses = root / "rig_tr_frame_face.yaml"
+            face7_feature_id = 224 * 4
+            write_minimal_calib_dataset(
+                dataset,
+                [
+                    ("000000.jpg", [
+                        [(10.0, 20.0, 0), (12.0, 24.0, face7_feature_id)],
+                        [(110.0, 120.0, 0), (112.0, 124.0, face7_feature_id)],
+                    ]),
+                ],
+                camera_count=2,
+            )
+            manifest.write_text(
+                "camera_index\tcamera_id\tstage_name\n"
+                "0\t1-1\tcam00_w4_1-1\n"
+                "1\t1-2\tcam01_w4_1-2\n",
+                encoding="utf-8",
+            )
+            frame_face_poses.write_text(
+                "type: rig_tr_frame_face\n"
+                "poses:\n"
+                "- frame_index: 0\n"
+                "  face_id: 0\n"
+                "  tx: 1.0\n"
+                "  ty: 2.0\n"
+                "  tz: 3.0\n"
+                "  qx: 0.0\n"
+                "  qy: 0.0\n"
+                "  qz: 0.0\n"
+                "  qw: 1.0\n"
+                "- frame_index: 0\n"
+                "  face_id: 7\n"
+                "  tx: 4.0\n"
+                "  ty: 5.0\n"
+                "  tz: 6.0\n"
+                "  qx: 0.0\n"
+                "  qy: 0.0\n"
+                "  qz: 0.0\n"
+                "  qw: 1.0\n",
+                encoding="utf-8",
+            )
+
+            data = viewer.load_outer_raw_shared_observations(
+                dataset,
+                manifest,
+                frame_face_poses,
+                cameras=[
+                    {"index": 0, "label": "1-1", "camera_id": "1-1", "center": [0.0, 0.0, 0.0]},
+                    {"index": 1, "label": "1-2", "camera_id": "1-2", "center": [1.0, 0.0, 0.0]},
+                ],
+                max_shared_tracks_per_frame=10,
+                accepted_frame_face_keys={(0, 7)},
+            )
+
+            self.assertEqual(len(data["observations"]), 2)
+            self.assertEqual(data["observed_frames"], [0])
+            self.assertEqual({obs["feature_id"] for obs in data["observations"]}, {face7_feature_id})
+            self.assertEqual({obs["face_id"] for obs in data["observations"]}, {7})
+            self.assertEqual(data["summary"]["frame_face_filter"], "final_ba_residual_frame_faces")
+            self.assertEqual(data["summary"]["accepted_frame_face_key_count"], 1)
+            self.assertEqual(data["summary"]["raw_shared_track_count"], 1)
+            self.assertEqual(data["summary"]["selected_shared_track_count"], 1)
+            self.assertEqual(len(data["frame_face_poses"]), 1)
+            self.assertEqual(data["frame_face_poses"][0]["face_id"], 7)
 
     def test_pipeline_dry_run_includes_advanced_correspondence_viewer_stage(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prototype BA for independent outer-tower planes per synchronized frame/face."""
+"""Outer-tower BA with either independent face planes or one rigid tower per frame."""
 
 import argparse
 import csv
@@ -34,6 +34,12 @@ INTRINSICS_REFINE_MODES = (
     "per_camera_opencv5",
 )
 
+TOWER_MODELS = (
+    "independent_frame_faces",
+    "rigid_yaw45_tower",
+    "flex_yaw_offset_tower",
+)
+
 
 def default_tower_layout():
     return {
@@ -64,6 +70,224 @@ def face_id_for_feature(feature_id, layout):
 
 def face_local_point_for_feature(feature_id, layout):
     return base.tower_face_local_point_for_feature(feature_id, layout)
+
+
+def flexible_tower_model(args):
+    return getattr(args, "tower_model", "") == "flex_yaw_offset_tower"
+
+
+def rigid_tower_family(args):
+    return getattr(args, "tower_model", "") in ("rigid_yaw45_tower", "flex_yaw_offset_tower")
+
+
+def zero_face_geometry_delta(args):
+    return np.zeros(3 * int(getattr(args, "tower_face_count", 8)), dtype=np.float64)
+
+
+def clamp_face_geometry_delta(args, delta):
+    face_count = int(getattr(args, "tower_face_count", 8))
+    values = np.asarray(delta if delta is not None else [], dtype=np.float64).reshape(-1)
+    if values.size < 3 * face_count:
+        values = np.pad(values, (0, 3 * face_count - values.size))
+    values = values[:3 * face_count].copy()
+    max_yaw = math.radians(float(getattr(args, "flex_face_yaw_max_deg", 0.0)))
+    max_radial = float(getattr(args, "flex_face_radial_offset_max_m", 0.0))
+    max_tangent = float(getattr(args, "flex_face_tangent_offset_max_m", 0.0))
+    values[:face_count] = np.clip(values[:face_count], -max_yaw, max_yaw)
+    values[face_count:2 * face_count] = np.clip(values[face_count:2 * face_count], -max_radial, max_radial)
+    values[2 * face_count:3 * face_count] = np.clip(values[2 * face_count:3 * face_count], -max_tangent, max_tangent)
+    return values
+
+
+def face_geometry_components(args, delta):
+    face_count = int(getattr(args, "tower_face_count", 8))
+    values = clamp_face_geometry_delta(args, delta)
+    return (
+        values[:face_count],
+        values[face_count:2 * face_count],
+        values[2 * face_count:3 * face_count],
+    )
+
+
+def face_geometry_prior_residual(args, delta):
+    if not flexible_tower_model(args):
+        return np.zeros(0, dtype=np.float64)
+    face_count = int(args.tower_face_count)
+    yaw, radial, tangent = face_geometry_components(args, delta)
+    yaw_sigma = math.radians(float(args.flex_face_yaw_sigma_deg))
+    radial_sigma = float(args.flex_face_radial_offset_sigma_m)
+    tangent_sigma = float(args.flex_face_tangent_offset_sigma_m)
+    adjacent_sigma = math.radians(float(args.flex_face_adjacent_angle_sigma_deg))
+    residuals = [
+        yaw / yaw_sigma,
+        radial / radial_sigma,
+        tangent / tangent_sigma,
+    ]
+    base_step = 2.0 * math.pi / face_count
+    angles = [
+        math.radians(float(args.tower_face0_angle_degrees)) + i * base_step + float(yaw[i])
+        for i in range(face_count)
+    ]
+    min_sep = math.radians(float(args.flex_face_adjacent_angle_min_deg))
+    max_sep = math.radians(float(args.flex_face_adjacent_angle_max_deg))
+    hinges = []
+    for i in range(face_count):
+        current = angles[i]
+        nxt = angles[(i + 1) % face_count]
+        if i == face_count - 1:
+            nxt += 2.0 * math.pi
+        sep = nxt - current
+        if sep < min_sep:
+            hinges.append((min_sep - sep) / adjacent_sigma)
+        elif sep > max_sep:
+            hinges.append((sep - max_sep) / adjacent_sigma)
+        else:
+            hinges.append(0.0)
+    residuals.append(np.asarray(hinges, dtype=np.float64))
+    return np.concatenate(residuals)
+
+
+def face_geometry_optimize_eps(args):
+    face_count = int(args.tower_face_count)
+    return np.concatenate([
+        np.full(face_count, 1e-5, dtype=np.float64),
+        np.full(face_count, 1e-4, dtype=np.float64),
+        np.full(face_count, 1e-4, dtype=np.float64),
+    ])
+
+
+def face_geometry_max_step(args):
+    face_count = int(args.tower_face_count)
+    return np.concatenate([
+        np.full(face_count, math.radians(float(args.flex_face_yaw_max_step_deg)), dtype=np.float64),
+        np.full(face_count, float(args.flex_face_radial_offset_max_step_m), dtype=np.float64),
+        np.full(face_count, float(args.flex_face_tangent_offset_max_step_m), dtype=np.float64),
+    ])
+
+
+def face_geometry_summary_rows(args, delta, face_width_delta_m=0.0):
+    face_count = int(args.tower_face_count)
+    yaw, radial, tangent = face_geometry_components(args, delta)
+    base_step = 2.0 * math.pi / face_count
+    base_radius = tower_face_width(args, face_width_delta_m) / (2.0 * math.tan(math.pi / face_count))
+    rows = []
+    for face_id in range(face_count):
+        ideal_yaw = math.radians(float(args.tower_face0_angle_degrees)) + face_id * base_step
+        final_yaw = ideal_yaw + float(yaw[face_id])
+        next_yaw = (
+            math.radians(float(args.tower_face0_angle_degrees))
+            + ((face_id + 1) % face_count) * base_step
+            + float(yaw[(face_id + 1) % face_count])
+        )
+        if face_id == face_count - 1:
+            next_yaw += 2.0 * math.pi
+        rows.append({
+            "face_id": int(face_id),
+            "ideal_yaw_deg": float(math.degrees(ideal_yaw)),
+            "yaw_delta_deg": float(math.degrees(yaw[face_id])),
+            "final_yaw_deg": float(math.degrees(final_yaw)),
+            "adjacent_sep_to_next_deg": float(math.degrees(next_yaw - final_yaw)),
+            "base_radius_m": float(base_radius),
+            "radial_offset_m": float(radial[face_id]),
+            "final_radius_m": float(base_radius + radial[face_id]),
+            "tangent_offset_m": float(tangent[face_id]),
+        })
+    return rows
+
+
+def tower_face_transform(
+        face_id,
+        face_width_m,
+        face_count=8,
+        face0_angle_degrees=0.0,
+        face_geometry_delta=None,
+        args=None):
+    face_count = int(face_count)
+    yaw_delta = 0.0
+    radial_delta = 0.0
+    tangent_delta = 0.0
+    if args is not None and face_geometry_delta is not None:
+        yaw, radial, tangent = face_geometry_components(args, face_geometry_delta)
+        yaw_delta = float(yaw[int(face_id)])
+        radial_delta = float(radial[int(face_id)])
+        tangent_delta = float(tangent[int(face_id)])
+    theta = math.radians(float(face0_angle_degrees)) + int(face_id) * 2.0 * math.pi / face_count + yaw_delta
+    normal = np.asarray([math.cos(theta), math.sin(theta), 0.0], dtype=np.float64)
+    tangent = np.asarray([-math.sin(theta), math.cos(theta), 0.0], dtype=np.float64)
+    vertical = np.asarray([0.0, 0.0, 1.0], dtype=np.float64)
+    apothem = float(face_width_m) / (2.0 * math.tan(math.pi / face_count)) + radial_delta
+    rotation = np.column_stack([normal, tangent, vertical])
+    translation = normal * apothem + tangent * tangent_delta
+    return base.pose_matrix(rotation, translation)
+
+
+def tower_face_width(args, delta_m=0.0):
+    return float(args.tower_face_width_initial_m) + float(delta_m or 0.0)
+
+
+def frame_face_poses_from_tower_poses(
+        tower_poses,
+        frame_face_keys,
+        args,
+        width_delta_m=0.0,
+        face_geometry_delta=None):
+    face_width = tower_face_width(args, width_delta_m)
+    result = {}
+    for frame_index, face_id in sorted(frame_face_keys):
+        tower_pose = tower_poses.get(int(frame_index))
+        if tower_pose is None:
+            continue
+        face_pose = tower_face_transform(
+            face_id,
+            face_width,
+            args.tower_face_count,
+            args.tower_face0_angle_degrees,
+            face_geometry_delta,
+            args)
+        result[(int(frame_index), int(face_id))] = tower_pose @ face_pose
+    return result
+
+
+def initialize_tower_poses_from_frame_faces(
+        frame_face_poses,
+        quality,
+        args,
+        width_delta_m=0.0,
+        face_geometry_delta=None):
+    votes_by_frame = defaultdict(list)
+    errors_by_frame = defaultdict(list)
+    face_width = tower_face_width(args, width_delta_m)
+    for key, rig_tr_face in sorted(frame_face_poses.items()):
+        frame_index, face_id = int(key[0]), int(key[1])
+        face_pose = tower_face_transform(
+            face_id,
+            face_width,
+            args.tower_face_count,
+            args.tower_face0_angle_degrees,
+            face_geometry_delta,
+            args)
+        votes_by_frame[frame_index].append(rig_tr_face @ base.invert_pose(face_pose))
+        q = quality.get(key, {})
+        error = q.get("pnp_median_error_px")
+        errors_by_frame[frame_index].append(float(error) if error is not None else 10.0)
+    tower_poses = {}
+    tower_quality = {}
+    for frame_index, votes in sorted(votes_by_frame.items()):
+        errors = errors_by_frame.get(frame_index, [])
+        if len(votes) == 1:
+            tower_pose = votes[0].copy()
+            average = "single_face_vote"
+        else:
+            tower_pose = base.robust_weighted_average_poses(votes, errors)
+            average = "robust_weighted_face_votes"
+        tower_poses[int(frame_index)] = tower_pose
+        tower_quality[int(frame_index)] = {
+            "frame_index": int(frame_index),
+            "face_vote_count": int(len(votes)),
+            "median_face_pnp_error_px": float(np.median(errors)) if errors else None,
+            "pose_average": average,
+        }
+    return tower_poses, tower_quality
 
 
 def make_observation(frame_idx, filename, cam_idx, feature_id, xy, local_point, face_id):
@@ -435,6 +659,274 @@ def apply_intrinsics(base_intrinsics, mode, per_camera_deltas):
     return base.apply_intrinsics_refinement(base_intrinsics, mode, None, per_camera_deltas)
 
 
+def observations_by_frame_from_frame_face(observations_by_frame_face):
+    by_frame = defaultdict(list)
+    for (frame_index, _face_id), observations in observations_by_frame_face.items():
+        by_frame[int(frame_index)].extend(observations)
+    return dict(by_frame)
+
+
+def frame_face_keys_for_observations(observations):
+    return {obs["key"] for obs in observations}
+
+
+def clamp_tower_face_width_delta(args, delta_m):
+    minimum = float(args.tower_face_width_min_m) - float(args.tower_face_width_initial_m)
+    maximum = float(args.tower_face_width_max_m) - float(args.tower_face_width_initial_m)
+    return float(np.clip(float(delta_m), minimum, maximum))
+
+
+def optimize_rigid_tower_bundle(
+        observations_by_frame_face,
+        observations_by_camera,
+        camera_priors,
+        frame_face_poses,
+        base_intrinsics,
+        args,
+        initial_deltas=None,
+        initial_per_camera_intrinsics_delta=None,
+        initial_tower_poses=None,
+        initial_tower_face_width_delta_m=0.0,
+        initial_face_geometry_delta=None):
+    if initial_deltas is None:
+        deltas = [np.eye(4, dtype=np.float64) for _ in camera_priors]
+    else:
+        if len(initial_deltas) != len(camera_priors):
+            raise ValueError("initial_deltas must match camera count")
+        deltas = [np.asarray(delta, dtype=np.float64).copy() for delta in initial_deltas]
+    intrinsics_dim = base.intrinsics_delta_dimension(args.intrinsics_refine_mode)
+    per_camera_intrinsics_delta = None
+    if args.intrinsics_refine_mode.startswith("per_camera"):
+        if initial_per_camera_intrinsics_delta is None:
+            per_camera_intrinsics_delta = [
+                np.zeros(intrinsics_dim, dtype=np.float64) for _ in camera_priors
+            ]
+        else:
+            if len(initial_per_camera_intrinsics_delta) != len(camera_priors):
+                raise ValueError("initial_per_camera_intrinsics_delta must match camera count")
+            per_camera_intrinsics_delta = [
+                np.asarray(delta, dtype=np.float64).copy()
+                for delta in initial_per_camera_intrinsics_delta
+            ]
+    frame_face_keys = set(observations_by_frame_face.keys())
+    by_frame = observations_by_frame_from_frame_face(observations_by_frame_face)
+    face_geometry_delta = (
+        clamp_face_geometry_delta(args, initial_face_geometry_delta)
+        if flexible_tower_model(args)
+        else None
+    )
+    if initial_tower_poses is None:
+        tower_poses, tower_quality = initialize_tower_poses_from_frame_faces(
+            frame_face_poses,
+            {},
+            args,
+            initial_tower_face_width_delta_m,
+            face_geometry_delta)
+    else:
+        tower_poses = {
+            int(frame_index): np.asarray(pose, dtype=np.float64).copy()
+            for frame_index, pose in initial_tower_poses.items()
+        }
+        tower_quality = {}
+    tower_face_width_delta_m = clamp_tower_face_width_delta(args, initial_tower_face_width_delta_m)
+    active_cameras = active_camera_mask(observations_by_camera, args.min_camera_observations_for_delta)
+    sigma_r = args.delta_rotation_sigma_deg * math.pi / 180.0
+    sigma_t = args.delta_translation_sigma_m
+    camera_delta_max_rotation_step = args.camera_delta_max_rotation_step_deg * math.pi / 180.0
+    tower_pose_max_rotation_step = args.tower_pose_max_rotation_step_deg * math.pi / 180.0
+
+    def refined_intrinsics():
+        return apply_intrinsics(base_intrinsics, args.intrinsics_refine_mode, per_camera_intrinsics_delta)
+
+    def current_frame_face_poses(local_tower_poses=None, width_delta_m=None, keys=None, local_face_geometry_delta=None):
+        return frame_face_poses_from_tower_poses(
+            tower_poses if local_tower_poses is None else local_tower_poses,
+            frame_face_keys if keys is None else keys,
+            args,
+            tower_face_width_delta_m if width_delta_m is None else width_delta_m,
+            face_geometry_delta if local_face_geometry_delta is None else local_face_geometry_delta)
+
+    def optimizer_residuals(
+            local_observations,
+            local_camera_poses,
+            local_tower_poses,
+            local_intrinsics,
+            width_delta_m=None,
+            keys=None,
+            local_face_geometry_delta=None):
+        local_frame_face_poses = current_frame_face_poses(
+            local_tower_poses,
+            width_delta_m,
+            frame_face_keys_for_observations(local_observations) if keys is None else keys,
+            local_face_geometry_delta)
+        return clip_residual_norms(
+            projection_residuals(
+                local_observations,
+                local_camera_poses,
+                local_frame_face_poses,
+                local_intrinsics),
+            args.optimizer_residual_clip_px)
+
+    for _outer in range(max(0, int(args.outer_iterations))):
+        camera_poses = current_camera_poses(camera_priors, deltas)
+        intrinsics = refined_intrinsics()
+        for frame_index, observations in sorted(by_frame.items()):
+            if frame_index not in tower_poses or len(observations) < args.min_frame_face_observations:
+                continue
+            observation_keys = frame_face_keys_for_observations(observations)
+
+            def tower_pose_residual(transform, frame_index=frame_index, obs=observations):
+                local_tower_poses = dict(tower_poses)
+                local_tower_poses[frame_index] = transform
+                return optimizer_residuals(
+                    obs,
+                    camera_poses,
+                    local_tower_poses,
+                    intrinsics,
+                    keys=observation_keys)
+
+            tower_poses[frame_index] = base.optimize_block(
+                tower_poses[frame_index],
+                tower_pose_residual,
+                args.block_iterations,
+                damping=1e-3,
+                max_rotation_step=tower_pose_max_rotation_step,
+                max_translation_step=args.tower_pose_max_translation_step_m)
+
+        current_faces = current_frame_face_poses()
+        for cam_idx, observations in enumerate(observations_by_camera):
+            if not active_cameras[cam_idx]:
+                continue
+
+            def camera_residual(delta, cam_idx=cam_idx, obs=observations):
+                local_camera_poses = current_camera_poses(camera_priors, deltas)
+                local_camera_poses[cam_idx] = delta @ camera_priors[cam_idx]
+                reproj = clip_residual_norms(
+                    projection_residuals(
+                        obs,
+                        local_camera_poses,
+                        current_faces,
+                        refined_intrinsics()),
+                    args.optimizer_residual_clip_px)
+                xi = base.se3_log_approx(delta)
+                prior = np.concatenate([xi[:3] / sigma_r, xi[3:] / sigma_t])
+                return np.concatenate([reproj, prior])
+
+            deltas[cam_idx] = base.optimize_block(
+                deltas[cam_idx],
+                camera_residual,
+                args.block_iterations,
+                damping=1e-3,
+                max_rotation_step=camera_delta_max_rotation_step,
+                max_translation_step=args.camera_delta_max_translation_step_m)
+
+        if args.intrinsics_refine_mode.startswith("per_camera"):
+            eps, max_step = intrinsics_eps_and_step(intrinsics_dim, args)
+            for cam_idx, observations in enumerate(observations_by_camera):
+                if not active_cameras[cam_idx]:
+                    continue
+
+                def camera_intrinsics_residual(delta, cam_idx=cam_idx, obs=observations):
+                    local_deltas = list(per_camera_intrinsics_delta)
+                    local_deltas[cam_idx] = delta
+                    local_intrinsics = apply_intrinsics(
+                        base_intrinsics,
+                        args.intrinsics_refine_mode,
+                        local_deltas)
+                    reproj = clip_residual_norms(
+                        projection_residuals(
+                            obs,
+                            current_camera_poses(camera_priors, deltas),
+                            current_frame_face_poses(keys=frame_face_keys_for_observations(obs)),
+                            local_intrinsics),
+                        args.optimizer_residual_clip_px)
+                    return np.concatenate([reproj, intrinsics_prior_residual(delta, args)])
+
+                per_camera_intrinsics_delta[cam_idx] = base.optimize_vector(
+                    per_camera_intrinsics_delta[cam_idx],
+                    camera_intrinsics_residual,
+                    args.intrinsics_block_iterations,
+                    damping=1e-2,
+                    eps=eps,
+                    max_step=max_step)
+                per_camera_intrinsics_delta[cam_idx] = base.clamp_intrinsics_delta_to_total_bounds(
+                    per_camera_intrinsics_delta[cam_idx],
+                    args.intrinsics_max_total_focal_delta_frac,
+                    args.intrinsics_max_total_principal_delta_px,
+                    args.intrinsics_max_total_distortion_delta)
+
+        if args.optimize_tower_face_width:
+            width_observations = [
+                obs
+                for observations in observations_by_frame_face.values()
+                for obs in observations
+                if active_cameras[obs["camera_index"]]
+            ]
+
+            def tower_face_width_residual(delta, obs=width_observations):
+                delta_m = clamp_tower_face_width_delta(args, float(delta[0]))
+                reproj = optimizer_residuals(
+                    obs,
+                    current_camera_poses(camera_priors, deltas),
+                    tower_poses,
+                    refined_intrinsics(),
+                    delta_m,
+                    local_face_geometry_delta=face_geometry_delta)
+                prior = np.asarray([delta_m / args.tower_face_width_sigma_m], dtype=np.float64)
+                return np.concatenate([reproj, prior])
+
+            optimized_delta = base.optimize_vector(
+                np.asarray([tower_face_width_delta_m], dtype=np.float64),
+                tower_face_width_residual,
+                args.block_iterations,
+                damping=1e-2,
+                eps=np.asarray([1e-4], dtype=np.float64),
+                max_step=np.asarray([args.tower_face_width_max_step_m], dtype=np.float64))
+            tower_face_width_delta_m = clamp_tower_face_width_delta(args, float(optimized_delta[0]))
+
+        if flexible_tower_model(args):
+            geometry_observations = [
+                obs
+                for observations in observations_by_frame_face.values()
+                for obs in observations
+                if active_cameras[obs["camera_index"]]
+            ]
+
+            def face_geometry_residual(delta, obs=geometry_observations):
+                local_delta = clamp_face_geometry_delta(args, delta)
+                reproj = optimizer_residuals(
+                    obs,
+                    current_camera_poses(camera_priors, deltas),
+                    tower_poses,
+                    refined_intrinsics(),
+                    local_face_geometry_delta=local_delta)
+                prior = face_geometry_prior_residual(args, local_delta)
+                return np.concatenate([reproj, prior])
+
+            face_geometry_delta = base.optimize_vector(
+                face_geometry_delta,
+                face_geometry_residual,
+                args.flex_face_geometry_block_iterations,
+                damping=1e-2,
+                eps=face_geometry_optimize_eps(args),
+                max_step=face_geometry_max_step(args))
+            face_geometry_delta = clamp_face_geometry_delta(args, face_geometry_delta)
+
+    return {
+        "deltas": deltas,
+        "camera_poses": current_camera_poses(camera_priors, deltas),
+        "frame_face_poses": current_frame_face_poses(),
+        "tower_poses": tower_poses,
+        "tower_quality": tower_quality,
+        "tower_face_width_delta_m": float(tower_face_width_delta_m),
+        "tower_face_width_final_m": float(tower_face_width(args, tower_face_width_delta_m)),
+        "face_geometry_delta": face_geometry_delta,
+        "intrinsics": refined_intrinsics(),
+        "per_camera_intrinsics_delta": per_camera_intrinsics_delta,
+        "active_cameras": active_cameras,
+    }
+
+
 def optimize_bundle(
         observations_by_frame_face,
         observations_by_camera,
@@ -443,7 +935,23 @@ def optimize_bundle(
         base_intrinsics,
         args,
         initial_deltas=None,
-        initial_per_camera_intrinsics_delta=None):
+        initial_per_camera_intrinsics_delta=None,
+        initial_tower_poses=None,
+        initial_tower_face_width_delta_m=0.0,
+        initial_face_geometry_delta=None):
+    if rigid_tower_family(args):
+        return optimize_rigid_tower_bundle(
+            observations_by_frame_face,
+            observations_by_camera,
+            camera_priors,
+            frame_face_poses,
+            base_intrinsics,
+            args,
+            initial_deltas=initial_deltas,
+            initial_per_camera_intrinsics_delta=initial_per_camera_intrinsics_delta,
+            initial_tower_poses=initial_tower_poses,
+            initial_tower_face_width_delta_m=initial_tower_face_width_delta_m,
+            initial_face_geometry_delta=initial_face_geometry_delta)
     if initial_deltas is None:
         deltas = [np.eye(4, dtype=np.float64) for _ in camera_priors]
     else:
@@ -614,6 +1122,30 @@ def write_frame_face_pose_yaml(path, frame_face_poses, transform_name):
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_tower_pose_yaml(path, tower_poses, transform_name):
+    lines = [
+        f"# Each pose stores {transform_name}; tower coordinates use +Z as the shared vertical axis.",
+        f"type: {transform_name}",
+        f"pose_count: {len(tower_poses)}",
+        "poses:",
+    ]
+    for index, (frame_index, pose) in enumerate(sorted(tower_poses.items())):
+        qx, qy, qz, qw = base.matrix_to_quat_xyzw(pose[:3, :3])
+        tx, ty, tz = pose[:3, 3]
+        lines.extend([
+            f"  - index: {index}",
+            f"    frame_index: {int(frame_index)}",
+            f"    tx: {tx:.14g}",
+            f"    ty: {ty:.14g}",
+            f"    tz: {tz:.14g}",
+            f"    qx: {qx:.14g}",
+            f"    qy: {qy:.14g}",
+            f"    qz: {qz:.14g}",
+            f"    qw: {qw:.14g}",
+        ])
+    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_frame_face_index_tsv(path, frame_face_poses):
     with Path(path).open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(
@@ -627,6 +1159,28 @@ def write_frame_face_index_tsv(path, frame_face_poses):
                 "frame_index": key[0],
                 "face_id": key[1],
             })
+
+
+def write_face_geometry_tsv(path, args, face_geometry_delta, face_width_delta_m=0.0):
+    rows = face_geometry_summary_rows(args, face_geometry_delta, face_width_delta_m)
+    with Path(path).open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            delimiter="\t",
+            fieldnames=[
+                "face_id",
+                "ideal_yaw_deg",
+                "yaw_delta_deg",
+                "final_yaw_deg",
+                "adjacent_sep_to_next_deg",
+                "base_radius_m",
+                "radial_offset_m",
+                "final_radius_m",
+                "tangent_offset_m",
+            ])
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: format_float(value) for key, value in row.items()})
 
 
 def camera_reprojection_rows(
@@ -809,6 +1363,7 @@ def add_arguments(parser):
     parser.add_argument("--intrinsics_dir", type=Path)
     parser.add_argument("--intrinsics_mode", choices=["colmap_fixed", "central_opencv"], default="colmap_fixed")
     parser.add_argument("--intrinsics_refine_mode", choices=INTRINSICS_REFINE_MODES, default="fixed")
+    parser.add_argument("--tower_model", choices=TOWER_MODELS, default="independent_frame_faces")
     parser.add_argument("--output_dir", required=True, type=Path)
     parser.add_argument("--outer_iterations", type=int, default=5)
     parser.add_argument("--block_iterations", type=int, default=8)
@@ -837,6 +1392,8 @@ def add_arguments(parser):
     parser.add_argument("--camera_delta_max_translation_step_m", type=float, default=0.03)
     parser.add_argument("--frame_face_max_rotation_step_deg", type=float, default=5.0)
     parser.add_argument("--frame_face_max_translation_step_m", type=float, default=0.10)
+    parser.add_argument("--tower_pose_max_rotation_step_deg", type=float, default=5.0)
+    parser.add_argument("--tower_pose_max_translation_step_m", type=float, default=0.10)
     parser.add_argument("--intrinsics_focal_sigma_frac", type=float, default=0.01)
     parser.add_argument("--intrinsics_principal_sigma_px", type=float, default=8.0)
     parser.add_argument("--intrinsics_distortion_sigma", type=float, default=0.05)
@@ -854,6 +1411,27 @@ def add_arguments(parser):
     parser.add_argument("--tower_tag_size_m", type=float, default=0.08)
     parser.add_argument("--tower_tag_spacing_m", type=float, default=0.02)
     parser.add_argument("--tower_tag_rotation_degrees", type=int, default=180)
+    parser.add_argument("--tower_face_count", type=int, default=8)
+    parser.add_argument("--tower_face0_angle_degrees", type=float, default=0.0)
+    parser.add_argument("--tower_face_width_initial_m", type=float, default=0.25)
+    parser.add_argument("--optimize_tower_face_width", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--tower_face_width_sigma_m", type=float, default=0.03)
+    parser.add_argument("--tower_face_width_min_m", type=float, default=0.18)
+    parser.add_argument("--tower_face_width_max_m", type=float, default=0.32)
+    parser.add_argument("--tower_face_width_max_step_m", type=float, default=0.005)
+    parser.add_argument("--flex_face_yaw_sigma_deg", type=float, default=3.0)
+    parser.add_argument("--flex_face_yaw_max_deg", type=float, default=8.0)
+    parser.add_argument("--flex_face_yaw_max_step_deg", type=float, default=0.25)
+    parser.add_argument("--flex_face_radial_offset_sigma_m", type=float, default=0.015)
+    parser.add_argument("--flex_face_radial_offset_max_m", type=float, default=0.05)
+    parser.add_argument("--flex_face_radial_offset_max_step_m", type=float, default=0.002)
+    parser.add_argument("--flex_face_tangent_offset_sigma_m", type=float, default=0.010)
+    parser.add_argument("--flex_face_tangent_offset_max_m", type=float, default=0.02)
+    parser.add_argument("--flex_face_tangent_offset_max_step_m", type=float, default=0.0015)
+    parser.add_argument("--flex_face_adjacent_angle_min_deg", type=float, default=30.0)
+    parser.add_argument("--flex_face_adjacent_angle_max_deg", type=float, default=60.0)
+    parser.add_argument("--flex_face_adjacent_angle_sigma_deg", type=float, default=1.0)
+    parser.add_argument("--flex_face_geometry_block_iterations", type=int, default=6)
 
 
 def validate_args(args):
@@ -887,6 +1465,10 @@ def validate_args(args):
         raise ValueError("--frame_face_max_rotation_step_deg must be positive")
     if args.frame_face_max_translation_step_m <= 0:
         raise ValueError("--frame_face_max_translation_step_m must be positive")
+    if args.tower_pose_max_rotation_step_deg <= 0:
+        raise ValueError("--tower_pose_max_rotation_step_deg must be positive")
+    if args.tower_pose_max_translation_step_m <= 0:
+        raise ValueError("--tower_pose_max_translation_step_m must be positive")
     if args.tower_first_tag_id != 0:
         raise ValueError("This prototype expects face_id = tag_id // 32, so --tower_first_tag_id must be 0")
     if args.tower_face_id_stride != 32:
@@ -897,6 +1479,42 @@ def validate_args(args):
         raise ValueError("--tower_tag_size_m must be positive and --tower_tag_spacing_m must be non-negative")
     if args.tower_tag_rotation_degrees != 180:
         raise ValueError("This prototype expects --tower_tag_rotation_degrees 180")
+    if args.tower_face_count != 8:
+        raise ValueError("This prototype expects --tower_face_count 8")
+    if args.tower_face_width_initial_m <= 0:
+        raise ValueError("--tower_face_width_initial_m must be positive")
+    if args.tower_face_width_sigma_m <= 0:
+        raise ValueError("--tower_face_width_sigma_m must be positive")
+    if args.tower_face_width_min_m <= 0 or args.tower_face_width_max_m <= 0:
+        raise ValueError("--tower_face_width_min_m and --tower_face_width_max_m must be positive")
+    if args.tower_face_width_min_m > args.tower_face_width_max_m:
+        raise ValueError("--tower_face_width_min_m must be <= --tower_face_width_max_m")
+    if args.tower_face_width_max_step_m <= 0:
+        raise ValueError("--tower_face_width_max_step_m must be positive")
+    if args.tower_model == "flex_yaw_offset_tower":
+        if args.flex_face_yaw_sigma_deg <= 0 or args.flex_face_yaw_max_deg < 0:
+            raise ValueError("--flex_face_yaw_sigma_deg must be positive and --flex_face_yaw_max_deg non-negative")
+        if args.flex_face_yaw_max_step_deg <= 0:
+            raise ValueError("--flex_face_yaw_max_step_deg must be positive")
+        if args.flex_face_radial_offset_sigma_m <= 0 or args.flex_face_radial_offset_max_m < 0:
+            raise ValueError("--flex_face_radial_offset_sigma_m must be positive and max non-negative")
+        if args.flex_face_radial_offset_max_step_m <= 0:
+            raise ValueError("--flex_face_radial_offset_max_step_m must be positive")
+        if args.flex_face_tangent_offset_sigma_m <= 0 or args.flex_face_tangent_offset_max_m < 0:
+            raise ValueError("--flex_face_tangent_offset_sigma_m must be positive and max non-negative")
+        if args.flex_face_tangent_offset_max_step_m <= 0:
+            raise ValueError("--flex_face_tangent_offset_max_step_m must be positive")
+        if args.flex_face_adjacent_angle_sigma_deg <= 0:
+            raise ValueError("--flex_face_adjacent_angle_sigma_deg must be positive")
+        if args.flex_face_adjacent_angle_min_deg <= 0:
+            raise ValueError("--flex_face_adjacent_angle_min_deg must be positive")
+        if args.flex_face_adjacent_angle_max_deg <= args.flex_face_adjacent_angle_min_deg:
+            raise ValueError("--flex_face_adjacent_angle_max_deg must exceed min")
+        ideal = 360.0 / args.tower_face_count
+        if args.flex_face_adjacent_angle_min_deg > ideal or args.flex_face_adjacent_angle_max_deg < ideal:
+            raise ValueError("Adjacent angle bounds must contain the ideal tower face spacing")
+        if args.flex_face_geometry_block_iterations <= 0:
+            raise ValueError("--flex_face_geometry_block_iterations must be positive")
     if args.intrinsics_refine_mode != "fixed":
         if args.intrinsics_focal_sigma_frac <= 0:
             raise ValueError("--intrinsics_focal_sigma_frac must be positive")
@@ -932,6 +1550,26 @@ def main():
         args)
     if not frame_face_poses_initial:
         raise ValueError("No frame-face plane pose could be initialized from solvePnP.")
+    initial_tower_poses = None
+    initial_tower_quality = {}
+    initial_face_geometry_delta = zero_face_geometry_delta(args) if flexible_tower_model(args) else None
+    if rigid_tower_family(args):
+        initial_tower_poses, initial_tower_quality = initialize_tower_poses_from_frame_faces(
+            frame_face_poses_initial,
+            quality,
+            args,
+            0.0,
+            initial_face_geometry_delta)
+        if not initial_tower_poses:
+            raise ValueError("No rigid tower pose could be initialized from frame-face PnP votes.")
+        initial_model_frame_face_poses = frame_face_poses_from_tower_poses(
+            initial_tower_poses,
+            by_frame_face_all.keys(),
+            args,
+            0.0,
+            initial_face_geometry_delta)
+    else:
+        initial_model_frame_face_poses = frame_face_poses_initial
 
     observation_gate_stages = []
     initial_pass = None
@@ -939,7 +1577,7 @@ def main():
         initial_observations, initial_gate = filter_active_observations(
             observations_all,
             camera_priors,
-            frame_face_poses_initial,
+            initial_model_frame_face_poses,
             intrinsics,
             args.initial_observation_residual_gate_px)
         initial_by_frame_face, initial_by_camera = rebuild_observation_groups(
@@ -951,9 +1589,11 @@ def main():
             initial_by_frame_face,
             initial_by_camera,
             camera_priors,
-            dict(frame_face_poses_initial),
+            dict(initial_model_frame_face_poses),
             intrinsics,
-            args)
+            args,
+            initial_tower_poses=initial_tower_poses,
+            initial_face_geometry_delta=initial_face_geometry_delta)
         initial_pass = {
             "observations": initial_observations,
             "by_frame_face": initial_by_frame_face,
@@ -965,10 +1605,16 @@ def main():
         gate_camera_poses = initial_optimized["camera_poses"]
         gate_frame_face_poses = initial_optimized["frame_face_poses"]
         gate_intrinsics = initial_optimized["intrinsics"]
+        gate_tower_poses = initial_optimized.get("tower_poses")
+        gate_tower_face_width_delta_m = initial_optimized.get("tower_face_width_delta_m", 0.0)
+        gate_face_geometry_delta = initial_optimized.get("face_geometry_delta", initial_face_geometry_delta)
     else:
         gate_camera_poses = camera_priors
-        gate_frame_face_poses = frame_face_poses_initial
+        gate_frame_face_poses = initial_model_frame_face_poses
         gate_intrinsics = intrinsics
+        gate_tower_poses = initial_tower_poses
+        gate_tower_face_width_delta_m = 0.0
+        gate_face_geometry_delta = initial_face_geometry_delta
 
     observations, observation_gate = filter_active_observations(
         observations_all,
@@ -999,12 +1645,17 @@ def main():
         initial_deltas=initial_pass["optimized"]["deltas"] if initial_pass else None,
         initial_per_camera_intrinsics_delta=(
             initial_pass["optimized"]["per_camera_intrinsics_delta"] if initial_pass else None
-        ))
+        ),
+        initial_tower_poses=gate_tower_poses,
+        initial_tower_face_width_delta_m=gate_tower_face_width_delta_m,
+        initial_face_geometry_delta=gate_face_geometry_delta)
     refined_camera_poses = optimized["camera_poses"]
     refined_frame_face_poses = optimized["frame_face_poses"]
+    refined_tower_poses = optimized.get("tower_poses", {})
     refined_intrinsics = optimized["intrinsics"]
     deltas = optimized["deltas"]
     active_cameras = optimized["active_cameras"]
+    refined_face_geometry_delta = optimized.get("face_geometry_delta")
 
     after = summarize_residuals(projection_residuals(
         observations,
@@ -1023,9 +1674,24 @@ def main():
         args.output_dir / "frame_face_tr_rig.yaml",
         {key: base.invert_pose(pose) for key, pose in refined_frame_face_poses.items()},
         "frame_face_tr_rig")
+    if refined_tower_poses:
+        write_tower_pose_yaml(
+            args.output_dir / "rig_tr_tower.yaml",
+            refined_tower_poses,
+            "rig_tr_tower")
+        write_tower_pose_yaml(
+            args.output_dir / "tower_tr_rig.yaml",
+            {key: base.invert_pose(pose) for key, pose in refined_tower_poses.items()},
+            "tower_tr_rig")
     write_frame_face_index_tsv(
         diagnostics_dir / "frame_face_pose_index.tsv",
         refined_frame_face_poses)
+    if flexible_tower_model(args):
+        write_face_geometry_tsv(
+            diagnostics_dir / "face_geometry.tsv",
+            args,
+            refined_face_geometry_delta,
+            optimized.get("tower_face_width_delta_m", 0.0))
     base.write_intrinsics_dir(args.output_dir / "intrinsics_prior", manifest, intrinsics)
     base.write_intrinsics_dir(args.output_dir / "intrinsics_refined", manifest, refined_intrinsics)
 
@@ -1034,7 +1700,7 @@ def main():
         by_camera,
         camera_priors,
         refined_camera_poses,
-        frame_face_poses_initial,
+        initial_model_frame_face_poses,
         refined_frame_face_poses,
         intrinsics,
         refined_intrinsics)
@@ -1051,7 +1717,7 @@ def main():
         quality,
         camera_priors,
         refined_camera_poses,
-        frame_face_poses_initial,
+        initial_model_frame_face_poses,
         refined_frame_face_poses,
         intrinsics,
         refined_intrinsics)
@@ -1071,7 +1737,7 @@ def main():
             "intrinsics_dir": str(args.intrinsics_dir) if args.intrinsics_dir else "",
         },
         "settings": {
-            "model": "independent_plane_pose_per_frame_face",
+            "model": args.tower_model,
             "intrinsics_mode": args.intrinsics_mode,
             "intrinsics_refine_mode": args.intrinsics_refine_mode,
             "outer_iterations": args.outer_iterations,
@@ -1092,7 +1758,32 @@ def main():
             "tower_tag_size_m": args.tower_tag_size_m,
             "tower_tag_spacing_m": args.tower_tag_spacing_m,
             "tower_tag_rotation_degrees": args.tower_tag_rotation_degrees,
+            "tower_face_count": args.tower_face_count,
+            "tower_face0_angle_degrees": args.tower_face0_angle_degrees,
+            "tower_face_width_initial_m": args.tower_face_width_initial_m,
+            "optimize_tower_face_width": bool(args.optimize_tower_face_width),
+            "tower_face_width_sigma_m": args.tower_face_width_sigma_m,
+            "tower_face_width_min_m": args.tower_face_width_min_m,
+            "tower_face_width_max_m": args.tower_face_width_max_m,
+            "tower_face_width_delta_m": optimized.get("tower_face_width_delta_m", 0.0),
+            "tower_face_width_final_m": optimized.get("tower_face_width_final_m", args.tower_face_width_initial_m),
+            "flex_face_yaw_sigma_deg": args.flex_face_yaw_sigma_deg,
+            "flex_face_yaw_max_deg": args.flex_face_yaw_max_deg,
+            "flex_face_radial_offset_sigma_m": args.flex_face_radial_offset_sigma_m,
+            "flex_face_radial_offset_max_m": args.flex_face_radial_offset_max_m,
+            "flex_face_tangent_offset_sigma_m": args.flex_face_tangent_offset_sigma_m,
+            "flex_face_tangent_offset_max_m": args.flex_face_tangent_offset_max_m,
+            "flex_face_adjacent_angle_min_deg": args.flex_face_adjacent_angle_min_deg,
+            "flex_face_adjacent_angle_max_deg": args.flex_face_adjacent_angle_max_deg,
+            "flex_face_geometry_block_iterations": args.flex_face_geometry_block_iterations,
         },
+        "tower_face_geometry": (
+            face_geometry_summary_rows(
+                args,
+                refined_face_geometry_delta,
+                optimized.get("tower_face_width_delta_m", 0.0))
+            if flexible_tower_model(args) else []
+        ),
         "prior_alignment": prior_alignment,
         "observation_gate": observation_gate,
         "observation_gate_stages": observation_gate_stages,
@@ -1105,6 +1796,10 @@ def main():
             "initialized": len(frame_face_poses_initial),
             "used": len(by_frame_face),
         },
+        "tower_frames": {
+            "initialized": len(initial_tower_poses or {}),
+            "used": len(refined_tower_poses),
+        },
         "cameras": {
             "total": dataset["camera_count"],
             "active_delta": int(sum(active_cameras)),
@@ -1114,10 +1809,13 @@ def main():
             "camera_tr_rig_delta_refined_yaml": str(args.output_dir / "camera_tr_rig_delta_refined.yaml"),
             "rig_tr_frame_face_yaml": str(args.output_dir / "rig_tr_frame_face.yaml"),
             "frame_face_tr_rig_yaml": str(args.output_dir / "frame_face_tr_rig.yaml"),
+            "rig_tr_tower_yaml": str(args.output_dir / "rig_tr_tower.yaml") if refined_tower_poses else "",
+            "tower_tr_rig_yaml": str(args.output_dir / "tower_tr_rig.yaml") if refined_tower_poses else "",
             "summary_json": str(args.output_dir / "summary.json"),
             "camera_reprojection_tsv": str(diagnostics_dir / "camera_reprojection.tsv"),
             "observation_residuals_tsv": str(diagnostics_dir / "observation_residuals.tsv"),
             "frame_face_quality_tsv": str(diagnostics_dir / "frame_face_quality.tsv"),
+            "face_geometry_tsv": str(diagnostics_dir / "face_geometry.tsv") if flexible_tower_model(args) else "",
         },
         "residual_before": before,
         "residual_after": after,

@@ -70,25 +70,31 @@ Keep each worker `detections.jsonl` in production full-resolution runs; do not
 pass `--skip-detections-jsonl` unless the run is QC-only. After
 `distributed_apriltag_quality_filter.py aggregate` writes the staged
 `manifest.tsv`, `image_directories.txt`, `selected_frames.tsv`, and
-`selected_images.tsv`, build the BA `calib_data` binary directly from cached
-detections instead of making t0 read SMB 4K images and detect tags again:
+`selected_images.tsv`, build the BA `calib_data` binary from cached detections
+while re-reading only the staged/selected original-resolution images on t0 for
+black-tile outer-corner refinement. This avoids re-running AprilTag detection on
+t0, but still replaces the OpenCV inner detector corners with physical 8 cm
+black-tile outer corners:
 
 ```bash
-python3 scripts/calib/build_apriltag_tower_dataset_from_detections.py \
-  --manifest /home/ubuntu/calib_data/<stage>/manifest.tsv \
+python3 scripts/calib/build_apriltag_tower_dataset_opencv.py \
   --image-directories-file /home/ubuntu/calib_data/<stage>/image_directories.txt \
-  --worker-output /home/ubuntu/calib_data/<worker-output-or-collection-dir> \
-  --output-dataset /home/ubuntu/calib_data/<stage>/opencv_tower_dataset_fullres_from_detections.bin \
+  --input-detections-jsonl /home/ubuntu/calib_data/<worker-output>/detections.jsonl \
+  --selected-images-tsv /home/ubuntu/calib_data/<stage>/selected_images.tsv \
+  --black-tile-corner-refine red-scale-edge \
+  --output-dataset /home/ubuntu/calib_data/<stage>/opencv_tower_dataset_black_tile_red_scale_edge.bin \
   --tower-config applications/camera_calibration/patterns/apriltag_tower_8faces_2x16_8cm.yaml \
-  --summary-json /home/ubuntu/calib_data/<stage>/opencv_tower_dataset_fullres_from_detections_summary.json \
-  --per-camera-tsv /home/ubuntu/calib_data/<stage>/opencv_tower_dataset_fullres_from_detections_per_camera.tsv \
-  --detections-tsv /home/ubuntu/calib_data/<stage>/opencv_tower_dataset_fullres_from_detections.tsv
+  --summary-json /home/ubuntu/calib_data/<stage>/opencv_tower_dataset_black_tile_red_scale_edge_summary.json \
+  --per-camera-tsv /home/ubuntu/calib_data/<stage>/opencv_tower_dataset_black_tile_red_scale_edge_per_camera.tsv \
+  --detections-tsv /home/ubuntu/calib_data/<stage>/opencv_tower_dataset_black_tile_red_scale_edge_detections.tsv
 ```
 
-The builder auto-discovers `selected_images.tsv` / `selected_frames.tsv` next to
-the staged manifest, filters detections to tower-valid tag IDs, preserves OpenCV
-corner order, and writes the same version-1 dataset format as
-`build_apriltag_tower_dataset_opencv.py`.
+The builder filters detections to tower-valid tag IDs, uses OpenCV corners only
+as red-box scale priors, keeps partial corner observations instead of fabricating
+missing tag corners, and writes the same version-1 dataset format as the rest of
+the calibration tools. `build_apriltag_tower_dataset_from_detections.py` remains
+useful for QC-only / legacy raw-corner diagnostics, but should not be the
+production whole BA dataset builder.
 
 On the 2026-05-31 whole recapture, a full-resolution QC probe recovered many
 more candidate frames than the hybrid QC cache: 780 selected synchronized frames
@@ -97,14 +103,21 @@ tower dataset from t0 by re-reading SMB 4K images took about 27.8 minutes for
 24 cameras x 780 frames, so production runs should keep worker
 `detections.jsonl` and use the direct-detections builder above.
 
-The same probe also shows why the final BA gate matters. With the full-resolution
-dataset and the current outer large-marker intrinsics, `wide50_then_gate6`
-accepted 8123 residuals at median/p90 `2.44 / 5.12 px`; the stricter
-`wide50_then_gate4` accepted 4778 residuals at median/p90 `1.83 / 3.50 px` and
-kept 22/24 outer cameras active (`4-1`, `4-2` still inactive from tower tags).
-Use `wide50_then_gate4` as a high-precision candidate when full-resolution
-detections provide enough coverage, and keep `wide50_then_gate6` as the
-conservative support-retaining default.
+The same probe also shows why the initialization BA gate must be loose when a
+coarse-but-not-perfect outer prior is available. With the required
+`opencv_tower_dataset_black_tile_red_scale_edge.bin` physical-corner dataset,
+`wide50_then_gate6` kept only 4856 observations in the initialization pass and
+1966 observations in the final `6 px` pass. `wide200_then_gate6` kept 68235
+initial observations, retained 3583 final observations, and reached final
+median/p90 `0.43 / 2.88 px` on the 2026-05-31 whole capture. The root issue was
+not the final `6 px` quality gate; it was the earlier `50 px` gate deleting
+valid same-ID observations before BA had a chance to correct the coarse pose.
+
+Production outer-tower BA must therefore use:
+
+- `opencv_tower_dataset_black_tile_red_scale_edge.bin`.
+- `wide200_then_gate6` as the default refine preset.
+- `wide50_*` presets only as legacy/diagnostic comparisons.
 
 AprilTag corner localization is expected to be subpixel. The Python/OpenCV
 distributed QC and dataset builder paths default to ArUco subpixel refinement
@@ -125,30 +138,59 @@ detector-consistent edge-line fitting and stricter per-tag quality gates, not
 just more BA iterations or a larger `cornerSubPix` window.
 
 For the current 2026-05-31 all32 recapture, the default production path is the
-independent frame/face refine with the `wide50_then_gate6` preset:
+rigid yaw-45 tower refine with the `wide200_then_gate6` preset:
 
 ```bash
 python3 scripts/calib/run_outer_tower_recalib_pipeline.py \
   --data-root /home/ubuntu/calib_data/calib_2026_05_31_v3 \
   --output-root /home/ubuntu/calib_data/studio_calibration_runs/<run-tag>/outer_tower_wrapper \
-  --frame-face-output-dir /home/ubuntu/calib_data/studio_calibration_runs/<run-tag>/outer_tower/frame_face_refine_wide50_then_gate6 \
+  --frame-face-output-dir /home/ubuntu/calib_data/studio_calibration_runs/<run-tag>/outer_tower/frame_face_refine_wide200_then_gate6 \
   --run-frame-face-refine \
-  --frame-face-refine-preset wide50_then_gate6
+  --frame-face-refine-preset wide200_then_gate6
 ```
 
 This preset keeps the same synchronized frame/face model but uses a two-stage
-observation gate. The first pass keeps observations within `50 px` of the
+observation gate. The first pass keeps observations within `200 px` of the
 coarse-prior projection so weak-but-valid cameras can get an SE(3) delta. The
 second pass re-gates from that warm start at `6 px` and writes the accepted
-output. The default frame-face dataset source is the full-resolution raw
-AprilTag-corner dataset under `whole_outer24_filtered_min4_hybrid_min4cam`;
-it does not depend on the old tower face-width PnP-inlier cache.
+output. The model is no longer an unconstrained independent plane per
+`(frame, face)`: each synchronized frame owns one `rig_tr_tower` pose, all faces
+share one tower-local vertical axis, and adjacent face normals are fixed at
+`360/8 = 45` degrees. The within-face corner coordinates use physical black-tile
+outer corners: AprilTag detection provides the tag ID and red-box scale prior,
+then the production dataset builder refines the 8 cm black-tile outer corners
+with local corner/edge support. The less reliable physical face width is only
+used to place different faces around the tower; within-face tag coordinates are
+defined by the measured `8 cm` tag size and `2 cm` spacing.
 
-On `recalib_20260531_193215_v2_outer_wide50`, the fullres raw gate6 run
-recovers every side-view outer camera and leaves only the top-down `4-*`
-cameras as bridge-only cameras: active delta `21/24`, used observations `4884`,
-residual median/p90 `2.54 / 5.02 px`. The top-down `4-*` cameras are still
-expected to come from the large-marker bridge rather than whole-tower tags.
+The current studio tower has a critical geometry distinction:
+
+- physical printed black-tile footprint: `8 cm` with `2 cm` tile gap;
+- OpenCV AprilTag detector corner square: an inner square used only for ID
+  detection and red-box scale prior;
+- production BA geometry: `--tower_tag_size_m 0.08` and
+  `--tower_tag_spacing_m 0.02`.
+
+The older detector-square ratio `detected tag side / adjacent tag center pitch`
+has median `0.671040859` in the real 2026-05-31 detections, corresponding to
+`0.06710408594834662 / 0.03289591405165339`. That geometry is legacy
+diagnostic-only for datasets that still store raw OpenCV inner detector corners.
+Do not use it with the red-scale-edge black-tile outer-corner dataset.
+
+The older independent frame-face model remains useful as a diagnostic/fallback
+because it can expose low per-plane reprojection error, but it is not a valid
+final geometry by itself: different faces in the same synchronized frame may
+drift apart unless the rigid tower constraint is enabled.
+
+On the 2026-06-10 black-tile rerun over the 2026-05-31 full-resolution whole
+dataset, `wide200_then_gate6` kept 3583 accepted observations at median/p90
+`0.43 / 2.88 px`, optimized face width to about `0.246 m`, and kept 20/24 outer
+cameras active. The inactive cameras were `4-1`, `4-2`, `5-3`, and `7-3`; the
+top-down `4-*` cameras are bridge-only for tower data, while `5-3` and `7-3`
+remain weakly supported in the strict `6 px` accepted set. A bounded flexible
+face-geometry probe kept 3742 observations at median/p90 `0.50 / 3.24 px`, so
+the rigid yaw-45 model remains the production default and the flexible model is
+diagnostic.
 
 `--run-colmap-vote` can be parallelized with `--colmap-jobs N`. The default is
 `1` for conservative memory/CPU usage because each job loads 24 synchronized 4K
@@ -211,11 +253,11 @@ distortion delta when nonzero.
 The standalone refine script keeps these total clamps disabled by default
 (`0`) unless they are explicitly passed.
 
-OpenCV AprilTag tower datasets have an additional corner-convention gate. The
-fixed-intrinsic PnP stage may test `--fixed_rig_corner_id_offset 0..3`, but
-`refine_outer_tower_delta_prior.py` has no runtime corner-offset argument: it
-uses `feature_id -> known_points[feature_id]` directly. Therefore the selected
-corner offset must be materialized before tag refine:
+Legacy raw OpenCV AprilTag tower datasets had an additional corner-convention
+gate. The fixed-intrinsic PnP stage could test `--fixed_rig_corner_id_offset
+0..3`, but `refine_outer_tower_delta_prior.py` had no runtime corner-offset
+argument: it used `feature_id -> known_points[feature_id]` directly. Therefore
+the selected corner offset had to be materialized before tag refine:
 
 ```bash
 python3 scripts/calib/remap_apriltag_tower_dataset_corners.py \
@@ -223,6 +265,11 @@ python3 scripts/calib/remap_apriltag_tower_dataset_corners.py \
   --output-dataset opencv_tower_dataset_fullres_corner_offset2.bin \
   --corner-id-offset 2
 ```
+
+Do not apply this remap to the production
+`opencv_tower_dataset_black_tile_red_scale_edge.bin` dataset. The black-tile
+builder writes the physical 8 cm tile corners directly with the correct
+`feature_id = tag_id * 4 + corner_id` convention.
 
 Do not use a PnP-generated `camera_tr_rig.yaml` as the tag-refine camera prior.
 The PnP output is a diagnostic source for per-frame tower poses and corner

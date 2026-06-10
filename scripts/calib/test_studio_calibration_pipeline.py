@@ -33,6 +33,8 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             outer_intrinsic_metrics.write_text("camera_index\tuser_id\tresidual_count\n", encoding="utf-8")
             (whole_qc_root).mkdir(parents=True)
             (whole_qc_root / "per_camera_stats.tsv").write_text("camera_id\tpassing_images\n", encoding="utf-8")
+            (whole_qc_root / "opencv_tower_dataset_black_tile_red_scale_edge.bin").write_bytes(b"calib_data")
+            (whole_qc_root / "manifest.tsv").write_text("camera_index\tcamera_id\n0\t1-1\n", encoding="utf-8")
 
             completed = subprocess.run(
                 [
@@ -80,17 +82,17 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             outer_pose = (
                 output_root
                 / "outer_tower"
-                / "frame_face_refine_wide50_then_gate6"
+                / "frame_face_refine_wide200_then_gate6"
                 / "camera_tr_rig_delta_refined.yaml"
             )
             outer_intrinsics = (
                 output_root
                 / "outer_tower"
-                / "frame_face_refine_wide50_then_gate6"
+                / "frame_face_refine_wide200_then_gate6"
                 / "intrinsics_refined"
             )
             outer_command = stages["outer_tower"]["commands"][0]
-            self.assertIn("--frame-face-refine-preset wide50_then_gate6", outer_command)
+            self.assertIn("--frame-face-refine-preset wide200_then_gate6", outer_command)
             self.assertIn(f"--frame-face-prior-pose-yaml {outer_delta_prior}", outer_command)
             self.assertIn(f"--frame-face-intrinsics-dir {outer_intrinsics_prior}", outer_command)
 
@@ -104,6 +106,7 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             self.assertIn(f"--outer-final-pose-yaml {outer_pose}", bridge_command)
             self.assertIn(f"--outer-intrinsics {outer_intrinsics}", bridge_command)
             self.assertIn(f"--outer-intrinsic-metrics-tsv {outer_intrinsic_metrics}", bridge_command)
+            self.assertIn(f"--whole-coverage-tsv {whole_qc_root / 'per_camera_stats.tsv'}", bridge_command)
             self.assertIn(f"--inner-prior {inner_prior}", bridge_command)
             self.assertIn(f"--outer-prior {outer_prior}", bridge_command)
             self.assertIn("--run-large-bridge", bridge_command)
@@ -142,6 +145,11 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             self.assertIn("generate_studio_correspondence_viewer.py", advanced_command)
             self.assertIn(f"--studio32-yaml {unified_yaml}", advanced_command)
             self.assertIn("--outer-observation-residuals-tsv", advanced_command)
+            self.assertIn(
+                f"--outer-raw-dataset {whole_qc_root / 'opencv_tower_dataset_black_tile_red_scale_edge.bin'}",
+                advanced_command,
+            )
+            self.assertIn(f"--outer-raw-manifest {whole_qc_root / 'manifest.tsv'}", advanced_command)
             self.assertIn("--large-correspondence-tsv", advanced_command)
             self.assertIn("--small-correspondence-tsv", advanced_command)
             self.assertIn("--large-pnp-dir", advanced_command)
@@ -156,6 +164,7 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             self.assertIn(f"--outer-large-intrinsic-report {outer_intrinsic_report}", publish_command)
             self.assertIn(f"--outer-large-qc-root {outer_large_qc_root}", publish_command)
             self.assertIn(f"--whole-qc-root {whole_qc_root}", publish_command)
+            self.assertIn(f"--outer-frame-face-report-root {outer_pose.parent}", publish_command)
             self.assertEqual(summary["run_tag"], "test_run")
             self.assertIn(str(output_root / "index.html"), completed.stdout)
 
@@ -217,9 +226,9 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
             outer_intrinsic_command = stages["generate_outer_intrinsic_report"]["commands"][0]
             bridge_command = stages["inner_bridge"]["commands"][0]
 
-            self.assertIn("calib_2026_05_31_v3", outer_command)
-            self.assertIn("frame_face_refine_wide50_then_gate6", outer_command)
-            self.assertIn("recalib_20260531_193215_v2_outer_wide50", outer_command)
+            self.assertIn("calib_2026_05_31_fullres_probe_v1", outer_command)
+            self.assertIn("frame_face_refine_wide200_then_gate6", outer_command)
+            self.assertIn("recalib_20260608_rigid_yaw45_v2", outer_command)
             self.assertIn("calib_2026_06_04_outer_large_marker_v2", outer_intrinsic_command)
             self.assertIn("final_inner8_calibration_v1", bridge_command)
             self.assertIn("colmap_outer24_firstframe_colmap404_v3", bridge_command)

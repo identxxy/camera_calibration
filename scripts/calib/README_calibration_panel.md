@@ -63,11 +63,11 @@ The final report interface is intentionally compact:
 1. Final YAML: `current_calibration/artifacts/studio_32_cameras.yaml`.
 2. Overall 3D viewer: `current_calibration/reports/01_3d_viewer/index.html`.
 3. Inner data capture report: `02_inner_capture_small_marker`.
-4. Inner intrinsic report: `03_inner_intrinsic_small_marker`.
-5. Inner extrinsic report: `04_inner_extrinsic_small_marker`.
-6. Outer data capture report: `05_outer_capture_whole_and_outer_large_marker`.
-7. Outer intrinsic report: `06_outer_intrinsic_outer_large_marker`.
-8. Outer extrinsic report: `07_outer_extrinsic_whole`.
+4. Inner intrinsic report: `03_inner_intrinsics_small_marker`.
+5. Inner extrinsic report: `04_inner_extrinsics_small_marker`.
+6. Outer data capture report: `05_outer_capture_outer_large_marker_whole`.
+7. Outer intrinsic report: `06_outer_intrinsics_outer_large_marker`.
+8. Outer extrinsic report: `07_outer_extrinsics_whole`.
 9. Bridge result report: `09_bridge_result_large_marker`.
 
 The root dashboard should not promote dated scratch reports, raw pipeline
@@ -110,10 +110,15 @@ not be interpreted as final outer calibration results.
 - `run_studio_calibration_pipeline`: calls
   `scripts/calib/run_studio_calibration_pipeline.py`. This is the current
   production wrapper for reproducible all32 calibration runs. It defaults to
-  `/home/ubuntu/calib_data/calib_2026_05_31_v3`, the `wide50_then_gate6` outer
-  preset, and the published full-resolution raw outer frame-face result as its
-  warm-start prior. Panel dry-run is enabled by default, and publication to the
-  9899 current entry requires the explicit `Publish current 9899 entry` field.
+  whole data under
+  `/home/ubuntu/calib_data/calib_2026_05_31_fullres_probe_v1`, inner/bridge
+  data under `/home/ubuntu/calib_data/calib_2026_05_31_v3`, and the
+  `wide200_then_gate6` outer preset. Production whole/tower BA must use the
+  black-tile physical-corner dataset
+  `opencv_tower_dataset_black_tile_red_scale_edge.bin`; raw OpenCV AprilTag
+  detector corners are legacy diagnostics only. Panel dry-run is enabled by
+  default, and publication to the 9899 current entry requires the explicit
+  `Publish current 9899 entry` field.
 - `run_inner_bridge_recalib_pipeline`: calls
   `scripts/calib/run_inner_bridge_recalib_pipeline.py`. It writes to
   `/home/ubuntu/calib_data/studio_calibration_runs/latest_inner_bridge`
@@ -146,7 +151,7 @@ not be interpreted as final outer calibration results.
 - `operate_whole_outer_cage`: calls
   `scripts/calib/run_outer_tower_recalib_pipeline.py` through the production
   operation alias. Its browser form defaults match the current production whole
-  operation: frame-face refine with preset `wide50_then_gate6`, quality/final
+  operation: frame-face refine with preset `wide200_then_gate6`, quality/final
   reports enabled, and COLMAP vote, side-prior, old tag-refine, and per-stage
   viewer disabled unless explicitly requested by the operator.
 - `run_outer_tower_recalib_pipeline`: calls

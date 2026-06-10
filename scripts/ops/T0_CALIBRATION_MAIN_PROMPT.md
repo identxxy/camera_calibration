@@ -16,6 +16,18 @@ t0 文件路径：
 /home/ubuntu/calib_data/current_calibration/
 ```
 
+当前发布 run source:
+
+```text
+/home/ubuntu/calib_data/studio_calibration_runs/recalib_20260610_black_tile_wide200_pipeline_v2
+```
+
+当前 production whole/tower BA 必须使用
+`opencv_tower_dataset_black_tile_red_scale_edge.bin`。OpenCV AprilTag detector
+corners 只用于 tag ID 和 red-box scale prior；BA 使用 8 cm black-tile physical
+outer corners 和 2 cm spacing。`wide200_then_gate6` 是当前 production preset：
+200 px initial gate 保留同 ID 候选，6 px final gate 写 accepted residual/report。
+
 `/current_calibration/index.html` 是根入口背后的实现文件和兼容 URL；对用户展示时优先给
 `http://192.168.2.0:9899/`。
 
@@ -47,15 +59,15 @@ pipeline directories 提升成首页组：
 3. inner 数据采集报告:
    `02_inner_capture_small_marker`
 4. inner 内参报告:
-   `03_inner_intrinsic_small_marker`
+   `03_inner_intrinsics_small_marker`
 5. inner 外参报告:
-   `04_inner_extrinsic_small_marker`
+   `04_inner_extrinsics_small_marker`
 6. outer 数据采集报告:
-   `05_outer_capture_whole_and_outer_large_marker`
+   `05_outer_capture_outer_large_marker_whole`
 7. outer 内参报告:
-   `06_outer_intrinsic_outer_large_marker`
+   `06_outer_intrinsics_outer_large_marker`
 8. outer 外参报告:
-   `07_outer_extrinsic_whole`
+   `07_outer_extrinsics_whole`
 9. bridge 结果报告:
    `09_bridge_result_large_marker`
 
@@ -139,6 +151,15 @@ t0-calib operate small-marker --inner-sequence <small_marker_inner8> --output-ro
 `current_calibration`，而不是直接把新 HTML 链到主入口。
 
 ## 当前 re-calib audit 结论
+
+当前 2026-06-10 发布版已完整跑通：
+
+- outer whole black-tile residual median/p90: `0.428 / 2.876 px`;
+- large-marker all32 bridge residual median/p90/max:
+  `0.058 / 0.135 / 4.712 px`, `650948` accepted correspondences;
+- small-marker inner fixed-rig residual median/p90/max:
+  `0.488 / 1.232 / 3.294 px`, `71696` accepted correspondences;
+- full pipeline runtime: `1241.65 s`.
 
 inner re-calib pipeline 当前是 `usable_with_caveats`：
 

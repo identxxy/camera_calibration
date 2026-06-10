@@ -127,7 +127,7 @@ class CalibrationPanelServerTest(unittest.TestCase):
             self.assertIn("--run-colmap-vote", command)
             self.assertIn("--run-side-prior", command)
             self.assertIn("--run-frame-face-refine", command)
-            self.assertIn("--frame-face-refine-preset wide50_then_gate6", command)
+            self.assertIn("--frame-face-refine-preset wide200_then_gate6", command)
             self.assertIn("--colmap-jobs 4", command)
             self.assertIn("--tag-min-camera-observations-for-use 16", command)
             self.assertIn("--tag-min-camera-observations-for-delta 10", command)
@@ -161,11 +161,12 @@ class CalibrationPanelServerTest(unittest.TestCase):
             )["steps"][0]["command"]
 
             self.assertIn("run_studio_calibration_pipeline.py", command)
-            self.assertIn("--whole-data-root /home/ubuntu/calib_data/calib_2026_05_31_v3", command)
+            self.assertIn("--whole-data-root /home/ubuntu/calib_data/calib_2026_05_31_fullres_probe_v1", command)
             self.assertIn("--inner-data-root /home/ubuntu/calib_data/calib_2026_05_31_v3", command)
-            self.assertIn("--outer-preset wide50_then_gate6", command)
+            self.assertIn("--outer-preset wide200_then_gate6", command)
             self.assertIn("--outer-frame-face-prior-pose-yaml", command)
-            self.assertIn("frame_face_refine_fullres_raw_ransac1000_wide50_gate6_v1", command)
+            self.assertIn("recalib_20260608_rigid_yaw45_v2", command)
+            self.assertIn("frame_face_refine_wide50_then_gate6", command)
             self.assertIn("--run-small-quality", command)
             self.assertIn("--publish-current", command)
             self.assertIn("--dry-run", command)
@@ -197,11 +198,15 @@ class CalibrationPanelServerTest(unittest.TestCase):
             )["steps"][0]["command"]
 
             self.assertIn("run_outer_tower_recalib_pipeline.py", whole_command)
-            self.assertIn("calib_2026_05_31_v3", whole_command)
-            self.assertIn("--whole-dir /home/ubuntu/calib_data/calib_2026_05_31_v3/whole_outer24_filtered_min4_hybrid_min4cam", whole_command)
+            self.assertIn("calib_2026_05_31_fullres_probe_v1", whole_command)
+            self.assertIn(
+                "--whole-dir /home/ubuntu/calib_data/calib_2026_05_31_fullres_probe_v1/whole_outer24_filtered_min4_fullres_min4cam",
+                whole_command,
+            )
             self.assertIn("--run-frame-face-refine", whole_command)
-            self.assertIn("--frame-face-refine-preset wide50_then_gate6", whole_command)
-            self.assertIn("frame_face_refine_fullres_raw_ransac1000_wide50_gate6_v1", whole_command)
+            self.assertIn("--frame-face-refine-preset wide200_then_gate6", whole_command)
+            self.assertIn("recalib_20260608_rigid_yaw45_v2", whole_command)
+            self.assertIn("frame_face_refine_wide50_then_gate6", whole_command)
             self.assertNotIn("--run-colmap-vote", whole_command)
             self.assertNotIn("--run-side-prior", whole_command)
             self.assertNotIn("--run-tag-refine", whole_command)

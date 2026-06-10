@@ -59,6 +59,16 @@ class BuildAprilTagTowerDatasetOpenCVTest(unittest.TestCase):
         self.assertEqual(int(config["tag_rotation_degrees"]), 180)
         self.assertAlmostEqual(points[0 * 4 + 0][0], expected_apothem, places=7)
 
+    def test_detections_to_features_keeps_partial_corner_observations(self):
+        features = builder.detections_to_features([
+            {
+                "tag_id": 17,
+                "corners": [[1.0, 2.0], None, [5.0, 6.0], [None, None]],
+            },
+        ])
+
+        self.assertEqual(features, [(1.0, 2.0, 68), (5.0, 6.0, 70)])
+
 
 if __name__ == "__main__":
     unittest.main()
