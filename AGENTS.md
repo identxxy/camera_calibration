@@ -151,8 +151,12 @@ The current portable final product is a unified 32-camera YAML plus report/viewe
 ```text
 studio_32_cameras.yaml
 combined_studio_rig_viewer_v1/index.html
-advanced_correspondence_viewer_v1/index.html
+advanced_correspondence_viewer_v1/correspondence_data.json
 ```
+
+`advanced_correspondence_viewer_v1/correspondence_data.json` is a data asset
+loaded by the unified 3D viewer. Do not promote the standalone advanced
+correspondence HTML as a final human report.
 
 Final YAML extrinsics are `camera_tr_studio_rig`: rig/world points transform into
 OpenCV camera coordinates. OpenCV `+x right, +y down, +z forward` applies only to
@@ -177,6 +181,7 @@ For detailed runbooks, start with:
 
 ```text
 scripts/calib/README_studio_operation_commands.md
+scripts/calib/README_studio_coordinate_frames.md
 scripts/calib/README_studio_32_camera_system.md
 scripts/calib/README_studio_calibration_pipeline.md
 scripts/calib/README_calibration_panel.md

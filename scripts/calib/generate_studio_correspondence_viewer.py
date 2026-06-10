@@ -136,6 +136,8 @@ def load_studio32_cameras(path):
             "group": group,
             "center": center.tolist(),
             "center_three": to_three(center),
+            "camera_tr_studio": matrix.tolist(),
+            "intrinsics": camera.get("intrinsics") or {},
         })
     cameras.sort(key=lambda item: item["index"])
     return cameras
@@ -351,9 +353,166 @@ def load_frame_face_poses(path):
     return result
 
 
+def infer_outer_camera_pose_yaml(frame_face_pose_yaml):
+    path = Path(frame_face_pose_yaml) if frame_face_pose_yaml else None
+    if path is None:
+        return None
+    candidate = path.parent / "camera_tr_rig_delta_refined.yaml"
+    return candidate if candidate.is_file() else None
+
+
+def estimate_outer_pose_alignment(outer_camera_pose_yaml, cameras):
+    outer_camera_pose_yaml = Path(outer_camera_pose_yaml) if outer_camera_pose_yaml else None
+    if outer_camera_pose_yaml is None or not outer_camera_pose_yaml.is_file():
+        return np.eye(4, dtype=np.float64), {
+            "method": "identity_missing_outer_camera_pose_yaml",
+            "source": str(outer_camera_pose_yaml or ""),
+            "sample_count": 0,
+            "rms_error_m": None,
+            "max_error_m": None,
+        }
+    source_poses = load_pose_yaml_by_index(outer_camera_pose_yaml)
+    target_by_index = {
+        int(camera["index"]): np.asarray(camera["center"], dtype=np.float64)
+        for camera in cameras
+        if str(camera.get("group")) == "outer" and int(camera.get("index", -1)) < 24
+    }
+    source_points = []
+    target_points = []
+    for index in sorted(target_by_index):
+        pose = source_poses.get(index)
+        if pose is None:
+            continue
+        source_points.append(invert_pose(pose)[:3, 3])
+        target_points.append(target_by_index[index])
+    rotation, translation, stats = estimate_rigid_transform(source_points, target_points)
+    target_from_source = np.eye(4, dtype=np.float64)
+    target_from_source[:3, :3] = rotation
+    target_from_source[:3, 3] = translation
+    stats.update({
+        "source": str(outer_camera_pose_yaml.resolve(strict=False)),
+        "source_frame": "outer_tower_rig",
+        "target_frame": "studio32_yaml_source_frame",
+    })
+    return target_from_source, stats
+
+
+def align_frame_face_poses(frame_face_poses, target_from_source):
+    if target_from_source is None:
+        return frame_face_poses
+    aligned = {}
+    for key, pose in frame_face_poses.items():
+        aligned[key] = target_from_source @ pose
+    return aligned
+
+
 def residual_color_value(residual_px):
     value = finite_float(residual_px, 0.0) or 0.0
     return max(0.0, min(1.0, math.log1p(value) / math.log1p(10.0)))
+
+
+def normalize_intrinsic_model_name(model):
+    return str(model or "CentralOpenCVModel").strip().lower()
+
+
+def require_supported_intrinsics(camera):
+    intrinsics = camera.get("intrinsics") or {}
+    model = normalize_intrinsic_model_name(intrinsics.get("model"))
+    supported = {"centralopencvmodel", "central_opencv", "opencv", ""}
+    if model not in supported:
+        label = camera.get("label") or camera.get("camera_id") or camera.get("index")
+        raise ValueError(f"Unsupported intrinsics model for camera {label}: {intrinsics.get('model')}")
+    params = [float(value) for value in intrinsics.get("parameters", [])]
+    if len(params) < 4:
+        label = camera.get("label") or camera.get("camera_id") or camera.get("index")
+        raise ValueError(f"Camera {label} is missing CentralOpenCVModel parameters")
+    return (params + [0.0] * 12)[:12]
+
+
+def distort_opencv_normalized(x, y, parameters):
+    values = (list(parameters or []) + [0.0] * 12)[:12]
+    k1, k2, k3, k4, k5, k6 = values[4:10]
+    p1, p2 = values[10:12]
+    r2 = x * x + y * y
+    r4 = r2 * r2
+    r6 = r4 * r2
+    numerator = 1.0 + k1 * r2 + k2 * r4 + k3 * r6
+    denominator = 1.0 + k4 * r2 + k5 * r4 + k6 * r6
+    radial = numerator / denominator if abs(denominator) > 1e-12 else numerator
+    dx = 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x)
+    dy = p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y
+    return x * radial + dx, y * radial + dy
+
+
+def undistort_opencv_normalized(x_distorted, y_distorted, parameters, iterations=12):
+    x = float(x_distorted)
+    y = float(y_distorted)
+    values = (list(parameters or []) + [0.0] * 12)[:12]
+    for _ in range(iterations):
+        x_projected, y_projected = distort_opencv_normalized(x, y, values)
+        # Fixed-point correction keeps the inverse consistent with
+        # project_studio_point() without depending on cv2 being installed.
+        x += float(x_distorted) - x_projected
+        y += float(y_distorted) - y_projected
+    return x, y
+
+
+def camera_ray_from_pixel(camera, uv):
+    params = require_supported_intrinsics(camera)
+    fx, fy, cx, cy = params[:4]
+    xd = (float(uv[0]) - cx) / fx
+    yd = (float(uv[1]) - cy) / fy
+    xn, yn = undistort_opencv_normalized(xd, yd, params)
+    ray_camera = np.asarray([xn, yn, 1.0], dtype=np.float64)
+    ray_camera /= np.linalg.norm(ray_camera)
+    camera_tr_studio = np.asarray(camera["camera_tr_studio"], dtype=np.float64)
+    rotation = camera_tr_studio[:3, :3]
+    translation = camera_tr_studio[:3, 3]
+    center = -rotation.T @ translation
+    direction = rotation.T @ ray_camera
+    direction /= np.linalg.norm(direction)
+    return center, direction
+
+
+def triangulate_rays(rays):
+    if len(rays) < 2:
+        return None, None
+    a = np.zeros((3, 3), dtype=np.float64)
+    b = np.zeros(3, dtype=np.float64)
+    identity = np.eye(3, dtype=np.float64)
+    for center, direction in rays:
+        direction = np.asarray(direction, dtype=np.float64)
+        direction /= np.linalg.norm(direction)
+        projector = identity - np.outer(direction, direction)
+        a += projector
+        b += projector @ np.asarray(center, dtype=np.float64)
+    try:
+        point = np.linalg.solve(a, b)
+    except np.linalg.LinAlgError:
+        point = np.linalg.lstsq(a, b, rcond=None)[0]
+    ray_errors = []
+    for center, direction in rays:
+        delta = point - center
+        closest = center + float(np.dot(delta, direction)) * direction
+        ray_errors.append(float(np.linalg.norm(point - closest)))
+    return point, {
+        "ray_error_m_median": float(np.median(ray_errors)) if ray_errors else None,
+        "ray_error_m_max": float(np.max(ray_errors)) if ray_errors else None,
+    }
+
+
+def project_studio_point(camera, point):
+    params = require_supported_intrinsics(camera)
+    camera_tr_studio = np.asarray(camera["camera_tr_studio"], dtype=np.float64)
+    point_camera = transform_point(camera_tr_studio, point)
+    x, y, z = [float(v) for v in point_camera]
+    if z <= 1e-9:
+        return None
+    fx, fy, cx, cy = params[:4]
+    xn = x / z
+    yn = y / z
+    xd, yd = distort_opencv_normalized(xn, yn, params)
+    return np.asarray([fx * xd + cx, fy * yd + cy], dtype=np.float64)
 
 
 def default_tower_layout():
@@ -464,7 +623,13 @@ def read_residual_frame_face_keys(path):
     return keys
 
 
-def load_outer_observations(path, frame_face_pose_yaml, cameras, coordinate_transform=None):
+def load_outer_observations(
+        path,
+        frame_face_pose_yaml,
+        cameras,
+        coordinate_transform=None,
+        outer_pose_alignment=None,
+        outer_pose_alignment_summary=None):
     path = Path(path)
     if not path.is_file():
         return {
@@ -477,7 +642,11 @@ def load_outer_observations(path, frame_face_pose_yaml, cameras, coordinate_tran
 
     camera_by_index = {int(camera["index"]): camera for camera in cameras}
     camera_by_id = {camera["camera_id"]: camera for camera in cameras}
-    frame_face_poses = load_frame_face_poses(frame_face_pose_yaml)
+    frame_face_poses = align_frame_face_poses(
+        load_frame_face_poses(frame_face_pose_yaml),
+        outer_pose_alignment,
+    )
+    world_coordinate_transform = None if outer_pose_alignment is not None else coordinate_transform
     observations = []
     residuals = []
     frames = set()
@@ -505,7 +674,7 @@ def load_outer_observations(path, frame_face_pose_yaml, cameras, coordinate_tran
             else:
                 used_frame_faces.add((frame_index, face_id))
                 world = transform_point(pose, local).tolist()
-            world = apply_coordinate_transform(world, coordinate_transform)
+            world = apply_coordinate_transform(world, world_coordinate_transform)
             camera = camera_by_index.get(camera_index) or camera_by_id.get(str(row.get("camera_id")))
             camera_center = camera["center"] if camera else None
             residual_px = finite_float(row.get("residual_px"))
@@ -552,12 +721,13 @@ def load_outer_observations(path, frame_face_pose_yaml, cameras, coordinate_tran
         pose = frame_face_poses.get((frame_index, face_id))
         if pose is None:
             continue
-        entry = frame_face_pose_to_viewer_entry(frame_index, face_id, pose, coordinate_transform)
+        entry = frame_face_pose_to_viewer_entry(frame_index, face_id, pose, world_coordinate_transform)
         if entry:
             frame_face_pose_entries.append(entry)
 
     summary = summarize_residuals(residuals, len(observations), missing_pose)
     summary["frame_face_pose_count"] = len(frame_face_pose_entries)
+    summary["outer_pose_alignment"] = outer_pose_alignment_summary or {}
     return {
         "observations": observations,
         "frames": full_frame_range(frames),
@@ -576,7 +746,9 @@ def load_outer_raw_shared_observations(
         cameras,
         coordinate_transform=None,
         max_shared_tracks_per_frame=96,
-        accepted_frame_face_keys=None):
+        accepted_frame_face_keys=None,
+        outer_pose_alignment=None,
+        outer_pose_alignment_summary=None):
     dataset_path = Path(dataset_path) if dataset_path else None
     if dataset_path is None or not dataset_path.is_file():
         return None
@@ -584,7 +756,6 @@ def load_outer_raw_shared_observations(
     dataset = read_calib_dataset(dataset_path)
     manifest = read_manifest_by_camera_index(manifest_path)
     camera_by_index = {int(camera["index"]): camera for camera in cameras}
-    frame_face_poses = load_frame_face_poses(frame_face_pose_yaml)
     accepted_frame_face_keys = set(accepted_frame_face_keys or [])
     layout = default_tower_layout()
     observations = []
@@ -597,6 +768,10 @@ def load_outer_raw_shared_observations(
     raw_shared_track_count = 0
     selected_shared_track_count = 0
     missing_pose_count = 0
+    missing_camera_count = 0
+    missing_intrinsics_count = 0
+    triangulated_track_count = 0
+    skipped_degenerate_track_count = 0
 
     for imageset in dataset["imagesets"]:
         frame_index = finite_int(parse_frame_index(imageset["filename"], imageset["index"]))
@@ -608,7 +783,6 @@ def load_outer_raw_shared_observations(
             manifest_row = manifest.get(camera_index)
             camera_id = raw_camera_label(camera_index, manifest_row)
             camera = camera_by_index.get(camera_index)
-            camera_center = camera["center"] if camera else None
             for feature in features:
                 raw_feature_count += 1
                 feature_id = int(feature["feature_id"])
@@ -618,39 +792,27 @@ def load_outer_raw_shared_observations(
                     continue
                 if accepted_frame_face_keys and (frame_index, face_id) not in accepted_frame_face_keys:
                     continue
-                pose = frame_face_poses.get((frame_index, face_id))
-                if pose is None:
-                    missing_pose_count += 1
+                if camera is None:
+                    missing_camera_count += 1
                     continue
-                world = transform_point(pose, local).tolist()
-                world = apply_coordinate_transform(world, coordinate_transform)
                 used_frame_faces.add((frame_index, face_id))
                 key = (tag_id, corner_id)
                 tracks.setdefault(key, []).append({
                     "dataset": "whole",
                     "kind": "raw_feature_correspondence",
-                    "source": "raw_apriltag_dataset_shared_track",
+                    "source": "raw_apriltag_shared_track_triangulated_final_studio32",
                     "frame_index": frame_index,
                     "imageset_index": int(imageset["index"]),
                     "filename": str(imageset["filename"]),
                     "camera_index": camera_index,
                     "camera_id": camera_id,
+                    "camera": camera,
                     "feature_id": feature_id,
                     "tag_id": tag_id,
                     "corner_id": corner_id,
                     "face_id": face_id,
                     "local": [float(value) for value in local],
-                    "world": [float(value) for value in world],
-                    "three": to_three(world),
-                    "camera_center": camera_center,
-                    "camera_center_three": to_three(camera_center) if camera_center else None,
-                    "line_three": [to_three(camera_center), to_three(world)] if camera_center else None,
                     "observed": [float(feature["x"]), float(feature["y"])],
-                    "projected": [None, None],
-                    "residual": [None, None],
-                    "residual_px": None,
-                    "residual_color": 0.0,
-                    "projection_status": "raw_detection_shared_track",
                 })
 
         shared_tracks = []
@@ -665,30 +827,69 @@ def load_outer_raw_shared_observations(
             shared_tracks = shared_tracks[:max_shared_tracks_per_frame]
         selected_shared_track_count += len(shared_tracks)
         for _key, items, _camera_count in shared_tracks:
-            frames_with_selected.add(frame_index)
+            rays = []
+            ray_items = []
             for item in items:
+                ray_center, ray_direction = camera_ray_from_pixel(item["camera"], item["observed"])
+                if ray_center is None or ray_direction is None:
+                    missing_intrinsics_count += 1
+                    continue
+                rays.append((ray_center, ray_direction))
+                ray_items.append(item)
+            world, triangulation_stats = triangulate_rays(rays)
+            if world is None:
+                skipped_degenerate_track_count += 1
+                continue
+            triangulated_track_count += 1
+            frames_with_selected.add(frame_index)
+            for item in ray_items:
+                camera = item.pop("camera")
+                camera_center = camera["center"]
+                projected = project_studio_point(camera, world)
+                residual = [None, None]
+                residual_px = None
+                if projected is not None:
+                    observed = np.asarray(item["observed"], dtype=np.float64)
+                    delta = projected - observed
+                    residual = [float(delta[0]), float(delta[1])]
+                    residual_px = float(np.linalg.norm(delta))
+                    residuals.append(residual_px)
+                item.update({
+                    "world": [float(value) for value in world],
+                    "three": to_three(world),
+                    "camera_center": [float(value) for value in camera_center],
+                    "camera_center_three": to_three(camera_center),
+                    "line_three": [to_three(camera_center), to_three(world)],
+                    "projected": [float(value) for value in projected] if projected is not None else [None, None],
+                    "residual": residual,
+                    "residual_px": residual_px,
+                    "residual_color": residual_color_value(residual_px),
+                    "projection_status": "triangulated_shared_track_final_studio32",
+                    "triangulation_ray_error_m_median": (
+                        triangulation_stats.get("ray_error_m_median") if triangulation_stats else None
+                    ),
+                    "triangulation_ray_error_m_max": (
+                        triangulation_stats.get("ray_error_m_max") if triangulation_stats else None
+                    ),
+                })
                 camera_ids.add(item["camera_id"])
                 observations.append(item)
 
-    frame_face_pose_entries = []
-    for frame_index, face_id in sorted(used_frame_faces):
-        pose = frame_face_poses.get((frame_index, face_id))
-        if pose is None:
-            continue
-        entry = frame_face_pose_to_viewer_entry(frame_index, face_id, pose, coordinate_transform)
-        if entry:
-            frame_face_pose_entries.append(entry)
-
     summary = summarize_residuals(residuals, len(observations), missing_pose_count)
     summary.update({
-        "source": "raw_apriltag_dataset_shared_tracks",
+        "source": "raw_apriltag_shared_tracks_triangulated_final_studio32",
+        "coordinate_frame": "studio_rig_y_down_z_forward",
         "frame_face_filter": "final_ba_residual_frame_faces" if accepted_frame_face_keys else "all_frame_faces_with_pose",
         "accepted_frame_face_key_count": int(len(accepted_frame_face_keys)),
         "raw_feature_count": int(raw_feature_count),
         "raw_shared_track_count": int(raw_shared_track_count),
         "selected_shared_track_count": int(selected_shared_track_count),
+        "triangulated_track_count": int(triangulated_track_count),
+        "skipped_degenerate_track_count": int(skipped_degenerate_track_count),
+        "missing_camera_count": int(missing_camera_count),
+        "missing_intrinsics_count": int(missing_intrinsics_count),
         "max_shared_tracks_per_frame": int(max_shared_tracks_per_frame),
-        "frame_face_pose_count": len(frame_face_pose_entries),
+        "frame_face_pose_count": 0,
         "source_dataset": str(dataset_path.resolve()),
     })
     return {
@@ -697,7 +898,7 @@ def load_outer_raw_shared_observations(
         "observed_frames": sorted(frames_with_selected),
         "timeline_frames": full_frame_range(frames_all),
         "camera_ids": sorted(camera_ids),
-        "frame_face_poses": frame_face_pose_entries,
+        "frame_face_poses": [],
         "summary": summary,
     }
 
@@ -1248,11 +1449,20 @@ def build_data(args):
     cameras = load_studio32_cameras(args.studio32_yaml)
     coordinate_transform = load_studio32_coordinate_transform(args.studio32_yaml)
     up_alignment = estimate_viewer_up_alignment(cameras)
+    outer_camera_pose_yaml = args.outer_camera_pose_yaml or infer_outer_camera_pose_yaml(
+        args.outer_frame_face_pose_yaml
+    )
+    outer_pose_alignment, outer_pose_alignment_summary = estimate_outer_pose_alignment(
+        outer_camera_pose_yaml,
+        cameras,
+    )
     outer = load_outer_observations(
         args.outer_observation_residuals_tsv,
         args.outer_frame_face_pose_yaml,
         cameras,
         coordinate_transform,
+        outer_pose_alignment,
+        outer_pose_alignment_summary,
     )
     raw_outer = load_outer_raw_shared_observations(
         args.outer_raw_dataset,
@@ -1262,7 +1472,15 @@ def build_data(args):
         coordinate_transform,
         args.max_outer_shared_tracks_per_frame,
         read_residual_frame_face_keys(args.outer_observation_residuals_tsv),
+        outer_pose_alignment,
+        outer_pose_alignment_summary,
     )
+    if args.outer_raw_dataset and (raw_outer is None or not raw_outer["observations"]):
+        raise RuntimeError(
+            "Final studio correspondence viewer requires non-empty raw whole "
+            "shared-track triangulation when --outer-raw-dataset is provided. "
+            "Refusing to fall back to model-based rig_tr_frame_face endpoints."
+        )
     if raw_outer is not None and raw_outer["observations"]:
         raw_outer["summary"]["final_ba_observation_count"] = outer["summary"].get("observation_count")
         raw_outer["summary"]["final_ba_median_residual_px"] = outer["summary"].get("median_residual_px")
@@ -1333,6 +1551,15 @@ def parse_args():
     parser.add_argument("--studio32-yaml", required=True, type=Path)
     parser.add_argument("--outer-observation-residuals-tsv", required=True, type=Path)
     parser.add_argument("--outer-frame-face-pose-yaml", required=True, type=Path)
+    parser.add_argument(
+        "--outer-camera-pose-yaml",
+        type=Path,
+        default=None,
+        help=(
+            "Camera poses in the same rig frame as --outer-frame-face-pose-yaml. "
+            "Used to align whole/tower correspondences into the final studio32 YAML frame."
+        ),
+    )
     parser.add_argument("--outer-raw-dataset", type=Path, default=None)
     parser.add_argument("--outer-raw-manifest", type=Path, default=None)
     parser.add_argument("--large-correspondence-tsv", type=Path, default=None)

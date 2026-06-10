@@ -31,16 +31,16 @@ T0_CALIB_ROOT = Path("/home/ubuntu/calib_data")
 LEGACY_STAGE_ROOT = T0_CALIB_ROOT / "calib_2026_05_26_jpg_v3"
 CURRENT_RUN_ROOT = (
     T0_CALIB_ROOT
-    / "studio_calibration_runs/recalib_20260531_193215_v2_outer_wide50"
+    / "studio_calibration_runs/recalib_20260610_black_tile_wide200_pipeline_v2"
 )
 CURRENT_INNER_BRIDGE_ROOT = CURRENT_RUN_ROOT / "inner_bridge"
 CURRENT_OUTER_FRAME_FACE_ROOT = (
-    CURRENT_RUN_ROOT / "outer_tower/frame_face_refine_fullres_raw_ransac1000_wide50_gate6_v1"
+    CURRENT_RUN_ROOT / "outer_tower/frame_face_refine_wide200_then_gate6"
 )
 
 DEFAULT_BRIDGE_POSE_YAML = (
     CURRENT_INNER_BRIDGE_ROOT
-    / "bridge_colmap_inner_refined_v1/camera_tr_inner_refined_plus_outer_topdown.yaml"
+    / "large_marker_bridge_all32/fixed_points_joint_ba_stride1_dense_v1/camera_tr_rig.yaml"
 )
 DEFAULT_BRIDGE_SUMMARY_JSON = (
     CURRENT_INNER_BRIDGE_ROOT
@@ -50,13 +50,13 @@ DEFAULT_OUTER_IMAGES_TXT = LEGACY_STAGE_ROOT / "colmap_outer24_firstframe_colmap
 DEFAULT_OUTER_SUMMARY_JSON = LEGACY_STAGE_ROOT / "colmap_outer24_firstframe_colmap404_v3/fixed_intrinsics/summary_final24_fixedK_ba.json"
 DEFAULT_OUTER_FINAL_POSE_YAML = CURRENT_OUTER_FRAME_FACE_ROOT / "camera_tr_rig_delta_refined.yaml"
 DEFAULT_COMBINED_IMAGE_DIRS = CURRENT_INNER_BRIDGE_ROOT / "planned_inputs/large_marker_usable_image_directories.txt"
-DEFAULT_VIEWER_ASSETS_DIR = LEGACY_STAGE_ROOT / "final_inner8_calibration_v1/reports/interactive_rig_viewer_v1"
+DEFAULT_VIEWER_ASSETS_DIR = CURRENT_INNER_BRIDGE_ROOT / "combined_studio_rig_viewer_v1"
 DEFAULT_OUTPUT_HTML = CURRENT_INNER_BRIDGE_ROOT / "combined_studio_rig_viewer_v1/index.html"
 DEFAULT_OUTER_OUTPUT_HTML = CURRENT_OUTER_FRAME_FACE_ROOT / "outer24_rig_viewer_v1/index.html"
 DEFAULT_TOWER_POSE_YAML = None
 DEFAULT_WHOLE_COVERAGE_TSV = Path(
-    "/home/ubuntu/calib_data/calib_2026_05_31_v3/"
-    "whole_outer24_filtered_min4_hybrid_min4cam/per_camera_stats.tsv"
+    "/home/ubuntu/calib_data/calib_2026_05_31_fullres_probe_v1/"
+    "whole_outer24_filtered_min4_fullres_min4cam/per_camera_stats.tsv"
 )
 DEFAULT_LARGE_MARKER_PNP_SUMMARY_TSV = (
     CURRENT_INNER_BRIDGE_ROOT / "large_marker_bridge_all32/"
@@ -71,7 +71,7 @@ DEFAULT_INNER_REPROJECTION_METRICS_TSV = (
     "camera_metrics.tsv"
 )
 DEFAULT_INNER_INTRINSIC_METRICS_TSV = (
-    CURRENT_INNER_BRIDGE_ROOT / "reports/inner8_intrinsic_feature_coverage_small_marker/"
+    CURRENT_INNER_BRIDGE_ROOT / "reports/inner_reprojection/"
     "camera_metrics.tsv"
 )
 DEFAULT_INNER_INTRINSICS_DIR = (
@@ -83,7 +83,11 @@ DEFAULT_OUTER_REPROJECTION_TSV = (
 DEFAULT_OUTER_INTRINSICS_DIR = (
     CURRENT_OUTER_FRAME_FACE_ROOT / "intrinsics_refined"
 )
-DEFAULT_OUTER_INTRINSIC_METRICS_TSV = Path("")
+DEFAULT_OUTER_INTRINSIC_METRICS_TSV = Path(
+    "/home/ubuntu/calib_data/calib_2026_06_04_outer_large_marker_v2/"
+    "outer_large_marker_20260604_passing_images_only_min1_bycam/"
+    "outer24_intrinsic_report_large_marker_v1/camera_metrics.tsv"
+)
 DEFAULT_LARGE_MARKER_BOARD_POSE_YAML = (
     CURRENT_INNER_BRIDGE_ROOT / "large_marker_inner8/"
     "fixed_intrinsic_large_marker_inner8_init_v1/rig_tr_global.yaml"

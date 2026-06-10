@@ -2603,13 +2603,23 @@ function updateCorrespondenceOverlay() {
   const selectedGroupLabel = pointSelect && pointSelect.selectedOptions && pointSelect.selectedOptions.length
     ? pointSelect.selectedOptions[0].textContent
     : (pointGroupKey === "__all__" ? "all" : pointGroupKey);
+  const wholeSource = dataset && dataset.summary && dataset.summary.source ? String(dataset.summary.source) : "";
+  const wholeIsTriangulated = wholeSource.indexOf("triangulated_final_studio32") >= 0;
   let modeNote = name === "whole" && groupMode === "face_id"
-    ? " Face ID mode arranges the whole capture by one tower face across all selected frames using the final accepted tower model."
+    ? (wholeIsTriangulated
+      ? " Face ID mode groups triangulated shared tag-corner tracks by tower face id in the final studio frame."
+      : " Face ID mode arranges the whole capture by one tower face across all selected frames using the final accepted tower model.")
     : "";
   if (name === "whole" && groupMode === "timeline") {
-    modeNote = " Timeline mode shows the selected synchronized frame using the final accepted tower model from BA: one shared tower pose per synchronized frame, fixed 45 degree face yaw, and 8 cm black-tile corners with 2 cm spacing. Cyan rectangles are "
-      + faceOutlineInfo.count + " accepted frame-face planes in this frame; orange trail has "
-      + trailInfo.count + " frame centers.";
+    if (wholeIsTriangulated) {
+      modeNote = " Timeline mode shows shared tag-corner tracks triangulated directly from final 32-camera intrinsics/extrinsics. No tower-model frame-face pose is used for the endpoint. Cyan rectangles are "
+        + faceOutlineInfo.count + " optional model-diagnostic frame-face planes; orange trail has "
+        + trailInfo.count + " model frame centers.";
+    } else {
+      modeNote = " Timeline mode shows the selected synchronized frame using the final accepted tower model from BA: one shared tower pose per synchronized frame, fixed 45 degree face yaw, and 8 cm black-tile corners with 2 cm spacing. Cyan rectangles are "
+        + faceOutlineInfo.count + " accepted frame-face planes in this frame; orange trail has "
+        + trailInfo.count + " frame centers.";
+    }
   }
   status.textContent = name + " " + correspondenceGroupModeLabel(groupMode)
     + " " + (allFrames ? "all frames" : "frame " + frame) + ": "

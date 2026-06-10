@@ -218,6 +218,7 @@ def build_paths(args):
         "small_pnp_dir": bridge_root / args.small_marker_sequence / "fixed_intrinsic_small_grid4_quality_probe_v1",
         "viewer_assets_dir": bridge_root / "combined_studio_rig_viewer_v1",
         "advanced_correspondence_root": advanced_correspondence_root,
+        "advanced_correspondence_data": advanced_correspondence_root / "correspondence_data.json",
         "advanced_correspondence_viewer": advanced_correspondence_root / "index.html",
         "current_output_dir": current_output_dir,
     }
@@ -338,6 +339,7 @@ def advanced_correspondence_command(args, paths):
         "--studio32-yaml", paths["unified_camera_yaml"],
         "--outer-observation-residuals-tsv", paths["outer_observation_residuals_tsv"],
         "--outer-frame-face-pose-yaml", paths["outer_frame_face_pose_yaml"],
+        "--outer-camera-pose-yaml", paths["outer_pose_yaml"],
         "--large-correspondence-tsv", paths["large_marker_correspondence_tsv"],
         "--small-correspondence-tsv", paths["small_marker_correspondence_tsv"],
         "--large-pnp-dir", paths["large_pnp_dir"],
@@ -553,7 +555,11 @@ def write_outputs(args, paths, stages, started_at, finished_at, duration_s):
             "unified_camera_yaml": report_url(paths["unified_camera_yaml"], http_root, args.report_url_base),
             "large_marker_correspondences": report_url(paths["large_marker_correspondence_tsv"], http_root, args.report_url_base),
             "small_marker_correspondences": report_url(paths["small_marker_correspondence_tsv"], http_root, args.report_url_base),
-            "advanced_correspondence_viewer": report_url(paths["advanced_correspondence_viewer"], http_root, args.report_url_base),
+            "advanced_correspondence_data": report_url(
+                paths["advanced_correspondence_data"],
+                http_root,
+                args.report_url_base,
+            ),
             "current_entry": report_url(paths["current_output_dir"] / "index.html", http_root, args.report_url_base)
             if args.publish_current else "",
         },

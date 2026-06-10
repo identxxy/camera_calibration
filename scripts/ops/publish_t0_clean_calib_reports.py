@@ -345,11 +345,9 @@ def publish_final_yaml():
 
 
 def publish_correspondence_data():
-    if CORRESPONDENCE_JSON.is_file():
-        CURRENT_CORRESPONDENCE_JSON.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(CORRESPONDENCE_JSON, CURRENT_CORRESPONDENCE_JSON)
-    if not CURRENT_CORRESPONDENCE_JSON.is_file():
-        return {}
+    require_path(CORRESPONDENCE_JSON, "advanced correspondence data JSON")
+    CURRENT_CORRESPONDENCE_JSON.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(CORRESPONDENCE_JSON, CURRENT_CORRESPONDENCE_JSON)
     return {
         "path": str(CURRENT_CORRESPONDENCE_JSON),
         "url": rel_url(CURRENT_CORRESPONDENCE_JSON),
@@ -560,12 +558,6 @@ def publish_inner_extrinsic_wrapper(
 
 def publish_reports():
     viewer_source = RUN / "inner_bridge/combined_studio_rig_viewer_v1"
-    temp_viewer_source = Path("/tmp/t0_calib_publish_01_3d_viewer")
-    if temp_viewer_source.exists():
-        shutil.rmtree(temp_viewer_source)
-    if not (viewer_source / "index.html").is_file() and (REPORTS / "01_3d_viewer/index.html").is_file():
-        shutil.copytree(REPORTS / "01_3d_viewer", temp_viewer_source)
-        viewer_source = temp_viewer_source
     if not (viewer_source / "index.html").is_file():
         raise FileNotFoundError(
             "3D viewer source index.html is missing. Regenerate "
@@ -966,8 +958,6 @@ code { background: #eeece5; padding: 1px 4px; border-radius: 4px; }
     manifest_path.write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    if temp_viewer_source.exists():
-        shutil.rmtree(temp_viewer_source)
     return manifest
 
 

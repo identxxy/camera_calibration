@@ -93,6 +93,84 @@ class PublishT0CleanCalibReportsTest(unittest.TestCase):
         for path in stale_paths:
             self.assertNotIn(path, readme)
 
+    def test_publish_reports_requires_run_viewer_instead_of_reusing_current(self):
+        old_values = {
+            name: getattr(publisher, name)
+            for name in [
+                "ROOT",
+                "BASE_URL",
+                "RUN_TAG",
+                "RUN",
+                "CURRENT",
+                "REPORTS",
+                "FINAL_YAML",
+                "CURRENT_FINAL_YAML",
+                "CORRESPONDENCE_JSON",
+                "CURRENT_CORRESPONDENCE_JSON",
+                "OUTER_LARGE_INTRINSIC_REPORT",
+                "OUTER_LARGE_QC_ROOT",
+                "WHOLE_QC_ROOT",
+                "OUTER_FRAME_FACE_REPORT_ROOT",
+                "BRIDGE_CAMERA_ORIGIN_PROJECTION_REPORT",
+            ]
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                publisher.ROOT = root
+                publisher.BASE_URL = "http://example.test"
+                publisher.RUN_TAG = "missing_viewer_run"
+                publisher.RUN = root / "studio_calibration_runs" / publisher.RUN_TAG
+                publisher.CURRENT = root / "current_calibration"
+                publisher.REPORTS = publisher.CURRENT / "reports"
+                publisher.FINAL_YAML = publisher.RUN / "calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml"
+                publisher.CURRENT_FINAL_YAML = publisher.CURRENT / "artifacts/studio_32_cameras.yaml"
+                publisher.CORRESPONDENCE_JSON = publisher.RUN / "advanced_correspondence_viewer_v1/correspondence_data.json"
+                publisher.CURRENT_CORRESPONDENCE_JSON = publisher.CURRENT / "advanced_correspondence_viewer_v1/correspondence_data.json"
+                publisher.OUTER_LARGE_INTRINSIC_REPORT = root / "outer_intrinsic_report"
+                publisher.OUTER_LARGE_QC_ROOT = root / "outer_large_qc"
+                publisher.WHOLE_QC_ROOT = root / "whole_qc"
+                publisher.OUTER_FRAME_FACE_REPORT_ROOT = root / "outer_frame_face"
+                publisher.BRIDGE_CAMERA_ORIGIN_PROJECTION_REPORT = root / "bridge_projection"
+
+                old_current_viewer = publisher.REPORTS / "01_3d_viewer"
+                old_current_viewer.mkdir(parents=True)
+                (old_current_viewer / "index.html").write_text("old viewer", encoding="utf-8")
+
+                with self.assertRaises(FileNotFoundError) as cm:
+                    publisher.publish_reports()
+                self.assertIn("3D viewer source index.html is missing", str(cm.exception))
+        finally:
+            for name, value in old_values.items():
+                setattr(publisher, name, value)
+
+    def test_publish_correspondence_data_requires_run_json(self):
+        old_values = {
+            name: getattr(publisher, name)
+            for name in [
+                "CURRENT_CORRESPONDENCE_JSON",
+                "CORRESPONDENCE_JSON",
+            ]
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                publisher.CORRESPONDENCE_JSON = root / "run/advanced_correspondence_viewer_v1/correspondence_data.json"
+                publisher.CURRENT_CORRESPONDENCE_JSON = root / "current/advanced_correspondence_viewer_v1/correspondence_data.json"
+                publisher.CURRENT_CORRESPONDENCE_JSON.parent.mkdir(parents=True)
+                publisher.CURRENT_CORRESPONDENCE_JSON.write_text('{"old": true}\n', encoding="utf-8")
+
+                with self.assertRaises(FileNotFoundError) as cm:
+                    publisher.publish_correspondence_data()
+                self.assertIn("advanced correspondence data JSON is missing", str(cm.exception))
+                self.assertEqual(
+                    publisher.CURRENT_CORRESPONDENCE_JSON.read_text(encoding="utf-8"),
+                    '{"old": true}\n',
+                )
+        finally:
+            for name, value in old_values.items():
+                setattr(publisher, name, value)
+
     def test_intrinsic_wrappers_document_fixed_log_colormap_range(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

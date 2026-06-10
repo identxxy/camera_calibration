@@ -189,6 +189,12 @@ class StudioCalibrationPipelineTest(unittest.TestCase):
                 summary["outputs"]["advanced_correspondence_viewer"],
                 str(output_root / "advanced_correspondence_viewer_v1" / "index.html"),
             )
+            self.assertEqual(
+                summary["outputs"]["advanced_correspondence_data"],
+                str(output_root / "advanced_correspondence_viewer_v1" / "correspondence_data.json"),
+            )
+            self.assertIn("advanced_correspondence_data", summary["report_urls"])
+            self.assertNotIn("advanced_correspondence_viewer", summary["report_urls"])
 
             publish_command = stages["publish_current"]["commands"][0]
             self.assertIn("publish_t0_clean_calib_reports.py", publish_command)

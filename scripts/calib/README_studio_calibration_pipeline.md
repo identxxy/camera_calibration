@@ -356,16 +356,17 @@ python3 scripts/calib/run_studio_calibration_pipeline.py \
 --run-large-inner-init
 ```
 
-wrapper 内部 stage 名称固定为 8 项：
+wrapper 内部 stage 名称固定为 9 项：
 
 1. `outer_tower`
 2. `generate_outer_intrinsic_report`
 3. `inner_bridge`
 4. `export_unified_cameras`
-5. `export_large_marker_correspondences`
-6. `export_small_marker_correspondences`
-7. `generate_advanced_correspondence_viewer`
-8. `publish_current`，仅 `--publish-current` 且 bridge 被请求时执行
+5. `generate_bridge_camera_origin_projection`
+6. `export_large_marker_correspondences`
+7. `export_small_marker_correspondences`
+8. `generate_advanced_correspondence_viewer`
+9. `publish_current`，仅 `--publish-current` 且 bridge 被请求时执行
 
 默认输出：
 
@@ -385,9 +386,13 @@ inner_bridge/final_report/index.html
 inner_bridge/combined_studio_rig_viewer_v1/index.html
 marker_correspondences/large_marker_correspondences.tsv
 marker_correspondences/small_marker_correspondences.tsv
-advanced_correspondence_viewer_v1/index.html
+advanced_correspondence_viewer_v1/correspondence_data.json
 calibration_artifacts/studio_32_cameras_current/studio_32_cameras.yaml
 ```
+
+`advanced_correspondence_viewer_v1/correspondence_data.json` is loaded by the
+unified 3D viewer. Do not promote the standalone advanced correspondence HTML as
+a final report.
 
 ## Useful Partial Runs
 

@@ -95,6 +95,41 @@ def write_minimal_calib_dataset(path, imagesets, camera_count=2, width=640, heig
         stream.write(u32(0))
 
 
+def make_two_camera_studio32_for_triangulation():
+    intrinsics = {
+        "model": "CentralOpenCVModel",
+        "parameters": [100.0, 100.0, 50.0, 50.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    }
+    return [
+        {
+            "index": 0,
+            "label": "1-1",
+            "camera_id": "1-1",
+            "center": [0.0, 0.0, 0.0],
+            "camera_tr_studio": [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            "intrinsics": intrinsics,
+        },
+        {
+            "index": 1,
+            "label": "1-2",
+            "camera_id": "1-2",
+            "center": [1.0, 0.0, 0.0],
+            "camera_tr_studio": [
+                [1.0, 0.0, 0.0, -1.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            "intrinsics": intrinsics,
+        },
+    ]
+
+
 class StudioCorrespondenceViewerTest(unittest.TestCase):
     def test_frame_face_inverse_pose_file_is_auto_inverted(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -136,6 +171,150 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
 
             self.assertEqual([round(float(value), 6) for value in direct], [1.5, 2.25, 2.5])
             self.assertEqual([round(float(value), 6) for value in inverted], [1.5, 2.25, 2.5])
+
+    def test_camera_ray_from_pixel_inverts_opencv_distortion(self):
+        camera = {
+            "index": 0,
+            "label": "1-1",
+            "camera_id": "1-1",
+            "camera_tr_studio": [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            "intrinsics": {
+                "model": "CentralOpenCVModel",
+                "parameters": [
+                    1000.0, 1000.0, 500.0, 400.0,
+                    -0.08, 0.04, -0.01, 0.0, 0.0, 0.0,
+                    0.001, -0.0007,
+                ],
+            },
+        }
+        x_true, y_true = 0.21, -0.13
+        xd, yd = viewer.distort_opencv_normalized(
+            x_true,
+            y_true,
+            camera["intrinsics"]["parameters"],
+        )
+        _center, direction = viewer.camera_ray_from_pixel(
+            camera,
+            [1000.0 * xd + 500.0, 1000.0 * yd + 400.0],
+        )
+        recovered = direction[:2] / direction[2]
+        self.assertAlmostEqual(float(recovered[0]), x_true, places=8)
+        self.assertAlmostEqual(float(recovered[1]), y_true, places=8)
+
+    def test_outer_observations_are_aligned_from_outer_rig_to_studio32_frame(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outer_camera_pose = root / "camera_tr_rig_delta_refined.yaml"
+            write_pose_yaml(
+                outer_camera_pose,
+                [
+                    {"tx": 0.0, "ty": 0.0, "tz": 0.0},
+                    {"tx": -1.0, "ty": 0.0, "tz": 0.0},
+                    {"tx": 0.0, "ty": -1.0, "tz": 0.0},
+                ],
+            )
+            studio32 = root / "studio_32_cameras.yaml"
+            studio32.write_text(
+                "cameras:\n"
+                "- index: 0\n"
+                "  label: 1-1\n"
+                "  camera_id: 1-1\n"
+                "  group: outer\n"
+                "  tx: -10.0\n"
+                "  ty: 0.0\n"
+                "  tz: 0.0\n"
+                "  qx: 0.0\n"
+                "  qy: 0.0\n"
+                "  qz: 0.0\n"
+                "  qw: 1.0\n"
+                "- index: 1\n"
+                "  label: 1-2\n"
+                "  camera_id: 1-2\n"
+                "  group: outer\n"
+                "  tx: -11.0\n"
+                "  ty: 0.0\n"
+                "  tz: 0.0\n"
+                "  qx: 0.0\n"
+                "  qy: 0.0\n"
+                "  qz: 0.0\n"
+                "  qw: 1.0\n"
+                "- index: 2\n"
+                "  label: 1-3\n"
+                "  camera_id: 1-3\n"
+                "  group: outer\n"
+                "  tx: -10.0\n"
+                "  ty: -1.0\n"
+                "  tz: 0.0\n"
+                "  qx: 0.0\n"
+                "  qy: 0.0\n"
+                "  qz: 0.0\n"
+                "  qw: 1.0\n",
+                encoding="utf-8",
+            )
+            frame_face_poses = root / "rig_tr_frame_face.yaml"
+            write_frame_face_pose_yaml(frame_face_poses)
+            residuals = root / "observation_residuals.tsv"
+            with residuals.open("w", encoding="utf-8", newline="") as stream:
+                writer = csv.DictWriter(
+                    stream,
+                    fieldnames=[
+                        "frame_index", "filename", "camera_index", "camera_id",
+                        "feature_id", "tag_id", "corner_id", "face_id",
+                        "local_x", "local_y", "local_z",
+                        "observed_x", "observed_y", "projected_x", "projected_y",
+                        "residual_x_px", "residual_y_px", "residual_px",
+                        "projection_status",
+                    ],
+                    delimiter="\t",
+                )
+                writer.writeheader()
+                writer.writerow({
+                    "frame_index": "0",
+                    "filename": "000000.jpg",
+                    "camera_index": "0",
+                    "camera_id": "1-1",
+                    "feature_id": "0",
+                    "tag_id": "0",
+                    "corner_id": "0",
+                    "face_id": "0",
+                    "local_x": "0.0",
+                    "local_y": "0.0",
+                    "local_z": "0.0",
+                    "observed_x": "10.0",
+                    "observed_y": "20.0",
+                    "projected_x": "10.0",
+                    "projected_y": "20.0",
+                    "residual_x_px": "0.0",
+                    "residual_y_px": "0.0",
+                    "residual_px": "0.0",
+                    "projection_status": "ok",
+                })
+
+            cameras = viewer.load_studio32_cameras(studio32)
+            alignment, summary = viewer.estimate_outer_pose_alignment(outer_camera_pose, cameras)
+            data = viewer.load_outer_observations(
+                residuals,
+                frame_face_poses,
+                cameras,
+                outer_pose_alignment=alignment,
+                outer_pose_alignment_summary=summary,
+            )
+
+            self.assertEqual(summary["sample_count"], 3)
+            self.assertLess(summary["rms_error_m"], 1e-9)
+            self.assertEqual(
+                [round(float(value), 6) for value in data["observations"][0]["world"]],
+                [11.0, 2.0, 3.0],
+            )
+            self.assertEqual(
+                [round(float(value), 6) for value in data["frame_face_poses"][0]["origin_world"]],
+                [11.0, 2.0, 3.0],
+            )
 
     def test_generator_writes_outer_correspondence_and_inner_pose_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -265,12 +444,12 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
             self.assertEqual(len(data["cameras"]), 2)
             self.assertEqual(data["summary"]["outer"]["observation_count"], 1)
             self.assertEqual(data["summary"]["outer"]["frame_face_pose_count"], 1)
-            self.assertEqual(data["outer"]["observations"][0]["world"], [0.5, 0.25, 0.0])
+            self.assertEqual(data["outer"]["observations"][0]["world"], [1.5, 2.25, 3.0])
             self.assertEqual(len(data["outer"]["frame_face_poses"]), 1)
             frame_face_pose = data["outer"]["frame_face_poses"][0]
             self.assertEqual(frame_face_pose["frame_index"], 0)
             self.assertEqual(frame_face_pose["face_id"], 0)
-            self.assertEqual(frame_face_pose["origin_three"], [0.0, -0.0, -0.0])
+            self.assertEqual(frame_face_pose["origin_three"], [1.0, -2.0, -3.0])
             self.assertEqual(frame_face_pose["axis_x_three"], [1.0, -0.0, -0.0])
             self.assertEqual(frame_face_pose["axis_y_three"], [0.0, -1.0, -0.0])
             self.assertEqual(frame_face_pose["axis_z_three"], [0.0, -0.0, -1.0])
@@ -499,8 +678,8 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
                 dataset,
                 [
                     ("000000.jpg", [
-                        [(10.0, 20.0, 0), (30.0, 20.0, 1)],
-                        [(110.0, 120.0, 0)],
+                        [(50.0, 50.0, 0), (30.0, 20.0, 1)],
+                        [(25.0, 50.0, 0)],
                     ]),
                     ("000002.jpg", [
                         [(40.0, 50.0, 4)],
@@ -543,10 +722,7 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
                 dataset,
                 manifest,
                 frame_face_poses,
-                cameras=[
-                    {"index": 0, "label": "1-1", "camera_id": "1-1", "center": [0.0, 0.0, 0.0]},
-                    {"index": 1, "label": "1-2", "camera_id": "1-2", "center": [1.0, 0.0, 0.0]},
-                ],
+                cameras=make_two_camera_studio32_for_triangulation(),
                 max_shared_tracks_per_frame=10,
             )
 
@@ -554,11 +730,17 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
             self.assertEqual(data["frames"], [0, 1, 2])
             self.assertEqual(data["observed_frames"], [0])
             self.assertEqual(data["camera_ids"], ["1-1", "1-2"])
-            self.assertEqual(data["summary"]["source"], "raw_apriltag_dataset_shared_tracks")
+            self.assertEqual(data["summary"]["source"], "raw_apriltag_shared_tracks_triangulated_final_studio32")
             self.assertEqual(data["summary"]["raw_shared_track_count"], 1)
             self.assertEqual(data["summary"]["selected_shared_track_count"], 1)
+            self.assertEqual(data["summary"]["triangulated_track_count"], 1)
             self.assertEqual({obs["feature_id"] for obs in data["observations"]}, {0})
-            self.assertEqual({obs["projection_status"] for obs in data["observations"]}, {"raw_detection_shared_track"})
+            self.assertEqual({obs["projection_status"] for obs in data["observations"]}, {"triangulated_shared_track_final_studio32"})
+            self.assertEqual(
+                [round(float(value), 6) for value in data["observations"][0]["world"]],
+                [0.0, 0.0, 4.0],
+            )
+            self.assertLess(max(obs["residual_px"] for obs in data["observations"]), 1e-9)
 
     def test_outer_raw_dataset_respects_final_ba_frame_face_filter(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -571,8 +753,8 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
                 dataset,
                 [
                     ("000000.jpg", [
-                        [(10.0, 20.0, 0), (12.0, 24.0, face7_feature_id)],
-                        [(110.0, 120.0, 0), (112.0, 124.0, face7_feature_id)],
+                        [(10.0, 20.0, 0), (50.0, 50.0, face7_feature_id)],
+                        [(110.0, 120.0, 0), (25.0, 50.0, face7_feature_id)],
                     ]),
                 ],
                 camera_count=2,
@@ -611,10 +793,7 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
                 dataset,
                 manifest,
                 frame_face_poses,
-                cameras=[
-                    {"index": 0, "label": "1-1", "camera_id": "1-1", "center": [0.0, 0.0, 0.0]},
-                    {"index": 1, "label": "1-2", "camera_id": "1-2", "center": [1.0, 0.0, 0.0]},
-                ],
+                cameras=make_two_camera_studio32_for_triangulation(),
                 max_shared_tracks_per_frame=10,
                 accepted_frame_face_keys={(0, 7)},
             )
@@ -627,8 +806,95 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
             self.assertEqual(data["summary"]["accepted_frame_face_key_count"], 1)
             self.assertEqual(data["summary"]["raw_shared_track_count"], 1)
             self.assertEqual(data["summary"]["selected_shared_track_count"], 1)
-            self.assertEqual(len(data["frame_face_poses"]), 1)
-            self.assertEqual(data["frame_face_poses"][0]["face_id"], 7)
+            self.assertEqual(data["summary"]["triangulated_track_count"], 1)
+            self.assertEqual(len(data["frame_face_poses"]), 0)
+            self.assertEqual(
+                [round(float(value), 6) for value in data["observations"][0]["world"]],
+                [0.0, 0.0, 4.0],
+            )
+
+    def test_build_data_refuses_raw_outer_fallback_to_model_endpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            studio32 = root / "studio_32.yaml"
+            studio32.write_text(
+                "cameras:\n"
+                "- index: 0\n"
+                "  label: 1-1\n"
+                "  camera_id: 1-1\n"
+                "  group: outer\n"
+                "  tx: 0.0\n"
+                "  ty: 0.0\n"
+                "  tz: 0.0\n"
+                "  qx: 0.0\n"
+                "  qy: 0.0\n"
+                "  qz: 0.0\n"
+                "  qw: 1.0\n"
+                "  intrinsics:\n"
+                "    model: CentralOpenCVModel\n"
+                "    parameters: [100, 100, 50, 50, 0, 0, 0, 0, 0, 0, 0, 0]\n"
+                "- index: 1\n"
+                "  label: 1-2\n"
+                "  camera_id: 1-2\n"
+                "  group: outer\n"
+                "  tx: -1.0\n"
+                "  ty: 0.0\n"
+                "  tz: 0.0\n"
+                "  qx: 0.0\n"
+                "  qy: 0.0\n"
+                "  qz: 0.0\n"
+                "  qw: 1.0\n"
+                "  intrinsics:\n"
+                "    model: CentralOpenCVModel\n"
+                "    parameters: [100, 100, 50, 50, 0, 0, 0, 0, 0, 0, 0, 0]\n",
+                encoding="utf-8",
+            )
+            residuals = root / "observation_residuals.tsv"
+            residuals.write_text(
+                "frame_index\tcamera_index\tcamera_id\tfeature_id\ttag_id\tcorner_id\tface_id\t"
+                "local_x\tlocal_y\tlocal_z\tobserved_x\tobserved_y\tprojected_x\tprojected_y\t"
+                "residual_x_px\tresidual_y_px\tresidual_px\tprojection_status\n",
+                encoding="utf-8",
+            )
+            frame_face_poses = root / "rig_tr_frame_face.yaml"
+            write_frame_face_pose_yaml(frame_face_poses)
+            raw_dataset = root / "raw.bin"
+            write_minimal_calib_dataset(
+                raw_dataset,
+                [
+                    ("000000.jpg", [
+                        [(50.0, 50.0, 0)],
+                        [],
+                    ]),
+                ],
+                camera_count=2,
+            )
+            manifest = root / "manifest.tsv"
+            manifest.write_text(
+                "camera_index\tcamera_id\tstage_name\n"
+                "0\t1-1\tcam00_w4_1-1\n"
+                "1\t1-2\tcam01_w4_1-2\n",
+                encoding="utf-8",
+            )
+            args = type("Args", (), {
+                "studio32_yaml": studio32,
+                "outer_observation_residuals_tsv": residuals,
+                "outer_frame_face_pose_yaml": frame_face_poses,
+                "outer_camera_pose_yaml": None,
+                "outer_raw_dataset": raw_dataset,
+                "outer_raw_manifest": manifest,
+                "max_outer_shared_tracks_per_frame": 10,
+                "large_correspondence_tsv": None,
+                "small_correspondence_tsv": None,
+                "max_marker_correspondences_per_dataset": 10,
+                "large_pnp_dir": None,
+                "small_pnp_dir": None,
+                "viewer_assets_dir": None,
+            })()
+
+            with self.assertRaises(RuntimeError) as cm:
+                viewer.build_data(args)
+            self.assertIn("Refusing to fall back", str(cm.exception))
 
     def test_pipeline_dry_run_includes_advanced_correspondence_viewer_stage(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -664,10 +930,17 @@ class StudioCorrespondenceViewerTest(unittest.TestCase):
             self.assertIn("--large-correspondence-tsv", command)
             self.assertIn("--small-correspondence-tsv", command)
             self.assertIn("--large-pnp-dir", command)
+            self.assertIn("--outer-camera-pose-yaml", command)
             self.assertEqual(
                 summary["outputs"]["advanced_correspondence_viewer"],
                 str(output_root / "advanced_correspondence_viewer_v1" / "index.html"),
             )
+            self.assertEqual(
+                summary["outputs"]["advanced_correspondence_data"],
+                str(output_root / "advanced_correspondence_viewer_v1" / "correspondence_data.json"),
+            )
+            self.assertIn("advanced_correspondence_data", summary["report_urls"])
+            self.assertNotIn("advanced_correspondence_viewer", summary["report_urls"])
             self.assertEqual(summary["run_timing"]["stage_count"], 9)
 
 
