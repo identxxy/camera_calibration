@@ -1212,7 +1212,7 @@ HTML_TEMPLATE = """<!doctype html>
                 <input id="correspondence-max" type="range" min="100" max="30000" step="100" value="8000">
               </label>
               <label>Residual <= <span class="correspondence-value" id="correspondence-residual-max-value"></span>
-                <input id="correspondence-residual-max" type="range" min="1" max="200" step="1" value="200">
+                <input id="correspondence-residual-max" type="range" min="0.1" max="10" step="0.1" value="2">
               </label>
             </div>
           </div>
@@ -1368,10 +1368,17 @@ let correspondenceSelectedPointGroupByDataset = {};
 let correspondenceSharedOnlyByDataset = {whole: true};
 let correspondenceTimelineTrailVisible = true;
 let correspondenceMaxShown = 8000;
-let correspondenceResidualMax = 200;
+let correspondenceResidualMax = 2;
 const TOWER_FACE_PLANE_WIDTH_M = 0.25;
 const TOWER_TAG_AREA_HEIGHT_M = 16 * 0.08 + 15 * 0.02;
 const worldGizmoDragStart = new THREE.Vector3();
+
+function formatResidualThresholdPx(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "n/a";
+  const precision = number < 1 ? 2 : 1;
+  return number.toFixed(precision).replace(/[.]?0+$/, "") + " px";
+}
 
 function createOrbitControls(target) {
   const nextControls = new THREE.OrbitControls(camera, renderer.domElement);
@@ -2201,7 +2208,7 @@ function syncCorrespondenceControlValues() {
     correspondenceResidualMax = Math.max(0, Number(residualInput.value || correspondenceResidualMax));
   }
   if (maxValue) maxValue.textContent = String(correspondenceMaxShown);
-  if (residualValue) residualValue.textContent = correspondenceResidualMax >= 200 ? "200+ px" : correspondenceResidualMax + " px";
+  if (residualValue) residualValue.textContent = formatResidualThresholdPx(correspondenceResidualMax);
   if (groupModeSelect) {
     groupModeSelect.disabled = name !== "whole";
     groupModeSelect.value = correspondenceGroupModeName();
@@ -2345,9 +2352,29 @@ function populateCorrespondencePointGroupControl() {
 }
 
 function residualColor(residualPx) {
-  const value = Number(residualPx || 0);
-  const t = Math.max(0, Math.min(1, Math.log1p(value) / Math.log1p(50)));
-  return new THREE.Color().setHSL((1 - t) * 0.33, 0.9, 0.48);
+  const value = Math.max(0, Number(residualPx || 0));
+  const minValue = 0.02;
+  const maxValue = Math.max(minValue * 1.01, Number(correspondenceResidualMax || 2));
+  const logMin = Math.log10(minValue);
+  const logMax = Math.log10(maxValue);
+  const logValue = Math.log10(Math.max(minValue, value));
+  const t = Math.max(0, Math.min(1, (logValue - logMin) / (logMax - logMin)));
+  const stops = [
+    {t: 0.00, color: new THREE.Color(0x1a73e8)},
+    {t: 0.25, color: new THREE.Color(0x00acc1)},
+    {t: 0.50, color: new THREE.Color(0x34a853)},
+    {t: 0.75, color: new THREE.Color(0xfbbc04)},
+    {t: 1.00, color: new THREE.Color(0xea4335)},
+  ];
+  for (let i = 1; i < stops.length; i += 1) {
+    if (t <= stops[i].t) {
+      const prev = stops[i - 1];
+      const next = stops[i];
+      const localT = (t - prev.t) / Math.max(1e-6, next.t - prev.t);
+      return prev.color.clone().lerp(next.color, localT);
+    }
+  }
+  return stops[stops.length - 1].color.clone();
 }
 
 function makeCorrespondenceSelectionStats(candidates) {
@@ -2630,9 +2657,9 @@ function updateCorrespondenceOverlay() {
     + ", shared tracks=" + candidateStats.sharedTrackCount
     + ", cameras=" + selectedStats.cameraCount
     + "; residual <= "
-    + (correspondenceResidualMax >= 200 ? "200+" : correspondenceResidualMax)
-    + " px" + (name === "whole" && groupMode === "timeline" ? "" : "; group = " + selectedGroupLabel)
-    + "; color = log residual px." + modeNote;
+    + formatResidualThresholdPx(correspondenceResidualMax)
+    + (name === "whole" && groupMode === "timeline" ? "" : "; group = " + selectedGroupLabel)
+    + "; color = log residual px normalized to the current threshold." + modeNote;
 }
 
 async function loadOrToggleCorrespondence() {

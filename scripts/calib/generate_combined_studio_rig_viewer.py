@@ -1613,7 +1613,10 @@ def copy_viewer_assets(output_dir, assets_dir):
         src = assets_dir / name
         if not src.is_file():
             raise FileNotFoundError(src)
-        shutil.copy2(src, output_dir / name)
+        dst = output_dir / name
+        if src.resolve() == dst.resolve():
+            continue
+        shutil.copy2(src, dst)
 
 
 def build_metrics(
