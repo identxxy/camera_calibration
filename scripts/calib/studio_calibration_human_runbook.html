@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Studio 32-Camera Calibration Human Runbook</title>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --ink: #1f2933;
+      --muted: #5b6673;
+      --line: #d9dee7;
+      --accent: #185abc;
+      --accent-soft: #e8f0fe;
+      --warn: #8a4b00;
+      --warn-bg: #fff4df;
+      --ok: #0b6b3a;
+      --ok-bg: #e7f5ed;
+      --code: #111827;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+    header {
+      background: #111827;
+      color: #fff;
+      padding: 28px 32px;
+    }
+    header h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+    header p { margin: 0; color: #cbd5e1; max-width: 1100px; }
+    main {
+      max-width: 1220px;
+      margin: 0 auto;
+      padding: 24px 24px 56px;
+    }
+    nav {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px 18px;
+      margin-bottom: 20px;
+    }
+    nav a {
+      display: inline-block;
+      margin: 4px 14px 4px 0;
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 20px;
+      margin: 18px 0;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 21px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 20px 0 10px;
+      font-size: 17px;
+      letter-spacing: 0;
+    }
+    p { margin: 8px 0; }
+    ul, ol { padding-left: 22px; }
+    li { margin: 5px 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 9px 10px;
+      vertical-align: top;
+    }
+    th { background: #eef2f7; text-align: left; }
+    code {
+      background: #eef2f7;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 0.94em;
+    }
+    pre {
+      overflow-x: auto;
+      background: var(--code);
+      color: #e5e7eb;
+      padding: 14px 16px;
+      border-radius: 7px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    pre code {
+      background: transparent;
+      padding: 0;
+      color: inherit;
+      font-size: inherit;
+    }
+    .callout {
+      border-radius: 7px;
+      padding: 12px 14px;
+      margin: 12px 0;
+      border: 1px solid var(--line);
+    }
+    .callout.ok { background: var(--ok-bg); color: var(--ok); border-color: #b8dfc8; }
+    .callout.warn { background: var(--warn-bg); color: var(--warn); border-color: #f0d08a; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fbfcfe;
+    }
+    .card h3 { margin-top: 0; }
+    .tag {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      margin-right: 6px;
+    }
+    .small { color: var(--muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Studio 32-Camera Calibration Human Runbook</h1>
+    <p>面向没有 agent 辅助的人类操作员。本文档只描述当前 production 入口和复现命令，不覆盖历史探索脚本。</p>
+  </header>
+  <main>
+    <nav>
+      <a href="#scope">Scope</a>
+      <a href="#preflight">Preflight</a>
+      <a href="#data">Data Modes</a>
+      <a href="#commands">Commands</a>
+      <a href="#reports">Reports</a>
+      <a href="#coordinate">Coordinate Frame</a>
+      <a href="#cleanup">Cleanup</a>
+      <a href="#troubleshooting">Troubleshooting</a>
+    </nav>
+
+    <section id="scope">
+      <h2>1. Scope And Stable Entries</h2>
+      <p>当前系统是 32 台同步相机：外圈 24 台固定相机，内圈 8 台可移动相机。最终产物是一个统一 YAML 和一个 3D viewer。</p>
+      <table>
+        <tr><th>Entry</th><th>URL / Path</th><th>Meaning</th></tr>
+        <tr><td>Panel</td><td><code>http://192.168.2.0:9898/</code></td><td>人类触发 pipeline 的页面。</td></tr>
+        <tr><td>Report root</td><td><code>http://192.168.2.0:9899/</code></td><td>唯一稳定的人类报告入口。</td></tr>
+        <tr><td>Final YAML</td><td><code>/home/ubuntu/calib_data/current_calibration/artifacts/studio_32_cameras.yaml</code></td><td>32 相机内外参，其他系统应消费这个文件。</td></tr>
+        <tr><td>3D viewer</td><td><code>/home/ubuntu/calib_data/current_calibration/reports/01_3d_viewer/index.html</code></td><td>统一查看 inner/outer/combined rig、coverage 和 correspondence。</td></tr>
+      </table>
+      <div class="callout ok">
+        正常快速复标优先复用已有 outer intrinsics、outer extrinsics coarse prior 和 inner intrinsics。只有外圈镜头/焦距/分辨率或 cage 拓扑明显改变时，才重新跑 bootstrap 或 outer intrinsics refresh。
+      </div>
+    </section>
+
+    <section id="preflight">
+      <h2>2. Preflight Checks On t0</h2>
+      <p>在 t0 上执行所有命令前，先确认代码、服务、C++ binary 和最终发布目录。</p>
+      <pre><code>cd /home/ubuntu/camera_calibration
+git status --short --branch
+git rev-parse --short HEAD
+test -x /home/ubuntu/camera_calibration/build_t0_current/applications/camera_calibration/camera_calibration
+curl -I --max-time 5 http://192.168.2.0:9899/
+curl -I --max-time 5 http://192.168.2.0:9899/current_calibration/artifacts/studio_32_cameras.yaml</code></pre>
+      <p>如果 C++ binary 不存在或过旧，先重新构建：</p>
+      <pre><code>cd /home/ubuntu/camera_calibration
+scripts/ops/t0_build_opengv_and_project.sh</code></pre>
+      <p>如果 report server 或 panel service 未启动，使用系统服务重启：</p>
+      <pre><code>systemctl --user restart camera-calib-report-http.service
+systemctl --user restart camera-calibration-panel.service
+systemctl --user status camera-calib-report-http.service --no-pager
+systemctl --user status camera-calibration-panel.service --no-pager</code></pre>
+    </section>
+
+    <section id="data">
+      <h2>3. Capture/Data Modes</h2>
+      <div class="grid">
+        <div class="card">
+          <h3><span class="tag">outer_large_marker</span> outer intrinsics</h3>
+          <p>W3/W4 外圈相机使用低密度 A4 board，pattern <code>_0</code>。只在外圈镜头、焦距、分辨率、畸变约定改变时重采。</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag">whole</span> outer extrinsics</h3>
+          <p>推 AprilTag tower 经过 studio。用于外圈 cage 外参 refine。生产路径使用 black-tile physical corners，tag 黑块边长 <code>0.08m</code>，间距 <code>0.02m</code>。</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag">large_marker</span> bridge</h3>
+          <p>低密度 A4 board，pattern <code>_0</code>。用于 inner/outer bridge。当前 production bridge 使用 all32 correspondence，不只依赖 4-* top-down cameras。</p>
+        </div>
+        <div class="card">
+          <h3><span class="tag">small_marker</span> inner quality</h3>
+          <p>高密度 A4 board，pattern <code>_3</code>。用于 inner8 内参/外参质量检查，不作为 outer bridge 输入。</p>
+        </div>
+      </div>
+      <p>原始采集路径格式：</p>
+      <pre><code>D:/output/calib/&lt;whole|large_marker|small_marker|outer_large_marker&gt;/&lt;time&gt;/&lt;camera_id&gt;/&lt;sn&gt;_&lt;imageid&gt;.jpg</code></pre>
+      <p>同步数据异常处理规则：</p>
+      <ul>
+        <li>四路相机尾部差 1-2 帧是正常 tail-trim case，取 common prefix / common image-id intersection。</li>
+        <li>单个相机中间掉帧时，该相机在该 sequence 中整体排除，不保留 partial observations。</li>
+      </ul>
+    </section>
+
+    <section id="commands">
+      <h2>4. One Command Per Operation</h2>
+      <p>以下命令都从 t0 repo root 执行：</p>
+      <pre><code>cd /home/ubuntu/camera_calibration</code></pre>
+
+      <h3>4.1 Full All32 Regression</h3>
+      <p>用于完整回归：outer tower refine、outer intrinsic report refresh、inner/outer bridge、YAML export、correspondence JSON、current report publish。</p>
+      <pre><code>RUN_TAG=recalib_$(date +%Y%m%d_%H%M%S)
+/home/ubuntu/miniconda3/bin/python scripts/calib/run_studio_calibration_pipeline.py \
+  --run-tag "$RUN_TAG" \
+  --output-root "/home/ubuntu/calib_data/studio_calibration_runs/$RUN_TAG" \
+  --run-small-quality \
+  --publish-current \
+  --force</code></pre>
+      <p>先做 dry-run 检查 stage command：</p>
+      <pre><code>RUN_TAG=dryrun_$(date +%Y%m%d_%H%M%S)
+/home/ubuntu/miniconda3/bin/python scripts/calib/run_studio_calibration_pipeline.py \
+  --run-tag "$RUN_TAG" \
+  --output-root "/home/ubuntu/calib_data/studio_calibration_runs/$RUN_TAG" \
+  --run-small-quality \
+  --publish-current \
+  --dry-run</code></pre>
+
+      <h3>4.2 Whole / Outer Cage Only</h3>
+      <p>只在 whole tower capture 更新后运行。生产 preset 是 <code>wide200_then_gate6</code>。</p>
+      <pre><code>RUN_TAG=whole_outer_$(date +%Y%m%d_%H%M%S)
+/home/ubuntu/miniconda3/bin/python scripts/calib/run_studio_calibration_pipeline.py \
+  --outer-only \
+  --run-tag "$RUN_TAG" \
+  --output-root "/home/ubuntu/calib_data/studio_calibration_runs/$RUN_TAG" \
+  --outer-preset wide200_then_gate6 \
+  --force</code></pre>
+
+      <h3>4.3 Large Marker / All32 Bridge</h3>
+      <p>内圈移动但外圈 cage 和外圈内参仍可信时，优先走这条快速路径。</p>
+      <pre><code>RUN_TAG=large_bridge_$(date +%Y%m%d_%H%M%S)
+/home/ubuntu/miniconda3/bin/python scripts/calib/run_studio_calibration_pipeline.py \
+  --bridge-only \
+  --run-tag "$RUN_TAG" \
+  --output-root "/home/ubuntu/calib_data/studio_calibration_runs/$RUN_TAG" \
+  --run-small-quality \
+  --publish-current \
+  --force</code></pre>
+      <p>如果要显式指定最新 outer result：</p>
+      <pre><code>--outer-final-pose-yaml &lt;outer_tower_result&gt;/camera_tr_rig_delta_refined.yaml \
+--outer-final-intrinsics-dir &lt;outer_tower_result&gt;/intrinsics_refined</code></pre>
+
+      <h3>4.4 Small Marker / Inner Quality Only</h3>
+      <p>默认只做 inner8 fixed-rig quality probe，不发布为新的 all32 result，也不替换 production inner baseline。只有在检查 inner intrinsics 改动或排查 inner rig 问题时，才显式打开 diagnostic joint/refine modes。</p>
+      <pre><code>RUN_TAG=small_inner_$(date +%Y%m%d_%H%M%S)
+/home/ubuntu/miniconda3/bin/python scripts/calib/run_inner_bridge_recalib_pipeline.py \
+  --data-root /home/ubuntu/calib_data/calib_2026_05_31_v3 \
+  --output-root "/home/ubuntu/calib_data/studio_calibration_runs/$RUN_TAG/inner_bridge" \
+  --small-marker-sequence small_marker_inner8 \
+  --run-stage small-fixed-rig-quality \
+  --run-stage reports \
+  --run-tag "$RUN_TAG" \
+  --force</code></pre>
+
+      <h3>4.5 Outer Large Marker / Outer Intrinsics Refresh</h3>
+      <p>这是低频操作。只有 outer lens/focus/resolution/distortion convention 变化时才重跑。</p>
+      <p>Step 1: W3/W4 distributed QC。</p>
+      <pre><code>/home/ubuntu/miniconda3/bin/python scripts/calib/server_run_distributed_clients.py \
+  --config &lt;outer_large_marker_distributed_qc_config.json&gt; \
+  --output-dir /home/ubuntu/calib_data/&lt;outer_large_marker_qc_run&gt; \
+  --run \
+  --collect</code></pre>
+      <p>Step 2: aggregate passing images。</p>
+      <pre><code>/home/ubuntu/miniconda3/bin/python scripts/calib/distributed_apriltag_quality_filter.py aggregate \
+  --worker-output /home/ubuntu/calib_data/&lt;outer_large_marker_qc_run&gt; \
+  --output-dir &lt;passing_images&gt; \
+  --marker outer_large_marker \
+  --stage-mode passing-images \
+  --min-tags 1 \
+  --link-mode copy \
+  --overwrite</code></pre>
+      <p>Step 3: C++ board feature extraction。</p>
+      <pre><code>/home/ubuntu/miniconda3/bin/python scripts/calib/parallel_extract_features.py \
+  --binary /home/ubuntu/camera_calibration/build_t0_current/applications/camera_calibration/camera_calibration \
+  --repo-root /home/ubuntu/camera_calibration \
+  --image-directories-file &lt;passing_images&gt;/image_directories.txt \
+  --pattern-files applications/camera_calibration/patterns/pattern_resolution_17x24_segments_16_apriltag_0.yaml \
+  --output-dataset &lt;outer_large_marker_features.bin&gt; \
+  --work-dir &lt;outer_large_marker_feature_shards&gt; \
+  --jobs 8 \
+  --resume</code></pre>
+      <p>Step 4: per-camera OpenCV intrinsics。</p>
+      <pre><code>/home/ubuntu/miniconda3/bin/python scripts/calib/calibrate_tower_intrinsics_opencv.py \
+  --dataset &lt;outer_large_marker_features.bin&gt; \
+  --manifest &lt;passing_images&gt;/manifest.tsv \
+  --output-dir &lt;outer24_opencv_intrinsics_large_marker&gt;</code></pre>
+
+      <h3>4.6 Publish Current From An Existing Run</h3>
+      <pre><code>/home/ubuntu/miniconda3/bin/python scripts/ops/publish_t0_clean_calib_reports.py \
+  --root /home/ubuntu/calib_data \
+  --base-url http://192.168.2.0:9899 \
+  --run-tag &lt;run_tag&gt; \
+  --current-dir /home/ubuntu/calib_data/current_calibration \
+  --outer-large-intrinsic-report &lt;run_root&gt;/reports/outer_intrinsics_outer_large_marker \
+  --outer-large-qc-root &lt;outer_large_marker_qc_root&gt; \
+  --whole-qc-root &lt;whole_qc_root&gt; \
+  --outer-frame-face-report-root &lt;run_root&gt;/outer_tower/frame_face_refine_wide200_then_gate6</code></pre>
+    </section>
+
+    <section id="reports">
+      <h2>5. Required Reports And Validation</h2>
+      <p>发布后，根页面必须只暴露一个 final YAML、一个 overall 3D viewer 和七个报告。</p>
+      <table>
+        <tr><th>#</th><th>Report</th><th>Expected path</th></tr>
+        <tr><td>1</td><td>3D viewer</td><td><code>/current_calibration/reports/01_3d_viewer/index.html</code></td></tr>
+        <tr><td>2</td><td>inner capture, small marker</td><td><code>/current_calibration/reports/02_inner_capture_small_marker/index.html</code></td></tr>
+        <tr><td>3</td><td>inner intrinsics, small marker</td><td><code>/current_calibration/reports/03_inner_intrinsics_small_marker/index.html</code></td></tr>
+        <tr><td>4</td><td>inner extrinsics, small marker</td><td><code>/current_calibration/reports/04_inner_extrinsics_small_marker/index.html</code></td></tr>
+        <tr><td>5</td><td>outer capture, outer_large_marker + whole</td><td><code>/current_calibration/reports/05_outer_capture_outer_large_marker_whole/index.html</code></td></tr>
+        <tr><td>6</td><td>outer intrinsics, outer_large_marker</td><td><code>/current_calibration/reports/06_outer_intrinsics_outer_large_marker/index.html</code></td></tr>
+        <tr><td>7</td><td>outer extrinsics, whole</td><td><code>/current_calibration/reports/07_outer_extrinsics_whole/index.html</code></td></tr>
+        <tr><td>8</td><td>bridge result, large marker</td><td><code>/current_calibration/reports/09_bridge_result_large_marker/index.html</code></td></tr>
+      </table>
+      <p>发布后检查：</p>
+      <pre><code>curl -I --max-time 5 http://192.168.2.0:9899/
+curl -I --max-time 5 http://192.168.2.0:9899/current_calibration/artifacts/studio_32_cameras.yaml
+curl -I --max-time 5 http://192.168.2.0:9899/current_calibration/reports/01_3d_viewer/index.html
+sha256sum /home/ubuntu/calib_data/current_calibration/artifacts/studio_32_cameras.yaml
+python3 -m json.tool /home/ubuntu/calib_data/current_calibration/report_cleanup_manifest_latest.json | head -120</code></pre>
+      <div class="callout warn">
+        不要把 standalone advanced correspondence viewer、dated scratch report、raw pipeline directory 或 report_registry.json 重新挂到 9899 root。correspondence JSON 是 3D viewer 的 data asset，不是独立最终报告。
+      </div>
+    </section>
+
+    <section id="coordinate">
+      <h2>6. Final YAML Coordinate Contract</h2>
+      <p>最终 YAML 中外参字段是 <code>camera_tr_studio_rig</code>，方向是：</p>
+      <pre><code>p_camera = T_camera_studio * p_studio</code></pre>
+      <ul>
+        <li><code>studio_rig</code> 是物理 studio/world frame，不是 cam0，也不是 OpenCV camera frame。</li>
+        <li>origin 是非 4 号 side 的 <code>*-2</code> outer camera center 平均值。</li>
+        <li><code>+Y</code> 是竖直向下，从 <code>*-1</code> top 指向 <code>*-3</code> bottom。</li>
+        <li><code>+Z</code> 是 forward，方向与缺失的 <code>4-2</code> side gap 相反；<code>-Z</code> 指向该 backward gap。</li>
+        <li><code>+X</code> 补成右手系。</li>
+      </ul>
+      <p>导入其他世界坐标时保持方向明确：</p>
+      <pre><code># camera center in studio frame
+C_studio = -R_camera_studio.T @ t_camera_studio
+
+# if p_target = T_target_studio * p_studio
+T_camera_target = T_camera_studio * inverse(T_target_studio)</code></pre>
+    </section>
+
+    <section id="cleanup">
+      <h2>7. Local Repo Hygiene</h2>
+      <p>本地 repo 是 source of truth，但 calibration 数据和报告应在 t0 的 <code>/home/ubuntu/calib_data</code> 或 repo-local ignored workspace 中。</p>
+      <pre><code>cd /home/vox/camera_calibration
+git status --short --branch
+git clean -ndX</code></pre>
+      <div class="callout warn">
+        不要直接运行 <code>git clean -fdX</code>。它会把 ignored 的 <code>studio/</code> 也删掉，而 <code>studio/knowledge</code> 可能有重要结论。清本地产物时只删明确确认的 build/cache/report/raw data。
+      </div>
+      <p>常见可删除本地产物：</p>
+      <pre><code>rm -rf .local build_codex build_verify reports data_raw_sl.mcap
+find . -type d -name __pycache__ -prune -exec rm -rf {} +</code></pre>
+      <p>如果旧 Docker build 目录是 root-owned，需要人工 sudo：</p>
+      <pre><code>sudo rm -rf /home/vox/camera_calibration/build_docker</code></pre>
+    </section>
+
+    <section id="troubleshooting">
+      <h2>8. Troubleshooting Checklist</h2>
+      <ul>
+        <li>如果 3D viewer 姿态明显反了，先检查 YAML coordinate frame 和 viewer 的 world-up transform，不要先改 BA。</li>
+        <li>如果 correspondence endpoint 中 tower 躺倒或过大，先检查 viewer 坐标层级和 black-tile physical-corner dataset，不要退回 raw OpenCV AprilTag inner detector corners。</li>
+        <li>如果 outer residual 很低但 3DGS 重建差，检查 FOV、coverage、baseline 和重建 pipeline；不要仅凭 3DGS 失败判定 calibration 错。</li>
+        <li>如果 homepage 出现多余 report 链接，重新运行 <code>publish_t0_clean_calib_reports.py</code>，不要手工编辑 9899 root。</li>
+        <li>如果 outer cage 物理大改、label 改变或 coarse prior 视觉不可信，先跑 full bootstrap 重新建立粗外参，再进入 production refine。</li>
+      </ul>
+      <p class="small">Last updated: 2026-07-05. Source repo: <code>/home/vox/camera_calibration</code>. t0 repo: <code>/home/ubuntu/camera_calibration</code>.</p>
+    </section>
+  </main>
+</body>
+</html>

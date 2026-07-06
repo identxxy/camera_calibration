@@ -242,9 +242,9 @@ class CalibrationPanelServerTest(unittest.TestCase):
             self.assertNotIn("--run-small-refine", large_command)
 
             self.assertIn("run_inner_bridge_recalib_pipeline.py", small_command)
-            self.assertIn("--inner-refine-mode fixed_then_joint", small_command)
+            self.assertIn("--inner-refine-mode fixed_rig", small_command)
             self.assertIn("--run-small-fixed-rig-quality", small_command)
-            self.assertIn("--run-small-refine", small_command)
+            self.assertNotIn("--run-small-refine", small_command)
             self.assertNotIn("--run-large-bridge", small_command)
 
 

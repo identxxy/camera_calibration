@@ -20,6 +20,11 @@ Current branch/worktree split:
   - branch: `master`
   - cwd: `/home/vox/camera_calibration`
   - role: coordination, shared docs, and existing uncommitted work unless moved intentionally.
+- Historical distributed AprilTag QC checkout:
+  - branch: `calib/distributed-apriltag-qc`
+  - cwd: `/home/vox/camera_calibration/.worktrees/calib-distributed-apriltag-qc`
+  - role: historical reference only; do not treat it as the current production
+    studio pipeline unless explicitly asked.
 
 Before starting a session, run:
 
@@ -180,10 +185,22 @@ frame with `diag(-1, -1, 1)`, not a single-axis reflection.
 For detailed runbooks, start with:
 
 ```text
+scripts/calib/studio_calibration_human_runbook.html
 scripts/calib/README_studio_operation_commands.md
+scripts/calib/README_script_inventory.md
 scripts/calib/README_studio_coordinate_frames.md
 scripts/calib/README_studio_32_camera_system.md
 scripts/calib/README_studio_calibration_pipeline.md
 scripts/calib/README_calibration_panel.md
-studio/knowledge/studio_calibration_bootstrap_and_fast_recalib.md
 ```
+
+Repository hygiene note: do not use a blind `git clean -fdX` in this checkout.
+It would remove ignored `studio/` knowledge/discussion notes. For local artifact
+cleanup, delete explicit build/cache/report/raw-data paths instead. If a stale
+Docker build directory is root-owned, remove it manually with
+`sudo rm -rf /home/vox/camera_calibration/build_docker`.
+
+The ignored `studio/` tree is an internal agent coordination/archive layer, not
+the canonical human runbook. Prefer the tracked `scripts/calib/README_*` and
+`scripts/calib/studio_calibration_human_runbook.html` documents for reproducible
+operator instructions.

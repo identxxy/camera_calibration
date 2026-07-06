@@ -24,6 +24,7 @@ CURRENT_WHOLE_ROOT = "calib_2026_05_31_fullres_probe_v1"
 CURRENT_WHOLE_OUTER24 = f"{CURRENT_WHOLE_ROOT}/whole_outer24_filtered_min4_fullres_min4cam"
 CURRENT_WHOLE_ALL32 = CURRENT_WHOLE_OUTER24
 CURRENT_OUTER_CANDIDATE = OUTER_TOWER_LATEST
+FINAL_STUDIO32_YAML = "current_calibration/artifacts/studio_32_cameras.yaml"
 UNIFIED_VIEWER = "current_calibration/reports/01_3d_viewer/index.html"
 INNER_CAPTURE_REPORT = "current_calibration/reports/02_inner_capture_small_marker/index.html"
 INNER_INTRINSIC_REPORT = "current_calibration/reports/03_inner_intrinsics_small_marker/index.html"
@@ -52,6 +53,27 @@ TOOL_LINKS = []
 
 
 REPORT_GROUPS = [
+    {
+        "title": "Final Calibration Artifact",
+        "subtitle": "machine-readable 32-camera YAML",
+        "status": "pipeline",
+        "status_label": "canonical",
+        "panel_mode": "",
+        "description": (
+            "最终 32-camera calibration artifact。下游重建、SLAM、3DGS 和 viewer "
+            "应消费这个 YAML，而不是 dated scratch outputs。"
+        ),
+        "items": [
+            {
+                "label": "studio_32_cameras.yaml",
+                "path": FINAL_STUDIO32_YAML,
+                "kind": "final YAML",
+                "status_if_exists": "ready",
+                "status_if_missing": "not produced yet",
+            },
+        ],
+        "notes": [],
+    },
     {
         "title": "Overall Viewer",
         "subtitle": "single unified 32-camera viewer",

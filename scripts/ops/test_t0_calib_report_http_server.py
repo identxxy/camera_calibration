@@ -159,12 +159,13 @@ class T0CalibReportHttpServerTest(unittest.TestCase):
         self.assertNotIn("Bridge summary.json", labels)
         self.assertNotIn("Outer solve summary.json", labels)
 
-    def test_fallback_groups_are_one_viewer_and_seven_reports(self):
+    def test_fallback_groups_are_final_yaml_one_viewer_and_seven_reports(self):
         titles = [group["title"] for group in report_server.REPORT_GROUPS]
 
-        self.assertEqual(len(titles), 8)
-        self.assertEqual(titles[0], "Overall Viewer")
-        self.assertEqual(titles[1:], [
+        self.assertEqual(len(titles), 9)
+        self.assertEqual(titles[0], "Final Calibration Artifact")
+        self.assertEqual(titles[1], "Overall Viewer")
+        self.assertEqual(titles[2:], [
             "1. Inner Capture Report",
             "2. Inner Intrinsic Report",
             "3. Inner Extrinsic Report",

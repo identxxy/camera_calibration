@@ -4,6 +4,18 @@ This is the short command map for the current t0 studio calibration workflow.
 It is intentionally smaller than the full runbook in
 `README_studio_calibration_pipeline.md`.
 
+For a self-contained browser-readable operator guide, open:
+
+```text
+scripts/calib/studio_calibration_human_runbook.html
+```
+
+For script ownership and production/diagnostic boundaries, read:
+
+```text
+scripts/calib/README_script_inventory.md
+```
+
 Use the panel for human-triggered runs:
 
 ```text
@@ -105,8 +117,10 @@ inner-only filters for debugging.
 ### 4. Small Marker / Inner Quality Only
 
 Use this for inner8 quality probing without rerunning outer tower refinement.
-The output is diagnostic unless you explicitly decide to promote a new inner
-state.
+The default panel/CLI operation is fixed-rig quality only. It does not run
+small-marker joint/refine by default and does not replace the production inner
+baseline. Enable diagnostic refine modes explicitly only when checking changed
+inner intrinsics or investigating a suspected inner-rig issue.
 
 ```bash
 /home/ubuntu/miniconda3/bin/python scripts/calib/run_inner_bridge_recalib_pipeline.py \

@@ -93,7 +93,10 @@ small_marker -> high-density A4 board, mainly for inner 8-camera calibration
 For the operational runbook, see:
 
 ```text
+scripts/calib/studio_calibration_human_runbook.html
+scripts/calib/README_studio_operation_commands.md
 scripts/calib/README_studio_calibration_pipeline.md
+scripts/calib/README_script_inventory.md
 ```
 
 
