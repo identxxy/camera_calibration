@@ -166,8 +166,7 @@
       <p>当前系统是 32 台同步相机：外圈 24 台固定相机，内圈 8 台可移动相机。最终产物是一个统一 YAML 和一个 3D viewer。</p>
       <table>
         <tr><th>Entry</th><th>URL / Path</th><th>Meaning</th></tr>
-        <tr><td>Panel</td><td><code>http://192.168.2.0:9898/</code></td><td>人类触发 pipeline 的页面。</td></tr>
-        <tr><td>Report root</td><td><code>http://192.168.2.0:9899/</code></td><td>唯一稳定的人类报告入口。</td></tr>
+        <tr><td>Console / report root</td><td><code>http://192.168.2.0:9899/</code></td><td>唯一稳定的人类入口：3D viewer、YAML、运行按钮和步骤详情。</td></tr>
         <tr><td>Final YAML</td><td><code>/home/ubuntu/calib_data/current_calibration/artifacts/studio_32_cameras.yaml</code></td><td>32 相机内外参，其他系统应消费这个文件。</td></tr>
         <tr><td>3D viewer</td><td><code>/home/ubuntu/calib_data/current_calibration/reports/01_3d_viewer/index.html</code></td><td>统一查看 inner/outer/combined rig、coverage 和 correspondence。</td></tr>
       </table>
@@ -188,11 +187,9 @@ curl -I --max-time 5 http://192.168.2.0:9899/current_calibration/artifacts/studi
       <p>如果 C++ binary 不存在或过旧，先重新构建：</p>
       <pre><code>cd /home/ubuntu/camera_calibration
 scripts/ops/t0_build_opengv_and_project.sh</code></pre>
-      <p>如果 report server 或 panel service 未启动，使用系统服务重启：</p>
+      <p>如果 9899 console 未启动，使用系统服务重启：</p>
       <pre><code>systemctl --user restart camera-calib-report-http.service
-systemctl --user restart camera-calibration-panel.service
-systemctl --user status camera-calib-report-http.service --no-pager
-systemctl --user status camera-calibration-panel.service --no-pager</code></pre>
+systemctl --user status camera-calib-report-http.service --no-pager</code></pre>
     </section>
 
     <section id="data">

@@ -73,22 +73,41 @@ This fork adds:
   outer 24-camera ring,
 * distributed Windows-side tower QC and t0 staging for large synchronized
   captures,
-* outer-ring refine from AprilTag tower observations without relying on an ideal
-  octagonal-prism `face_width_m`,
+* outer-ring refine from AprilTag tower observations while treating physical
+  tower face width as a weak/optimized quantity rather than an exact
+  manufacturing constant,
+* a low-density A4 board workflow (`outer_large_marker`, pattern `_0`) for
+  refreshing fixed outer-ring intrinsics when lens, focus, resolution, or
+  distortion convention changes,
 * a low-density A4 board workflow (`large_marker`, pattern `_0`) for bridging
   the outer ring, top-down cameras, and the movable inner ring,
 * a high-density A4 board workflow (`small_marker`, pattern `_3`) for inner
   8-camera calibration and fixed-rig quality checks,
-* reproducible t0 pipeline wrappers, HTML reports, panel entry points, unified
-  3D rig viewers, and a final `studio_32_cameras.yaml` artifact.
+* reproducible t0 pipeline wrappers, a single 9899 calibration console, HTML
+  reports, unified 3D rig viewers, and a final `studio_32_cameras.yaml`
+  artifact.
 
-The three studio capture types have separate meanings:
+The four studio data modes have separate meanings:
 
 ```text
-whole        -> AprilTag tower, mainly for outer 24-camera QC/refine
-large_marker -> low-density A4 board, mainly for inner-to-outer bridge
-small_marker -> high-density A4 board, mainly for inner 8-camera calibration
+outer_large_marker -> low-density A4 board on W3/W4, mainly for outer intrinsics refresh
+whole              -> AprilTag tower, mainly for outer 24-camera QC/refine
+large_marker       -> low-density A4 board, mainly for inner-to-outer bridge
+small_marker       -> high-density A4 board, mainly for inner 8-camera quality
 ```
+
+The current production t0 entry is:
+
+```text
+Console root:      http://192.168.2.0:9899/
+Final YAML:        http://192.168.2.0:9899/current_calibration/artifacts/studio_32_cameras.yaml
+Unified viewer:    http://192.168.2.0:9899/current_calibration/reports/01_3d_viewer/index.html
+```
+
+The 9899 console is both the report dashboard and the human-triggered operation
+panel. It exposes only server-side whitelisted run modes; browser requests never
+provide arbitrary shell commands. The old 9898 panel service is legacy and
+should not be used as an operator entry point.
 
 For the operational runbook, see:
 
@@ -370,11 +389,13 @@ relative placement of the 8 faces when this rigid tower YAML is used directly
 as a metric 3D object.
 
 For the studio production outer-ring recalibration, the Python pipeline does not
-depend on the exact octagonal-prism `face_width_m`. It uses the verified tag
-size, tag spacing, face ID ranges, and corner ordering to build stable tag-corner
-correspondences, then estimates an independent pose for each observed
-frame-face. This avoids injecting manufacturing error from the physical tower
-seams into the final outer-ring bundle adjustment. See
+treat the exact octagonal-prism `face_width_m` as a trusted constant. It uses the
+verified 8 cm black-tile size, 2 cm spacing, face ID ranges, and corner ordering
+to build stable tag-corner correspondences. The production model uses one shared
+tower pose per synchronized frame, fixed adjacent-face yaw of `360 / 8 = 45`
+degrees, and an optimized weak face-width/scale parameter where needed. This
+keeps the useful rigid-tower constraints while avoiding over-trusting physical
+seam measurements from the manufactured tower. See
 `scripts/calib/README_studio_32_camera_system.md` for the studio-specific
 modeling choice.
 

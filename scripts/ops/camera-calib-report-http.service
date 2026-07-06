@@ -5,7 +5,7 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/home/ubuntu/camera_calibration
-ExecStart=/usr/bin/python3 /home/ubuntu/camera_calibration/scripts/ops/t0_calib_report_http_server.py --root /home/ubuntu/calib_data --host 0.0.0.0 --port 9899
+ExecStart=/usr/bin/python3 /home/ubuntu/camera_calibration/scripts/ops/t0_calib_report_http_server.py --root /home/ubuntu/calib_data --repo-root /home/ubuntu/camera_calibration --runs-root /home/ubuntu/calib_data/panel_runs --python-bin /home/ubuntu/miniconda3/bin/python --host 0.0.0.0 --port 9899
 Restart=on-failure
 RestartSec=2
 

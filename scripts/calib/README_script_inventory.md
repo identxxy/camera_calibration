@@ -25,7 +25,8 @@ Use these first for routine studio work:
   - The only current homepage publisher for `http://192.168.2.0:9899/`.
   - Do not replace it with old report registries or globbed report indexes.
 - `scripts/calib/calibration_panel_server.py`
-  - Backend for the 9898 operator panel.
+  - Whitelisted job backend reused by the 9899 calibration console.
+  - The old standalone 9898 panel service is legacy.
 
 ## Production Helpers
 

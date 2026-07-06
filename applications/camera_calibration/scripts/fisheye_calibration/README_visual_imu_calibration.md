@@ -183,6 +183,11 @@ full_board_vi_se3_summary.json
 full_board_vi_se3_report.html
   Human-readable operator report. Use it to inspect visual coverage and VI solve
   quality before publishing the YAML.
+
+seeker_vi_simple_three_scene/index.html
+  Optional compact Three.js scene generated from the final KB8 YAML. Use it for
+  visual sanity checks of the physical IMU frame, camera frustums, OpenCV camera
+  axes, and driver-facing `T_cam_imu` / `T_imu_cam` conventions.
 ```
 
 The rotation-only run also writes:
@@ -194,6 +199,15 @@ seeker_kb8_full_board_vi_rig_aligned.yaml
 
 seeker_kb8_full_board_vi_raw_per_camera.yaml
   Diagnostic per-camera rotation output before rig-level consistency alignment.
+```
+
+To generate the optional scene:
+
+```bash
+python applications/camera_calibration/scripts/fisheye_calibration/generate_seeker_vi_simple_three_scene.py \
+  --camchain-yaml <seeker_kb8_full_board_vi_se3.yaml> \
+  --output-dir <report_root>/seeker_vi_simple_three_scene \
+  --viewer-assets-dir <directory_with_threejs_assets>
 ```
 
 ## Generic Reproduction

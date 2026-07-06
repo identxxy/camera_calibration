@@ -45,10 +45,10 @@ http://192.168.2.0:9899/
 scripts/calib/run_studio_calibration_pipeline.py
 ```
 
-Panel entry:
+Console entry:
 
 ```text
-http://192.168.2.0:9898/?mode=run_studio_calibration_pipeline
+http://192.168.2.0:9899/
 ```
 
 默认 whole data root 是
@@ -77,9 +77,9 @@ detector corners。不要把这些 prior 自动改到最新 data root，除非�
 
 ```text
 outer_large_marker -> W3/W4 distributed QC + passing-images staging
-whole              -> http://192.168.2.0:9898/?mode=operate_whole_outer_cage
-large_marker       -> http://192.168.2.0:9898/?mode=operate_large_marker_bridge
-small_marker       -> http://192.168.2.0:9898/?mode=operate_small_marker_inner
+whole              -> http://192.168.2.0:9899/operation/whole-outer-cage
+large_marker       -> http://192.168.2.0:9899/operation/large-marker-bridge
+small_marker       -> http://192.168.2.0:9899/operation/small-marker-inner
 ```
 
 - `outer_large_marker`: low-density board capture for fixed outer24 intrinsics.
@@ -201,7 +201,7 @@ do not skip them and then claim the run is reproducible.
    - 推荐 config:
      `configs/distributed_whole_2026_05_31_filter_hybrid.json`
    - 用 `scripts/calib/server_run_distributed_clients.py` 调度/collect w1-w4，
-     或通过 panel 的 `distributed_qc` mode 运行。
+     或通过 9899 console backend 的 `distributed_qc` mode 运行。
    - QC 输出要保留 `distributed_summary.json`、`index.html`、worker metrics；
      weak views `4-3` 和 inner serial `22587611`/`7611` 需要 full-resolution
      detect，不要用 0.5x 结果直接判死。

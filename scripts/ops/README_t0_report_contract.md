@@ -93,23 +93,17 @@ covered by the outer data-quality/intrinsic reports, but it is not a routine
 one-click operation unless outer lens/focus/resolution/distortion convention has
 changed or old outer intrinsics are known bad.
 
-The Operation page is allowed to show buttons, but command execution belongs to
-the controlled backend panel, currently served from:
+The 9899 homepage is both the report dashboard and the controlled operation
+console. It may show buttons, but the report HTML must not embed arbitrary shell
+commands. Backend execution must go through whitelisted CLI modes owned by the
+server code.
+
+Operators launch routine processing from the 9899 console detail pages:
 
 ```text
-http://192.168.2.0:9898/
-```
-
-The report HTML must not embed arbitrary shell commands. Backend execution must
-go through whitelisted CLI modes owned by the panel/server code.
-
-The root report index must not expose processing entries directly. Operators use
-the 9898 panel when they want to launch processing:
-
-```text
-http://192.168.2.0:9898/?mode=operate_whole_outer_cage
-http://192.168.2.0:9898/?mode=operate_large_marker_bridge
-http://192.168.2.0:9898/?mode=operate_small_marker_inner
+http://192.168.2.0:9899/operation/whole-outer-cage
+http://192.168.2.0:9899/operation/large-marker-bridge
+http://192.168.2.0:9899/operation/small-marker-inner
 ```
 
 These entries are independent. A user who only re-captures `whole` should use
@@ -145,9 +139,9 @@ The last two mappings are transitional. The clean backend should split
 small-marker inner calibration and large-marker bridge into separate user-facing
 CLI modes, even if they share internal code.
 
-Operation pages are not homepage report categories. The stable homepage should
-point a human to report conclusions first; backend execution details live in
-the README, run manifests, and 9898 panel.
+Operation pages are not extra report categories. The stable homepage should
+point a human to the current 3D viewer and YAML first, then expose controlled
+workflow buttons and detail pages for execution.
 
 ## Producer Rule
 

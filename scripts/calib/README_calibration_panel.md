@@ -1,45 +1,40 @@
-# Calibration Panel Server
+# Calibration Console Server
 
-This panel is an operator UI for t0 calibration runs. It exposes a small
-whitelist of run modes and stores every job under a dedicated run directory with
-`job.json` and `run.log`.
+The t0 calibration console is the single operator UI for reports and
+human-triggered calibration runs. It exposes a small whitelist of run modes and
+stores every job under a dedicated run directory with `job.json` and `run.log`.
 
 ## Start on t0
 
 The long-running t0 user service is:
 
 ```text
-camera-calibration-panel.service
+camera-calib-report-http.service
 ```
 
-It binds to `0.0.0.0:9898` and is linked from the curated report dashboard on
-`9899`.
+It binds to `0.0.0.0:9899` and serves both the report dashboard and the
+operation buttons. The old `camera-calibration-panel.service` on 9898 is legacy
+and should stay disabled for normal operation.
 
 ```bash
-systemctl --user status camera-calibration-panel.service
-systemctl --user restart camera-calibration-panel.service
+systemctl --user status camera-calib-report-http.service
+systemctl --user restart camera-calib-report-http.service
 ```
 
 Manual foreground start for debugging:
 
 ```bash
 cd /home/ubuntu/camera_calibration
-/home/ubuntu/miniconda3/bin/python scripts/calib/calibration_panel_server.py \
+/usr/bin/python3 scripts/ops/t0_calib_report_http_server.py \
+  --root /home/ubuntu/calib_data \
   --repo-root /home/ubuntu/camera_calibration \
   --runs-root /home/ubuntu/calib_data/panel_runs \
+  --python-bin /home/ubuntu/miniconda3/bin/python \
   --host 0.0.0.0 \
-  --port 9898
+  --port 9899
 ```
 
-Open the panel:
-
-```text
-http://<t0-ip>:9898/
-```
-
-## Report Dashboard Interface
-
-The report dashboard is a separate read-only service:
+Open the console:
 
 ```text
 http://<t0-ip>:9899/
@@ -51,53 +46,63 @@ On the current t0 camera LAN this is:
 http://192.168.2.0:9899/
 ```
 
-The dashboard publishes complete `http://192.168.2.0:9899/...` report links so
-operators can copy URLs directly from the page. The operation panel defaults to:
+The console publishes complete `http://192.168.2.0:9899/...` report links so
+operators can copy URLs directly from the page. It also exposes `/api/jobs` and
+`/api/modes`, backed by server-side whitelisted run modes; browser requests
+never provide arbitrary shell commands.
+
+## Console Interface
+
+The homepage intentionally starts with the current result:
 
 ```text
-http://192.168.2.0:9898/
+Final YAML:     current_calibration/artifacts/studio_32_cameras.yaml
+3D viewer:      current_calibration/reports/01_3d_viewer/index.html
 ```
 
-The final report interface is intentionally compact:
+It then exposes three one-click buttons:
 
-1. Final YAML: `current_calibration/artifacts/studio_32_cameras.yaml`.
-2. Overall 3D viewer: `current_calibration/reports/01_3d_viewer/index.html`.
-3. Inner data capture report: `02_inner_capture_small_marker`.
-4. Inner intrinsic report: `03_inner_intrinsics_small_marker`.
-5. Inner extrinsic report: `04_inner_extrinsics_small_marker`.
-6. Outer data capture report: `05_outer_capture_outer_large_marker_whole`.
-7. Outer intrinsic report: `06_outer_intrinsics_outer_large_marker`.
-8. Outer extrinsic report: `07_outer_extrinsics_whole`.
-9. Bridge result report: `09_bridge_result_large_marker`.
+```text
+Dry-run Full Pipeline
+Run Full Pipeline
+Run Fast Bridge
+```
+
+Below that is a workflow graph. Each step opens a detail page with the purpose,
+expected data paths, output paths, dry-run/run buttons, default parameters, and
+final report links.
+
+Canonical reports remain:
+
+1. Overall 3D viewer: `current_calibration/reports/01_3d_viewer/index.html`.
+2. Inner data capture report: `02_inner_capture_small_marker`.
+3. Inner intrinsic report: `03_inner_intrinsics_small_marker`.
+4. Inner extrinsic report: `04_inner_extrinsics_small_marker`.
+5. Outer data capture report: `05_outer_capture_outer_large_marker_whole`.
+6. Outer intrinsic report: `06_outer_intrinsics_outer_large_marker`.
+7. Outer extrinsic report: `07_outer_extrinsics_whole`.
+8. Bridge result report: `09_bridge_result_large_marker`.
 
 The root dashboard should not promote dated scratch reports, raw pipeline
-directories, source/debug viewers, standalone correspondence viewers,
-registry/debug JSON files, or operation buttons as extra homepage groups.
-Operation launch is handled by the 9898 panel.
+directories, source/debug viewers, standalone correspondence viewers, or
+registry/debug JSON files as extra homepage groups.
 
 Production pipeline entrypoint:
 
-- Studio 32-camera production pipeline:
-  `http://192.168.2.0:9898/?mode=run_studio_calibration_pipeline`
-  calls `scripts/calib/run_studio_calibration_pipeline.py`. It is the preferred
+- Studio 32-camera production pipeline calls
+  `scripts/calib/run_studio_calibration_pipeline.py`. It is the preferred
   operator path after data has been QC/staged, because it runs the current
   outer frame-face refine, large-marker bridge, unified 32-camera export, and
-  optional 9899 publication in one provenance-tracked wrapper.
+  optional current report publication in one provenance-tracked wrapper.
 
-Per-operation and diagnostic entrypoints:
+Per-operation detail pages:
 
-- Production whole outer cage panel:
-  `http://192.168.2.0:9898/?mode=operate_whole_outer_cage`
-- Production large-marker bridge panel:
-  `http://192.168.2.0:9898/?mode=operate_large_marker_bridge`
-- Production small-marker inner panel:
-  `http://192.168.2.0:9898/?mode=operate_small_marker_inner`
-- Current public reports:
-  `http://192.168.2.0:9899/`
-- Diagnostic inner/bridge wrapper panel:
-  `http://192.168.2.0:9898/?mode=run_inner_bridge_recalib_pipeline`
-- Diagnostic/full outer tower panel:
-  `http://192.168.2.0:9898/?mode=run_outer_tower_recalib_pipeline`
+- Whole outer cage: `http://192.168.2.0:9899/operation/whole-outer-cage`
+- Large-marker bridge: `http://192.168.2.0:9899/operation/large-marker-bridge`
+- Small-marker inner: `http://192.168.2.0:9899/operation/small-marker-inner`
+- Outer-large-marker intrinsics:
+  `http://192.168.2.0:9899/operation/outer-large-marker`
+- Publish current reports: `http://192.168.2.0:9899/operation/publish-current`
 
 Historical direct links under dated run directories, including the 2026-05-26
 fast inner/bridge and outer tower reports, are legacy diagnostics only. The
@@ -160,7 +165,7 @@ operator-facing current result is always the curated 9899 root.
   exposes and defaults to the older COLMAP vote, side-prior, tag-refine, and
   viewer stages so an operator can deliberately rerun the bootstrap family.
   Use `operate_whole_outer_cage` for the current production whole operation.
-  The panel exposes `tag_intrinsics_refine_mode` for diagnostic outer
+  The console exposes `tag_intrinsics_refine_mode` for diagnostic outer
   intrinsic+extrinsic joint probes (`fixed`, `shared_fxfy`,
   `per_camera_fxfy`, `per_camera_fxfycxcy`). The default remains `fixed`;
   intrinsic updates are accepted per camera only if their prior gates pass. The
@@ -174,7 +179,7 @@ operator-facing current result is always the curated 9899 root.
 - `report_only`: builds reprojection, rig, and interactive Three.js reports from
   an existing dataset and state.
 
-Use the panel's `Dry run` checkbox first. Dry runs write the exact argv commands
+Use the console's dry-run button first. Dry runs write the exact argv commands
 to `run.log` without executing them.
 
 Pipeline reports also write exact run provenance into each `summary.json` and
@@ -190,7 +195,7 @@ asset directory points at the saved t0 interactive report snapshot:
 /home/ubuntu/calib_data/calib_2026_05_26_jpg_v3/final_inner8_calibration_v1/reports/interactive_rig_viewer_v1
 ```
 
-If that snapshot is moved, set `Three.js assets dir` in the panel to any
+If that snapshot is moved, set `Three.js assets dir` in the console/backend to any
 directory containing those three files.
 
 ## Safety Model
@@ -206,5 +211,5 @@ directory containing those three files.
   run.log
 ```
 
-Generated reports are linked from the job detail panel. The server also proxies
-report files back through localhost so relative HTML assets work from the panel.
+Generated reports are linked from job metadata. The server also proxies report
+files back through 9899 so relative HTML assets work from the console.

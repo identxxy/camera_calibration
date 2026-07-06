@@ -150,6 +150,7 @@ show the metric centers from the camchain instead.
 - `prepare_synced_pair_dirs.py`: prepares synchronized pair datasets for relative extrinsic calibration.
 - `build_seeker_calibration_report.py`: generates per-capture static HTML reports and an index page.
 - `generate_fisheye_initial_rig_viewer.py`: generates a Three.js four-fisheye rig viewer from a KB8 camchain.
+- `generate_seeker_vi_simple_three_scene.py`: generates a compact Three.js visual-IMU scene from a final Seeker KB8 YAML.
 - `test_prepare_fisheye_intrinsics_from_mcap.py`: focused unit tests for layout, sharpness, and motion gating.
 
 In the integrated studio/headset calibration codebase, the core calibration

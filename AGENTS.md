@@ -123,20 +123,17 @@ There are four capture/data modes:
 Canonical operator entrypoints on t0:
 
 ```text
-Panel root:        http://192.168.2.0:9898/
-Report root:       http://192.168.2.0:9899/
-Production all32:  http://192.168.2.0:9898/?mode=run_studio_calibration_pipeline
-Whole only:        http://192.168.2.0:9898/?mode=operate_whole_outer_cage
-Large bridge:      http://192.168.2.0:9898/?mode=operate_large_marker_bridge
-Small inner:       http://192.168.2.0:9898/?mode=operate_small_marker_inner
-Full bootstrap:    http://192.168.2.0:9898/?mode=run_outer_tower_recalib_pipeline
+Console root:      http://192.168.2.0:9899/
+Final YAML:        http://192.168.2.0:9899/current_calibration/artifacts/studio_32_cameras.yaml
+Unified viewer:    http://192.168.2.0:9899/current_calibration/reports/01_3d_viewer/index.html
 ```
 
-Use `run_studio_calibration_pipeline` for normal reproducible all32 runs after
-QC/staging. Use `operate_whole_outer_cage` for production whole-only outer delta
-refine. `run_outer_tower_recalib_pipeline` is the diagnostic/full bootstrap
-entrypoint: it can re-enable COLMAP frame voting, RANSAC rig voting, and
-side-prior completion when the existing outer prior is missing or visibly wrong.
+Use the 9899 console for normal human-triggered runs after QC/staging. It shows
+the overall 3D viewer first, then operation buttons and per-step detail pages.
+The console calls the same whitelisted modes as the old 9898 panel:
+`run_studio_calibration_pipeline`, `operate_whole_outer_cage`,
+`operate_large_marker_bridge`, and `operate_small_marker_inner`. The old 9898
+panel service is legacy and should not be promoted in docs or reports.
 
 Important calibration boundary:
 

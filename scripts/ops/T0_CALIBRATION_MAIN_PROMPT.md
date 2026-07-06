@@ -42,14 +42,15 @@ outer corners 和 2 cm spacing。`wide200_then_gate6` 是当前 production prese
   `scripts/ops/README_t0_report_contract.md`
 - 当前 canonical homepage publisher：
   `scripts/ops/publish_t0_clean_calib_reports.py`
-- 更新了 9898 Operation Panel 后端：
+- 9899 console 复用的 operation backend：
   `scripts/calib/calibration_panel_server.py`
 
 ## 当前首页结构
 
-9899 根入口只放当前 production artifacts，不再把 operation、dated scratch HTML、
-source/debug viewer、registry/debug JSON、standalone correspondence viewer 或 raw
-pipeline directories 提升成首页组：
+9899 根入口是唯一的人类 console：先放当前 production artifacts，再放受控运行按钮
+和 workflow detail pages；不要把 dated scratch HTML、source/debug viewer、
+registry/debug JSON、standalone correspondence viewer 或 raw pipeline directories
+提升成首页组：
 
 1. final YAML:
    `http://192.168.2.0:9899/current_calibration/artifacts/studio_32_cameras.yaml`
@@ -73,7 +74,7 @@ pipeline directories 提升成首页组：
 ## 四类数据采集语义
 
 Capture/data mode 分成四类；其中 `outer_large_marker` 是低频 outer intrinsic
-refresh，不是常规每次都要点的 9898 semantic operation：
+refresh，不是常规每次都要点的 semantic operation：
 
 1. `outer_large_marker`
    - 主要目的：用低密度 A4 board 刷新 outer24 per-camera intrinsics。
@@ -98,20 +99,20 @@ refresh，不是常规每次都要点的 9898 semantic operation：
 
 ## 首页与 Operation 分层
 
-首页报告分类回答“当前标定结果和数据质量在哪里看”。Operation 页面回答“采集后如何
-启动受控处理”。两者必须分层：
+首页回答“当前标定结果在哪里看”和“采集后如何启动受控处理”。报告入口和
+operation 入口必须分层显示：
 
-- 首页只列 final YAML、one unified 3D viewer、seven curated reports。
-- Operation 页面不作为首页报告链接；需要启动处理时去 9898 panel。
+- 首页顶部先列 final YAML、one unified 3D viewer 和三个 one-click buttons。
+- 首页下方用 workflow graph 链接到 per-step detail pages。
 - 报告 HTML 不直接执行命令，也不嵌入任意 shell command。
 - 后端只能通过 panel/server 白名单 mode 调用 CLI。
 
-## Operation Panel 标准
+## Operation Console 标准
 
-9898 panel 入口：
+9899 console 入口：
 
 ```text
-http://192.168.2.0:9898/
+http://192.168.2.0:9899/
 ```
 
 已经新增三个用户语义 mode：
@@ -261,10 +262,10 @@ artifact manifest 至少包含：
 
 - 不要创建新的零散 report 首页；更新 curated `current_calibration`。
 - 不要物理删除历史产物，除非用户明确确认。
-- 新 homepage report 必须维持 final YAML + one unified viewer + seven curated
-  reports 的结构；backend operation 才按 `whole`、`large marker`、`small marker`
-  三类组织。
-- 新 operation 必须通过 9898 panel 白名单 mode 或未来 `t0-calib operate ...` CLI。
+- 新 homepage 必须维持 final YAML + one unified viewer + controlled operation
+  buttons + workflow detail pages + curated reports 的结构；backend operation
+  按 `whole`、`large marker`、`small marker` 三类组织。
+- 新 operation 必须通过 9899 console 白名单 mode 或未来 `t0-calib operate ...` CLI。
 - 新 viewer 必须服务最终 canonical viewer contract。
 - repo 内不要在 source/script 目录保留 generated report HTML；需要保留时归档到
   `studio/exp` 或 `studio/archive` 并说明来源。

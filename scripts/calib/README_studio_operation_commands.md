@@ -16,17 +16,15 @@ For script ownership and production/diagnostic boundaries, read:
 scripts/calib/README_script_inventory.md
 ```
 
-Use the panel for human-triggered runs:
-
-```text
-http://192.168.2.0:9898/
-```
-
-Use the report root for published results:
+Use the 9899 console for both human-triggered runs and published reports:
 
 ```text
 http://192.168.2.0:9899/
 ```
+
+The homepage opens with the final 3D viewer and YAML download, then exposes
+three one-click buttons and a workflow graph. Each workflow step has a detail
+page with data paths, dry-run/run buttons, and report links.
 
 ## Canonical Result Paths
 
